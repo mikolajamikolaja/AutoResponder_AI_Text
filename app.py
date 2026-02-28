@@ -41,11 +41,9 @@ def webhook():
 
     # ── Analiza powtórzeń (flaga wants_analiza z Apps Script) ─────────────────
     if data.get("wants_analiza"):
-        attachment_b64  = data.get("attachment_b64")   # DOCX od nadawcy (base64)
-        attachment_name = data.get("attachment_name")  # nazwa pliku
-        response_data["analiza"] = build_analiza_section(
-            body, attachment_b64, attachment_name
-        )
+        # attachments — lista [{base64, name}, ...] od Apps Script
+        attachments = data.get("attachments") or []
+        response_data["analiza"] = build_analiza_section(body, attachments)
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     app.logger.info(
