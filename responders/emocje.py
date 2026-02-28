@@ -4,13 +4,13 @@ Responder KEYWORDS4 — analiza emocjonalno-narracyjna tekstu.
 
 Obsługuje:
 - Treść maila (body)
-- Załączniki DOCX / PDF / TXT (jako base64 z Apps Script)
+- Załączniki DOCX / DOC / PDF / TXT (jako base64 z Apps Script)
 
 Generuje 4 wykresy PNG dla każdego źródła:
-- w1_radar_*        – radar makro-cech (worldbuilding/characters/dynamics/style/philosophy)
+- w1_radar_*        – radar makro-cech
 - w12_srednia_*     – linia średniej ruchomej emocji po akapitach
 - w3_kategorie_*    – słupki: sumy wystąpień słów z każdej puli biblioteki
-- wK_kolo_*         – wykres kołowy ze wszystkimi wskaźnikami ukierunkowania tekstu
+- wK_kolo_*         – wykres kołowy ze wszystkimi wskaźnikami
 
 Wyniki:
 - reply_html    – HTML z krótkim raportem tekstowym
@@ -21,6 +21,7 @@ import io
 import re
 import os
 import base64
+import tempfile
 from flask import current_app
 
 import numpy as np
@@ -28,12 +29,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ── Opcjonalne zależności ──────────────────────────────────────────────────────
+# ── Opcjonalne zależności ─────────────────────────────────────────────────────
 try:
     from docx import Document
     _HAS_DOCX = True
 except ImportError:
     _HAS_DOCX = False
+
+try:
+    import docx2txt
+    _HAS_DOCX2TXT = True
+except ImportError:
+    _HAS_DOCX2TXT = False
 
 try:
     import snowballstemmer
@@ -73,7 +80,7 @@ CATEGORY_FILES = {
     "slowa_zaskoczenie.txt":         "zaskoczenie",
 }
 
-# ── Wbudowane listy fallback gdy brak plików ──────────────────────────────────
+# ── Wbudowane listy fallback gdy brak plików ─────────────────────────────────
 _DOMYSLNE_POZ = [
     "rado", "szczę", "uśmiech", "ciesz", "zachw", "entuzj", "miło", "koch",
     "sukces", "wygr", "świet", "doskon", "przyjem", "spokoj", "ulga", "energia",
@@ -173,6 +180,38 @@ def _extract_text_from_bytes(raw_bytes: bytes, name: str) -> str:
         except Exception as e:
             current_app.logger.warning("Błąd DOCX %s: %s", name, e)
 
+    # DOC (stary format Word) – przez docx2txt
+    if name_lower.endswith(".doc"):
+        if _HAS_DOCX2TXT:
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    suffix=".doc", delete=False
+                ) as tmp:
+                    tmp.write(raw_bytes)
+                    tmp_path = tmp.name
+                text = docx2txt.process(tmp_path)
+                if text and text.strip():
+                    return text
+            except Exception as e:
+                current_app.logger.warning("Błąd DOC (docx2txt) %s: %s", name, e)
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+        # Fallback: spróbuj jako DOCX (czasem działa dla nowszych .doc)
+        if _HAS_DOCX:
+            try:
+                doc   = Document(io.BytesIO(raw_bytes))
+                parts = [p.text for p in doc.paragraphs if p.text.strip()]
+                if parts:
+                    return "\n\n".join(parts)
+            except Exception:
+                pass
+        current_app.logger.warning(
+            "Plik .doc '%s' nieobsługiwany — brak docx2txt. "
+            "Wyślij jako .docx.", name
+        )
+
     # PDF – pdfplumber, potem pypdf
     if name_lower.endswith(".pdf"):
         text = ""
@@ -205,9 +244,8 @@ def _extract_text_from_bytes(raw_bytes: bytes, name: str) -> str:
 def _analyze_paragraphs(text: str, cats: dict) -> list:
     """
     Dzieli tekst na akapity i zlicza rdzenie z każdej kategorii.
-    Zwraca listę dict: {idx, pos, neg, emotion_score, kat1: n, kat2: n, ...}
+    Zwraca listę dict: {idx, pos, neg, emotion_score, kat1: n, ...}
     """
-    # Podział na akapity (dwa newliny) lub linie
     paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
     if not paragraphs:
         paragraphs = [l.strip() for l in text.splitlines() if l.strip()]
@@ -278,7 +316,7 @@ def _safe_label(text: str) -> str:
 def _plot_w1_radar(perc: dict, title: str) -> str:
     dims   = _macro_dimensions(perc)
     labels = list(dims.keys())
-    vals   = [dims[k] for k in labels] + [dims[labels[0]]]   # zamknięcie
+    vals   = [dims[k] for k in labels] + [dims[labels[0]]]
     angles = np.linspace(0, 2 * np.pi, len(labels) + 1)
 
     fig = plt.figure(figsize=(7, 7))
@@ -293,7 +331,7 @@ def _plot_w1_radar(perc: dict, title: str) -> str:
     return _fig_to_b64(fig)
 
 
-# ── W12 – średnia ruchoma emocji ──────────────────────────────────────────────
+# ── W12 – średnia ruchoma emocji ─────────────────────────────────────────────
 def _plot_w12_srednia(para_rows: list, title: str) -> str:
     if not para_rows:
         return None
@@ -301,7 +339,6 @@ def _plot_w12_srednia(para_rows: list, title: str) -> str:
     scores = [r["emotion_score"] for r in para_rows]
     window = min(5, len(scores))
 
-    # prosta średnia ruchoma
     ma = []
     for i in range(len(scores)):
         start = max(0, i - window + 1)
@@ -358,7 +395,7 @@ def _plot_w3_kategorie(totals: dict, title: str) -> str:
     return _fig_to_b64(fig)
 
 
-# ── WK – kołowy wykres ukierunkowania tekstu (wszystkie wskaźniki) ────────────
+# ── WK – kołowy wykres ukierunkowania tekstu ──────────────────────────────────
 def _plot_wK_kolo(perc: dict, title: str) -> str:
     items = [(k, v) for k, v in perc.items() if v > 0.01]
     if not items:
@@ -369,7 +406,6 @@ def _plot_wK_kolo(perc: dict, title: str) -> str:
     vals   = [v for _, v in items]
     n      = len(labels)
 
-    # Kolory – łączymy dwie palety żeby starczyło na 25 kategorii
     cmap1  = list(plt.cm.tab20(np.linspace(0, 1, min(n, 20))))
     cmap2  = list(plt.cm.tab20b(np.linspace(0, 1, max(0, n - 20))))
     colors = (cmap1 + cmap2)[:n]
@@ -387,7 +423,6 @@ def _plot_wK_kolo(perc: dict, title: str) -> str:
     for at in autotexts:
         at.set_fontsize(7)
 
-    # Legenda z nazwami i procentami
     legend_labels = [f"{lbl}  ({v:.1f}%)" for lbl, v in zip(labels, vals)]
     ax.legend(
         wedges, legend_labels,
@@ -396,7 +431,6 @@ def _plot_wK_kolo(perc: dict, title: str) -> str:
         fontsize=8,
     )
 
-    # Dominujący kierunek w centrum
     ax.text(0, 0, f"▶ {labels[0]}",
             ha="center", va="center",
             fontsize=12, fontweight="bold", color="#222222")
@@ -411,7 +445,7 @@ def _plot_wK_kolo(perc: dict, title: str) -> str:
 def _build_report_html(label: str, totals: dict, perc: dict,
                        para_count: int) -> str:
     total_words = sum(totals.values())
-    top3 = sorted(perc.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    top3    = sorted(perc.items(), key=lambda kv: kv[1], reverse=True)[:3]
     top3_str = ", ".join(f"<b>{k}</b> ({v:.1f}%)" for k, v in top3)
 
     pos_p  = perc.get("pozytywne", 0.0)
@@ -441,25 +475,20 @@ def build_emocje_section(body: str, attachments: list = None) -> dict:
     Buduje sekcję 'emocje':
     - analizuje treść maila i każdy załącznik osobno
     - generuje 4 wykresy PNG dla każdego źródła
-    - zwraca HTML z raportem + listę obrazków PNG (base64)
+    - zwraca HTML z raportem + listę PNG (base64)
 
     Parametry:
         body        – treść maila (str)
         attachments – lista dict [{base64: ..., name: ...}]
 
     Zwraca:
-        {
-          "reply_html": str,
-          "images": [{"base64": str, "filename": str, "content_type": str}, ...]
-        }
+        {"reply_html": str, "images": [{base64, filename, content_type}, ...]}
     """
     cats = _load_categories()
 
-    images     = []   # lista {base64, filename, content_type}
+    images     = []
     reply_html = ""
-
-    # ── Zbierz źródła tekstowe ────────────────────────────────────────────────
-    sources = []
+    sources    = []
 
     if body and body.strip():
         sources.append(("Treść_maila", body))
@@ -476,18 +505,22 @@ def build_emocje_section(body: str, attachments: list = None) -> dict:
                 sources.append((att_name, txt))
             else:
                 current_app.logger.warning(
-                    "Emocje: brak tekstu w załączniku %s", att_name)
+                    "Emocje: brak tekstu w załączniku %s "
+                    "(format nieobsługiwany lub pusty plik)", att_name)
         except Exception as e:
             current_app.logger.warning(
                 "Emocje: błąd załącznika %s: %s", att_name, e)
 
     if not sources:
         return {
-            "reply_html": "<p>Brak tekstu do analizy emocjonalnej.</p>",
-            "images":     [],
+            "reply_html": (
+                "<p>Brak tekstu do analizy emocjonalnej.</p>"
+                "<p><em>Wskazówka: pliki .doc wyślij jako .docx "
+                "lub zainstaluj docx2txt na serwerze.</em></p>"
+            ),
+            "images": [],
         }
 
-    # ── Analizuj każde źródło ─────────────────────────────────────────────────
     for label, text in sources:
         try:
             para_rows = _analyze_paragraphs(text, cats)
@@ -500,7 +533,6 @@ def build_emocje_section(body: str, attachments: list = None) -> dict:
             perc   = _percentages(totals)
             sl     = _safe_label(label)
 
-            # W1 – radar
             b64 = _plot_w1_radar(perc, label)
             if b64:
                 images.append({
@@ -509,7 +541,6 @@ def build_emocje_section(body: str, attachments: list = None) -> dict:
                     "content_type": "image/png",
                 })
 
-            # W12 – średnia ruchoma
             b64 = _plot_w12_srednia(para_rows, label)
             if b64:
                 images.append({
@@ -518,7 +549,6 @@ def build_emocje_section(body: str, attachments: list = None) -> dict:
                     "content_type": "image/png",
                 })
 
-            # W3 – kategorie sumy
             b64 = _plot_w3_kategorie(totals, label)
             if b64:
                 images.append({
@@ -527,7 +557,6 @@ def build_emocje_section(body: str, attachments: list = None) -> dict:
                     "content_type": "image/png",
                 })
 
-            # WK – kołowy
             b64 = _plot_wK_kolo(perc, label)
             if b64:
                 images.append({
