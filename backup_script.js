@@ -43,7 +43,7 @@ function processEmailsFinal() {
 
     if (!isBiz && !isAllowed && !containsKeyword) {
       // ignorujemy
-      thread.markRead();
+      thread.addLabel(GmailApp.getUserLabelByName("processed"));
       continue;
     }
 
