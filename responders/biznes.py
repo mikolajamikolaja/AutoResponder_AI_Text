@@ -44,7 +44,11 @@ def detect_topic(body_text: str) -> str:
 
 
 def _get_pdf(topic_key: str):
-    """Zwraca (pdf_b64, filename) dla tematu, z fallbackiem."""
+    """Zwraca (pdf_b64, filename) dla tematu, z fallbackiem na kontakt."""
+    # UNKNOWN od razu kieruje do pliku kontaktowego
+    if topic_key == "UNKNOWN":
+        topic_key = FALLBACK_PDF
+
     pdf_path = os.path.join(PDF_DIR, f"{topic_key}.pdf")
     pdf_b64  = read_file_base64(pdf_path)
     filename = f"{topic_key}.pdf"
@@ -80,10 +84,7 @@ def build_biznes_section(body: str) -> dict:
     pdf_b64, fname = _get_pdf(topic_key)
 
     section = {
-        "reply_html": build_html_reply(
-            res_text + ("\n\nRozpoznane zagadnienia: (zobacz załącznik)"
-                        if topic_key == "UNKNOWN" else "")
-        ),
+        "reply_html": build_html_reply(res_text),
         "pdf": {
             "base64":   pdf_b64,
             "filename": fname,

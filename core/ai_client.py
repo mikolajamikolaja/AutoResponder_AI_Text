@@ -71,11 +71,15 @@ def extract_clean_text(text: str) -> str:
         return txt
 
 
-def call_groq(system_prompt: str, user_msg: str, model_name: str, timeout: int = 20):
+def call_groq(system_prompt: str, user_msg: str, model_name: str,
+              timeout: int = 40, max_retries: int = 3, retry_delay: float = 5.0):
     """
     Wywołanie modelu przez API DeepSeek/Groq.
     Zwraca czysty tekst lub None przy błędzie.
+    Automatycznie ponawia próbę max_retries razy przy timeout/connection error.
     """
+    import time
+
     if not GROQ_API_KEY:
         current_app.logger.error("Brak API_KEY_DEEPSEEK")
         return None
@@ -95,30 +99,58 @@ def call_groq(system_prompt: str, user_msg: str, model_name: str, timeout: int =
         "max_tokens":  3000,
     }
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        if resp.status_code != 200:
-            current_app.logger.warning("API non-200 (%s): %s", resp.status_code, resp.text[:500])
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            if resp.status_code == 429:
+                # Rate limit — czekaj dłużej przed retry
+                wait = retry_delay * attempt
+                current_app.logger.warning(
+                    "API rate limit (429), próba %d/%d, czekam %.0fs",
+                    attempt, max_retries, wait
+                )
+                time.sleep(wait)
+                continue
+            if resp.status_code != 200:
+                current_app.logger.warning(
+                    "API non-200 (%s): %s", resp.status_code, resp.text[:500]
+                )
+                return None
+            try:
+                data = resp.json()
+            except Exception:
+                return sanitize_model_output(resp.text)
+
+            try:
+                content = data["choices"][0]["message"]["content"]
+            except Exception:
+                content = None
+                if isinstance(data, dict):
+                    for key in ("content", "text", "message", "reply"):
+                        if key in data and isinstance(data[key], str):
+                            content = data[key]
+                            break
+                if not content:
+                    content = json.dumps(data, ensure_ascii=False)
+
+            return sanitize_model_output(content)
+
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError) as e:
+            current_app.logger.warning(
+                "API timeout/connection error (próba %d/%d): %s",
+                attempt, max_retries, e
+            )
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+            else:
+                current_app.logger.error(
+                    "API niedostępne po %d próbach: %s", max_retries, e
+                )
+                return None
+
+        except Exception as e:
+            current_app.logger.exception("Nieoczekiwany błąd API: %s", e)
             return None
-        try:
-            data = resp.json()
-        except Exception:
-            return sanitize_model_output(resp.text)
 
-        try:
-            content = data["choices"][0]["message"]["content"]
-        except Exception:
-            content = None
-            if isinstance(data, dict):
-                for key in ("content", "text", "message", "reply"):
-                    if key in data and isinstance(data[key], str):
-                        content = data[key]
-                        break
-            if not content:
-                content = json.dumps(data, ensure_ascii=False)
-
-        return sanitize_model_output(content)
-
-    except Exception as e:
-        current_app.logger.exception("Błąd wywołania API: %s", e)
-        return None
+    return None
