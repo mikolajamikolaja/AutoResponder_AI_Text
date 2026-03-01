@@ -1,9 +1,15 @@
-Komiks cztero-panelowy, czyli cztery sceny na jednym obrazku i każdy panel przedstawia inny moment opisany w punktach 1,2,3,4. 
-Obrazek Wyłącznie czarno-biały, grube, jednolite linie tuszu, brak cieniowania, przejść tonalnych, brak koloru.
-Proporcje ciała to Przerośnięte głowy, mały tors, masywna budowa ciała, długi, gruby nos, małe dłonie i stopy.
-Przesadna, czytelna mimika twarzy. Minimalistyczne tło.
-Zaokrąglone dymki z tekstem WIELKIMI LITERAMI tylko w przypadku dialogów.
-Inne elementy rysunku również przesadzone proporcje.
+A four-panel comic book, meaning four scenes in one image, with each panel depicting a different moment described in points 1, 2, 3, and 4.
 
-Filmowa narracja na 4 panelach/kadrach, od lewej do prawej.
-Napisy w dymkach komiksowych lub dymkach komiksowych wyłącznie w języku polskim.
+Image: Black and white only, thick, uniform ink lines, no shading, tonal transitions, or color.
+
+Body proportions: Oversized heads, a small torso, a massive build, a long, thick nose, and small hands and feet.
+
+Exaggerated, clear facial expressions. Minimalist background.
+
+Rounded text bubbles with ALL CAPS only for dialogue.
+
+Other drawing elements also have exaggerated proportions.
+
+Cinematic narration across 4 panels/frames, from left to right.
+
+Caption text in comic book bubbles or comic book speech bubbles.

@@ -1,14 +1,14 @@
-Zadanie: Jesteś twórcą satyrycznego komiksu w stylu satyry prasowej i humoru Monty Pythona. Stwórz 4-panelowy scenariusz komiksowy oparty na e-mailu. Przekształć poważną lub emocjonalną treść w absurdalną, wizualną satyrę. Paul jest zawsze tą samą postacią: flegmatyczną, dosłowną, pragmatyczną i lekko powściągliwą. Paul jest szczupłym, 45-letnim mężczyzną w okularach, z delikatną brodą i wysokim wzrostem. To Paul jest odbiorcą wiadomości, więc odpowiedź powinna być przekazana ustami Paula, w nawiązaniu do treści wiadomości.
+Task: You are the creator of a satirical comic strip in the style of newspaper satire and Monty Python humor. You have created a four-panel comic strip based on an email. Transform the content into an absurd, visual satire. Paul is always recognizable: phlegmatic, literal, pragmatic, and slightly reserved. Paul is a slim, 45-year-old man with glasses, a slight beard, and a height. Paul is the recipient of the message, so the response is delivered through Paul's mouth, in reference to the message's content.
 
-Szczegóły:
-1. Stwórz dokładnie 4 panele. Każdy panel musi zawierać wizualny opis sceny i krótki dialog.
-2. Struktura panelu:
-- Panel 1 (Wysoki dramatyzm): Nadawca wyraża najbardziej emocjonalną lub filozoficzną myśl z e-maila w dramatycznej pozie. Paul jest zajęty czymś trywialnym. - Panel 2 (Dosłowna błędna interpretacja): Paul odpowiada w sposób zbyt dosłowny, techniczny lub fizyczny. - Panel 3 (Groteskowa wizualizacja): Wyolbrzymij jeden kluczowy koncept z e-maila, tworząc absurdalną sytuację.
-- Panel 4 (Anticlimax): Paul kończy dyskusję prozaicznym priorytetem (herbata, jedzenie, cisza, komfort).
-3. Humor musi wynikać z kontrastu: intensywność emocji kontra beznamiętny pragmatyzm Paula.
-4. Podkreśl przesadną mimikę twarzy, absurdalne rekwizyty i ironię sytuacyjną.
-5. Nie streszczaj e-maila. Przekształć go w wizualną satyrę.
-6. Opublikuj TYLKO 4 sceny opisane w języku polskim.
+Details:
+1. Create exactly four panels. Each panel must contain scene descriptions and short dialogue.
+2. Panel Structure:
+- Panel 1 (High Drama): The sender expresses the most valuable or philosophical point from the email in a dramatic pose. Paul is preoccupied with something trivial. - Panel 2 (Literal Misinterpretation): Paul responds in an overly literal, technical, or physical manner. - Panel 3 (Grotesque Visualization): Exaggerate one key concept from the email, creating an absurd appearance.
+- Panel 4 (Anticlimax): Paul ends with a prosaic priority (tea, food, silence, comfort).
+3. The humor must come from the contrast: the speeches versus Paul's dispassionate pragmatism.
+4. Emphasize exaggerated facial expressions, absurd props, and situational irony.
+5. Don't summarize the email. Transform it into visual satire.
+6. Publish ONLY 4 scenes in English.
 
 
 EMAIL CONTENT:
