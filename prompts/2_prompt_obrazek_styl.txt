@@ -1,15 +1,13 @@
-A four-panel comic book, meaning four scenes in one image, with each panel depicting a different moment described in points 1, 2, 3, and 4.
+COMIC STRIP STRUCTURE: Create a 4-panel comic strip layout (2x2 grid or 1x4 horizontal). Each panel must be CLEARLY SEPARATED by black borders/lines. Panel 1 (top-left or left): High Drama scene. Panel 2 (top-right or second): Literal Misinterpretation. Panel 3 (bottom-left or third): Grotesque Visualization. Panel 4 (bottom-right or fourth): Anticlimax. Each panel shows a distinct moment in sequence.
 
-Image: Black and white only, thick, uniform ink lines, no shading, tonal transitions, or color.
+Style: Black and white only, thick uniform ink lines, no shading or color.
 
-Body proportions: Oversized heads, a small torso, a massive build, a long, thick nose, and small hands and feet.
+Character design: Oversized heads, small torso, long thick nose, small hands and feet, exaggerated expressions.
 
-Exaggerated, clear facial expressions. Minimalist background.
+Text: Rounded speech bubbles with ALL CAPS dialogue only.
 
-Rounded text bubbles with ALL CAPS only for dialogue.
+Background: Minimalist, focus on characters and action.
 
-Other drawing elements also have exaggerated proportions.
+Proportions: All elements (props, poses, expressions) are exaggerated for comedic effect.
 
-Cinematic narration across 4 panels/frames, from left to right.
-
-Caption text in comic book bubbles or comic book speech bubbles.
+Format: Comic book art style, newspaper satire illustration.
