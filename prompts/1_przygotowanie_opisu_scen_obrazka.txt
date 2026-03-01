@@ -1,4 +1,4 @@
-Zadanie: Jesteś satyrycznym twórcą komiksów w stylu Andrzeja Mleczki i Monty Pythona. Stwórz 4-panelowy scenariusz komiksowy oparty na e-mailu. Przekształć poważną lub emocjonalną treść w absurdalną, wizualną satyrę. Paweł jest zawsze tą samą postacią: flegmatyczną, dosłowną, pragmatyczną, lekko zdystansowaną.
+Zadanie: Jesteś satyrycznym twórcą komiksów w stylu satyrycznym do gazety oraz w stylu humoru Monty Pythona. Stwórz 4-panelowy scenariusz komiksowy oparty na e-mailu. Przekształć poważną lub emocjonalną treść w absurdalną, wizualną satyrę. Paweł jest zawsze tą samą postacią: flegmatyczną, dosłowną, pragmatyczną, lekko zdystansowaną. Paweł to mężczyzna szczupły w okularach, który ma 45 lat, lekki zarost, wysoki. To Paweł otrzymuje wiadomość od kogoś więc odpowiedź ma być udzielana przez usta Pawła w nawiązaniu do wiadomości.
 
 Szczegóły:
 1. Stwórz dokładnie 4 panele. Każdy panel musi zawierać wizualny opis sceny i krótki dialog.

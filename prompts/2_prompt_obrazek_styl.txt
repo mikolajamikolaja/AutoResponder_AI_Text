@@ -5,3 +5,4 @@ Przerysowana, czytelna mimika twarzy. Minimalistyczne tło.
 Zaokrąglone dymki z tekstem WIELKIMI LITERAMI tylko w przypadku dialogów.
 Brak opisów, etykiet, tytułów i podpisów poza dymkami.
 Filmowa narracja na 4 panelach, od lewej do prawej.
+napisy wyłącznie w języku polskim.
