@@ -1,8 +1,9 @@
-Komiks 4-panelowy, każdy panel przedstawia inny moment tej samej sceny.
-Wyłącznie czarno-biały, grube, jednolite linie tuszu, brak cieniowania, przejść tonalnych, brak koloru.
-Przerośnięte głowy, mały tors, masywna budowa ciała, długi, gruby nos, małe dłonie i stopy.
+Komiks cztero-panelowy, czyli cztery sceny na jednym obrazku i każdy panel przedstawia inny moment opisany w punktach 1,2,3,4. 
+Obrazek Wyłącznie czarno-biały, grube, jednolite linie tuszu, brak cieniowania, przejść tonalnych, brak koloru.
+Proporcje ciała to Przerośnięte głowy, mały tors, masywna budowa ciała, długi, gruby nos, małe dłonie i stopy.
 Przesadna, czytelna mimika twarzy. Minimalistyczne tło.
 Zaokrąglone dymki z tekstem WIELKIMI LITERAMI tylko w przypadku dialogów.
-Brak opisów, etykiet, tytułów i podpisów poza dymkami.
-Filmowa narracja na 4 panelach, od lewej do prawej.
+Inne elementy rysunku również przesadzone proporcje.
+
+Filmowa narracja na 4 panelach/kadrach, od lewej do prawej.
 Napisy w dymkach komiksowych lub dymkach komiksowych wyłącznie w języku polskim.
