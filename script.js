@@ -10,6 +10,7 @@
  *   KEYWORDS2        - słowa kluczowe → scrabble (obrazek)
  *   KEYWORDS3        - słowa kluczowe → analiza powtórzeń (DOCX)
  *   KEYWORDS4        - słowa kluczowe → analiza emocjonalna (wykresy PNG)
+ *   KEYWORDS_JOKER   - słowa testowe → aktywuje WSZYSTKIE respondery (np. joker)
  */
 
 function _getListFromProps(name) {
@@ -118,7 +119,6 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
   }
 }
 
-// ── Wysyłka: analiza emocjonalna PNG ─────────────────────────────────────────
 // ── Wysyłka: analiza emocjonalna PNG + raporty TXT ────────────────────────────
 function executeEmocjeMailSend(data, recipient, subject, msg) {
   if (!data) {
@@ -191,13 +191,14 @@ function processEmailsFinal() {
     return;
   }
 
-  var BIZ_LIST     = _getListFromProps("BIZ_LIST");
-  var ALLOWED_LIST = _getListFromProps("ALLOWED_LIST");
-  var KEYWORDS     = _getListFromProps("KEYWORDS");
-  var KEYWORDS1    = _getListFromProps("KEYWORDS1");
-  var KEYWORDS2    = _getListFromProps("KEYWORDS2");
-  var KEYWORDS3    = _getListFromProps("KEYWORDS3");
-  var KEYWORDS4    = _getListFromProps("KEYWORDS4");  // ← analiza emocjonalna
+  var BIZ_LIST       = _getListFromProps("BIZ_LIST");
+  var ALLOWED_LIST   = _getListFromProps("ALLOWED_LIST");
+  var KEYWORDS       = _getListFromProps("KEYWORDS");
+  var KEYWORDS1      = _getListFromProps("KEYWORDS1");
+  var KEYWORDS2      = _getListFromProps("KEYWORDS2");
+  var KEYWORDS3      = _getListFromProps("KEYWORDS3");
+  var KEYWORDS4      = _getListFromProps("KEYWORDS4");
+  var KEYWORDS_JOKER = _getListFromProps("KEYWORDS_JOKER");  // ← joker
 
   var maskMode = false;
 
@@ -231,6 +232,17 @@ function processEmailsFinal() {
       return k && searchText.indexOf(k) !== -1;
     });
 
+    // ── JOKER — aktywuje wszystkie respondery ─────────────────────────────────
+    var containsJoker = KEYWORDS_JOKER.some(function(k){
+      return k && searchText.indexOf(k) !== -1;
+    });
+    if (containsJoker) {
+      containsKeyword  = true;
+      containsKeyword2 = true;
+      containsKeyword3 = true;
+      containsKeyword4 = true;
+    }
+
     // Ignoruj jeśli nie spełnia żadnego warunku
     if (!isBiz && !isAllowed && !containsKeyword &&
         !containsKeyword2 && !containsKeyword3 && !containsKeyword4) {
@@ -246,10 +258,11 @@ function processEmailsFinal() {
       .concat(KEYWORDS2)
       .concat(KEYWORDS3)
       .concat(KEYWORDS4)
+      .concat(KEYWORDS_JOKER)  // ← joker też usuwamy z treści
       .filter(Boolean);
     var sanitizedBody = removeKeywordsFromText(plainBody, combinedKeywords, maskMode);
 
-    // ── Pobierz załączniki (KEYWORDS3 lub KEYWORDS4) ──────────────────────────
+    // ── Pobierz załączniki (KEYWORDS3 lub KEYWORDS4 lub JOKER) ───────────────
     var allAttachments = [];
     if (containsKeyword3 || containsKeyword4) {
       allAttachments = getAllAttachments(msg);

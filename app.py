@@ -18,6 +18,7 @@ from responders.biznes   import build_biznes_section
 from responders.scrabble import build_scrabble_section
 from responders.analiza  import build_analiza_section
 from responders.emocje   import build_emocje_section
+from responders.obrazek  import build_obrazek_section
 
 app = Flask(__name__)
 
@@ -50,14 +51,19 @@ def webhook():
         attachments = data.get("attachments") or []
         response_data["emocje"] = build_emocje_section(body, attachments)
 
+    # ── Obrazek AI (flaga wants_obrazek z Apps Script) ────────────────────────
+    if data.get("wants_obrazek"):
+        response_data["obrazek"] = build_obrazek_section(body)
+
     # ── Logowanie ─────────────────────────────────────────────────────────────
     app.logger.info(
-        "Response: biznes.pdf=%s | zwykly.pdf=%s | scrabble=%s | analiza=%s | emocje=%s",
+        "Response: biznes.pdf=%s | zwykly.pdf=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s",
         bool(response_data["biznes"].get("pdf",  {}).get("base64")),
         bool(response_data["zwykly"].get("pdf",  {}).get("base64")),
         "tak" if "scrabble" in response_data else "nie",
         "tak" if "analiza"  in response_data else "nie",
         "tak" if "emocje"   in response_data else "nie",
+        "tak" if "obrazek"  in response_data else "nie",
     )
 
     return jsonify(response_data), 200
