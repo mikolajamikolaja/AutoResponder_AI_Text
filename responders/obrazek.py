@@ -8,7 +8,7 @@ Przepływ:
      → powstaje scenariusz 4 scen komiksowych (Y)
   2. Scenariusz (Y) + styl z pliku
      prompts/2_prompt_obrazek_styl.txt
-     → HF FLUX.1-schnell generuje obrazek PNG
+     → HF Stable Diffusion 3 generuje obrazek PNG z polskim tekstem
   3. Mail zwrotny zawiera treść Y i obrazek PNG w załączniku
 
 Tokeny HF w Render: HF_TOKEN, HF_TOKEN1, HF_TOKEN2, HF_TOKEN3, HF_TOKEN4
@@ -25,11 +25,11 @@ from core.ai_client import call_groq as call_deepseek, MODEL_TYLER
 
 # ── Stałe ─────────────────────────────────────────────────────────────────────
 HF_API_URL = (
-    "https://router.huggingface.co/hf-inference/models/"
-    "black-forest-labs/FLUX.1-schnell"
+    "https://api-inference.huggingface.co/models/"
+    "stabilityai/stable-diffusion-3-medium"
 )
-HF_STEPS    = 30
-HF_GUIDANCE = 3.5
+HF_STEPS    = 50
+HF_GUIDANCE = 7.5
 TIMEOUT_SEC = 60
 
 BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +92,7 @@ def _build_hf_prompt(scene_text: str) -> str:
     """
     Łączy scenariusz scen (Y) ze stylem komiksowym z pliku
     2_prompt_obrazek_styl.txt.
+    Dodaje instrukcję dla SD3 żeby lepiej obsługiwał polskie napisy.
     """
     style = _load_file(
         STYLE_FILE,
@@ -100,7 +101,12 @@ def _build_hf_prompt(scene_text: str) -> str:
             "oversized heads, exaggerated expressions, no text outside bubbles."
         )
     )
-    return f"{scene_text}\n\n{style}"
+    # Dodaj instrukcję dla lepszej obsługi polskiego tekstu
+    sd3_instruction = (
+        "Important: Render Polish text clearly in speech bubbles. "
+        "Make sure all Polish characters (ą, ć, ę, ł, ń, ó, ś, ź, ż) are visible and legible."
+    )
+    return f"{scene_text}\n\n{style}\n\n{sd3_instruction}"
 
 
 # ── Zbierz tokeny HF ──────────────────────────────────────────────────────────
@@ -131,6 +137,8 @@ def _generate_image_hf(full_prompt: str) -> bytes:
         "parameters": {
             "num_inference_steps": HF_STEPS,
             "guidance_scale":      HF_GUIDANCE,
+            "height": 768,
+            "width": 768,
         },
     }
 
