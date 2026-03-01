@@ -2,15 +2,17 @@
 responders/obrazek.py
 Responder OBRAZEK — generuje 4-ujęciowy komiks AI z treści maila.
 
-Używa Hugging Face Inference API z modelem FLUX.1-schnell.
-Tokeny HF ustawiasz w Render jako zmienne środowiskowe:
-  HF_TOKEN, HF_TOKEN1, HF_TOKEN2, HF_TOKEN3, HF_TOKEN4
-Program próbuje tokenów po kolei — jeśli jeden nie działa, bierze następny.
-Styl obrazka pochodzi z pliku: prompts/prompt_obrazek.txt
+Przepływ:
+  1. Treść maila (X) → DeepSeek z instrukcją z pliku
+     prompts/1_przygotowanie_opisu_scen_obrazka.txt
+     → powstaje scenariusz 4 scen komiksowych (Y)
+  2. Scenariusz (Y) + styl z pliku
+     prompts/2_prompt_obrazek_styl.txt
+     → HF FLUX.1-schnell generuje obrazek PNG
+  3. Mail zwrotny zawiera treść Y i obrazek PNG w załączniku
 
-Parametry generowania:
-  - num_inference_steps: 30
-  - guidance_scale:      3.5
+Tokeny HF w Render: HF_TOKEN, HF_TOKEN1, HF_TOKEN2, HF_TOKEN3, HF_TOKEN4
+Klucz DeepSeek w Render: API_KEY_DEEPSEEK
 """
 
 import os
@@ -29,69 +31,82 @@ HF_API_URL = (
 HF_STEPS    = 30
 HF_GUIDANCE = 3.5
 TIMEOUT_SEC = 60
-MAX_PROMPT  = 500
 
-BASE_DIR          = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROMPT_STYLE_FILE = os.path.join(BASE_DIR, "prompts", "prompt_obrazek.txt")
+BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROMPTS_DIR    = os.path.join(BASE_DIR, "prompts")
+SCENE_FILE     = os.path.join(PROMPTS_DIR, "1_przygotowanie_opisu_scen_obrazka.txt")
+STYLE_FILE     = os.path.join(PROMPTS_DIR, "2_prompt_obrazek_styl.txt")
 
 
-# ── Wczytaj styl z pliku ──────────────────────────────────────────────────────
-def _load_style() -> str:
+# ── Wczytaj plik promptu ──────────────────────────────────────────────────────
+def _load_file(path: str, fallback: str) -> str:
     try:
-        with open(PROMPT_STYLE_FILE, encoding="utf-8") as f:
-            style = f.read().strip()
-            if style:
-                return style
+        with open(path, encoding="utf-8") as f:
+            content = f.read().strip()
+            if content:
+                return content
     except Exception as e:
-        current_app.logger.warning("Nie można wczytać prompt_obrazek.txt: %s", e)
+        current_app.logger.warning("Nie można wczytać %s: %s", path, e)
+    return fallback
 
-    # Fallback
-    return (
-        "4-panel comic strip, black and white, thick ink lines, "
-        "oversized heads, exaggerated expressions, minimal background, "
-        "no text outside speech bubbles, cinematic storytelling left to right."
+
+# ── KROK 1: Mail → DeepSeek → scenariusz 4 scen (Y) ──────────────────────────
+def _build_scene_prompt(body: str) -> str:
+    """
+    Wysyła treść maila do DeepSeek z instrukcją z pliku
+    1_przygotowanie_opisu_scen_obrazka.txt.
+    Zwraca scenariusz 4 scen komiksowych po angielsku (treść Y).
+    """
+    instruction_template = _load_file(
+        SCENE_FILE,
+        fallback=(
+            "Create a 4-panel comic strip script based on this email. "
+            "Output only visual scene descriptions in English.\n\n"
+            "EMAIL CONTENT:\n[PASTE EMAIL HERE]"
+        )
     )
 
+    # Podmień placeholder na treść maila
+    instruction = instruction_template.replace("[PASTE EMAIL HERE]", body[:2000])
 
-# ── Skróć treść maila do promptu obrazkowego ─────────────────────────────────
-def _build_image_prompt(body: str, style: str) -> str:
+    current_app.logger.info("DeepSeek — generuję scenariusz 4 scen...")
+
+    result = call_deepseek(instruction, "", MODEL_TYLER)
+
+    if result and result.strip():
+        # Usuń ewentualne cudzysłowy i nadmiarowe nowe linie
+        scene_text = re.sub(r'"{3,}', '', result.strip())
+        scene_text = re.sub(r'\n{3,}', '\n\n', scene_text)
+        current_app.logger.info(
+            "DeepSeek scenariusz (%.200s...)", scene_text
+        )
+        return scene_text
+
+    # Fallback jeśli DeepSeek zawiedzie
+    current_app.logger.warning("DeepSeek nie zwrócił scenariusza — używam fallback")
+    return "Two people arguing about emotions. One dramatic, one eating a sandwich."
+
+
+# ── KROK 2: Scenariusz (Y) + styl → pełny prompt do HF ───────────────────────
+def _build_hf_prompt(scene_text: str) -> str:
     """
-    Używa Groq żeby wyciągnąć z maila TYLKO wizualny opis sceny po angielsku.
-    Kluczowe: żadnego polskiego tekstu, żadnych instrukcji — tylko opis obrazu.
+    Łączy scenariusz scen (Y) ze stylem komiksowym z pliku
+    2_prompt_obrazek_styl.txt.
     """
-    groq_instruction = (
-        "Read the email below and extract the main visual scene it describes. "
-        "Write a SHORT English image prompt (max 25 words) describing ONLY "
-        "what should be VISIBLE in the picture: characters, setting, action, mood. "
-        "Do NOT include any Polish words, instructions, questions, or explanations. "
-        "Output only the visual scene description, nothing else.\n\n"
-        "Email:\n" + body[:600]
+    style = _load_file(
+        STYLE_FILE,
+        fallback=(
+            "4-panel comic strip, black and white, thick ink lines, "
+            "oversized heads, exaggerated expressions, no text outside bubbles."
+        )
     )
-
-    try:
-        res = call_deepseek(groq_instruction, "", MODEL_TYLER)
-        if res and res.strip():
-            # Usuń cudzysłowy, polskie znaki mogące się wkraść, nowe linie
-            prompt = re.sub(r'["\'\n]', ' ', res.strip())
-            prompt = prompt[:MAX_PROMPT]
-            current_app.logger.info("Groq scene prompt: %s", prompt)
-        else:
-            raise ValueError("Pusta odpowiedź Groq")
-    except Exception as e:
-        current_app.logger.warning("Groq prompt generation failed: %s", e)
-        # Fallback: pierwsze zdanie maila przetłumaczone na angielski przez drugi call
-        first = re.split(r'[.!?\n]', body.strip())[0].strip()
-        prompt = first[:150] if first else "two elderly people sitting by fireplace drinking tea"
-
-    # Złącz opis sceny ze stylem komiksowym
-    full_prompt = f"{prompt}. {style.strip()}"
-
-    return full_prompt
+    return f"{scene_text}\n\n{style}"
 
 
-# ── Zbierz dostępne tokeny z Render ──────────────────────────────────────────
+# ── Zbierz tokeny HF ──────────────────────────────────────────────────────────
 def _get_hf_tokens() -> list:
-    names  = ["HF_TOKEN", "HF_TOKEN1", "HF_TOKEN2", "HF_TOKEN3", "HF_TOKEN4"]
+    names  = ["HF_TOKEN", "HF_TOKEN1", "HF_TOKEN2", "HF_TOKEN3", "HF_TOKEN4",
+              "HF_TOKEN5", "HF_TOKEN6", "HF_TOKEN7"]
     tokens = []
     for name in names:
         val = os.getenv(name, "").strip()
@@ -100,11 +115,11 @@ def _get_hf_tokens() -> list:
     return tokens
 
 
-# ── Wywołaj HF API i pobierz PNG ─────────────────────────────────────────────
+# ── KROK 3: Prompt → HF FLUX → PNG ───────────────────────────────────────────
 def _generate_image_hf(full_prompt: str) -> bytes:
     """
-    Wysyła prompt do HF FLUX.1-schnell.
-    Próbuje tokenów po kolei, przechodzi dalej przy każdym błędzie.
+    Wysyła pełny prompt do HF FLUX.1-schnell.
+    Próbuje tokenów po kolei. Zwraca bytes PNG lub b'' przy błędzie.
     """
     tokens = _get_hf_tokens()
     if not tokens:
@@ -134,13 +149,11 @@ def _generate_image_hf(full_prompt: str) -> bytes:
             resp = requests.post(
                 HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC
             )
-
             if resp.status_code == 200:
                 current_app.logger.info(
                     "HF FLUX sukces — token=%s | PNG %d B", name, len(resp.content)
                 )
                 return resp.content
-
             elif resp.status_code in (401, 403):
                 current_app.logger.warning(
                     "HF FLUX token %s nieważny (%s) — próbuję następny",
@@ -153,10 +166,9 @@ def _generate_image_hf(full_prompt: str) -> bytes:
                 )
             else:
                 current_app.logger.error(
-                    "HF FLUX token %s błąd %s: %s — próbuję następny",
-                    name, resp.status_code, resp.text[:200]
+                    "HF FLUX token %s błąd %s: %.200s — próbuję następny",
+                    name, resp.status_code, resp.text
                 )
-
         except requests.exceptions.Timeout:
             current_app.logger.warning(
                 "HF FLUX token %s timeout po %d sek — próbuję następny",
@@ -176,10 +188,10 @@ def _generate_image_hf(full_prompt: str) -> bytes:
 def build_obrazek_section(body: str) -> dict:
     """
     Buduje sekcję 'obrazek':
-      1. Wczytuje styl komiksowy z prompts/prompt_obrazek.txt
-      2. Groq wyciąga z maila wizualny opis sceny po angielsku
-      3. Generuje 4-ujęciowy komiks PNG przez HF FLUX.1-schnell
-      4. Zwraca base64 PNG + HTML dla nadawcy
+      Krok 1 — treść maila (X) → DeepSeek → scenariusz 4 scen (Y)
+      Krok 2 — scenariusz (Y) + styl → pełny prompt HF
+      Krok 3 — HF FLUX.1-schnell → PNG
+      Krok 4 — mail zwrotny z treścią Y i obrazkiem PNG
     """
     if not body or not body.strip():
         return {
@@ -192,28 +204,38 @@ def build_obrazek_section(body: str) -> dict:
             "prompt_used": "",
         }
 
-    style       = _load_style()
-    full_prompt = _build_image_prompt(body, style)
-    current_app.logger.info("Pełny prompt: %.250s", full_prompt)
+    # Krok 1 — DeepSeek generuje scenariusz Y
+    scene_text = _build_scene_prompt(body)
 
+    # Krok 2 — łączymy Y ze stylem
+    full_prompt = _build_hf_prompt(scene_text)
+    current_app.logger.info("Pełny prompt HF: %.300s", full_prompt)
+
+    # Krok 3 — HF generuje PNG
     png_bytes = _generate_image_hf(full_prompt)
     png_b64   = base64.b64encode(png_bytes).decode("ascii") if png_bytes else None
 
+    # Krok 4 — treść maila zwrotnego
+    # Pokazujemy nadawcy scenariusz Y (bez części stylistycznej)
+    scene_html = scene_text.replace("\n", "<br>")
+
     if png_b64:
         reply_html = (
-            "<p>Na podstawie Twojej treści utworzyłem prompt i wygenerowałem obrazek:</p>"
-            f"<p><em>{full_prompt}</em></p>"
+            "<p>Na podstawie Twojej treści automatycznie utworzyłem prompt "
+            "do obrazka, który załączam:</p>"
+            f"<blockquote>{scene_html}</blockquote>"
         )
     else:
         reply_html = (
-            "<p>Na podstawie Twojej treści utworzyłem prompt:</p>"
-            f"<p><em>{full_prompt}</em></p>"
-            "<p>Jednak wystąpił błąd po stronie serwisu AI podczas generowania obrazka. "
-            "Spróbuj ponownie za chwilę.</p>"
+            "<p>Na podstawie Twojej treści automatycznie utworzyłem prompt "
+            "do obrazka:</p>"
+            f"<blockquote>{scene_html}</blockquote>"
+            "<p>Jednak wystąpił błąd podczas generowania obrazka po stronie "
+            "serwisu AI. Spróbuj ponownie za chwilę.</p>"
         )
 
     current_app.logger.info(
-        "Obrazek AI: sukces=%s | rozmiar=%d B", bool(png_b64), len(png_bytes)
+        "Obrazek AI: sukces=%s | PNG=%d B", bool(png_b64), len(png_bytes)
     )
 
     return {
@@ -223,5 +245,5 @@ def build_obrazek_section(body: str) -> dict:
             "content_type": "image/png",
             "filename":     "komiks_ai.png",
         },
-        "prompt_used": full_prompt,
+        "prompt_used": scene_text,
     }
