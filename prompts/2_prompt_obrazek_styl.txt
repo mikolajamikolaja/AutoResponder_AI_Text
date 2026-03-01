@@ -1,7 +1,7 @@
-4-panel comic strip, each panel shows a different moment of the same scene.
-Black and white only, thick uniform ink lines, no shading, no gradients, no color.
-Oversized heads, small torso, bulky body, long thick nose, small hands and feet.
-Exaggerated readable facial expressions. Minimal background.
-Rounded speech bubbles with ALL CAPS text only if dialogue is needed.
-No written descriptions, no labels, no titles, no captions outside bubbles.
-Cinematic storytelling across 4 panels, left to right.
+Komiks 4-panelowy, każdy panel przedstawia inny moment tej samej historii.
+Wyłącznie czarno-biały, grube, jednolite linie tuszu, brak cieniowania, przejść tonalnych, brak koloru.
+Przerośnięte głowy, mały tors, masywna budowa ciała, długi, gruby nos, małe dłonie i stopy ogromne.
+Przerysowana, czytelna mimika twarzy. Minimalistyczne tło.
+Zaokrąglone dymki z tekstem WIELKIMI LITERAMI tylko w przypadku dialogów.
+Brak opisów, etykiet, tytułów i podpisów poza dymkami.
+Filmowa narracja na 4 panelach, od lewej do prawej.
