@@ -2,15 +2,11 @@
 """
 app.py
 Webhook backend dla Google Apps Script.
-Odbiera żądania i deleguje do odpowiednich responderów.
-
-Aby dodać nowy responder:
-1. Stwórz plik responders/nowy.py z funkcją build_nowy_section(body)
-2. Dodaj import poniżej
-3. Dodaj wywołanie w webhook() i klucz w response_data
-4. W Google Apps Script dodaj obsługę nowego klucza
+Wszystkie respondery uruchamiane RÓWNOLEGLE przez ThreadPoolExecutor.
+Dzięki temu czas odpowiedzi = czas najwolniejszego respondera, nie suma wszystkich.
 """
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 
 from responders.zwykly     import build_zwykly_section
@@ -32,62 +28,83 @@ def webhook():
     if not body or not body.strip():
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
 
-    # ── Pola nadawcy i historia (przesyłane przez Apps Script) ────────────────
+    # ── Pola nadawcy i historia ───────────────────────────────────────────────
     sender           = data.get("sender",      "")
-    sender_name      = data.get("sender_name", "")  # "Jan Kowalski" z nagłówka From
+    sender_name      = data.get("sender_name", "")
     previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None
+    attachments      = data.get("attachments") or []
 
-    # ── Zawsze generowane ─────────────────────────────────────────────────────
-    response_data = {
-        "zwykly": build_zwykly_section(body),
-        "biznes": build_biznes_section(body),
+    # ── Flagi żądania ─────────────────────────────────────────────────────────
+    wants_scrabble = bool(data.get("wants_scrabble"))
+    wants_analiza  = bool(data.get("wants_analiza"))
+    wants_emocje   = bool(data.get("wants_emocje"))
+    wants_obrazek  = bool(data.get("wants_obrazek"))
+
+    flask_app = app._get_current_object()
+
+    # ── Pomocnicza funkcja: uruchom w app context ─────────────────────────────
+    def run(fn, *args, **kwargs):
+        with flask_app.app_context():
+            return fn(*args, **kwargs)
+
+    # ── Zbuduj listę zadań do równoległego wykonania ──────────────────────────
+    tasks = {
+        "zwykly":    lambda: run(build_zwykly_section, body),
+        "biznes":    lambda: run(build_biznes_section, body),
+        "nawiazanie": lambda: run(
+            build_nawiazanie_section,
+            body=body,
+            previous_body=previous_body,
+            previous_subject=previous_subject,
+            sender=sender,
+            sender_name=sender_name,
+        ),
     }
 
-    # ── Nawiązanie do poprzedniej wiadomości (zawsze sprawdzane) ──────────────
-    response_data["nawiazanie"] = build_nawiazanie_section(
-        body=body,
-        previous_body=previous_body,
-        previous_subject=previous_subject,
-        sender=sender,
-        sender_name=sender_name,
-    )
+    if wants_scrabble:
+        tasks["scrabble"] = lambda: run(build_scrabble_section, body)
+    if wants_analiza:
+        tasks["analiza"]  = lambda: run(build_analiza_section, body, attachments)
+    if wants_emocje:
+        tasks["emocje"]   = lambda: run(build_emocje_section, body, attachments)
+    if wants_obrazek:
+        tasks["obrazek"]  = lambda: run(build_obrazek_section, body)
 
-    # ── Generowane tylko na żądanie (flaga wants_scrabble z Apps Script) ──────
-    if data.get("wants_scrabble"):
-        response_data["scrabble"] = build_scrabble_section(body)
+    # ── Uruchom wszystkie równolegle ──────────────────────────────────────────
+    response_data = {}
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        futures = {executor.submit(fn): key for key, fn in tasks.items()}
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                response_data[key] = future.result()
+            except Exception as e:
+                app.logger.error("Błąd responderu '%s': %s", key, e)
+                # Zwróć pustą sekcję zamiast crashować cały webhook
+                response_data[key] = {}
 
-    # ── Analiza powtórzeń (flaga wants_analiza z Apps Script) ─────────────────
-    if data.get("wants_analiza"):
-        attachments = data.get("attachments") or []
-        response_data["analiza"] = build_analiza_section(body, attachments)
-
-    # ── Analiza emocjonalna (flaga wants_emocje z Apps Script) ────────────────
-    if data.get("wants_emocje"):
-        attachments = data.get("attachments") or []
-        response_data["emocje"] = build_emocje_section(body, attachments)
-
-    # ── Obrazek AI (flaga wants_obrazek z Apps Script) ────────────────────────
-    if data.get("wants_obrazek"):
-        response_data["obrazek"] = build_obrazek_section(body)
+    # Upewnij się że nawiazanie zawsze ma has_history (zabezpieczenie)
+    if "nawiazanie" not in response_data:
+        response_data["nawiazanie"] = {"has_history": False, "reply_html": "", "analysis": ""}
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     app.logger.info(
-        "Response: biznes.pdf=%s | zwykly.pdf=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s | nawiazanie=%s | sender_name=%s",
-        bool(response_data["biznes"].get("pdf",  {}).get("base64")),
-        bool(response_data["zwykly"].get("pdf",  {}).get("base64")),
-        "tak" if "scrabble"                                 in response_data else "nie",
-        "tak" if "analiza"                                  in response_data else "nie",
-        "tak" if "emocje"                                   in response_data else "nie",
-        "tak" if "obrazek"                                  in response_data else "nie",
-        "tak" if response_data["nawiazanie"]["has_history"] else "nie (brak historii)",
-        sender_name or "(brak)",
+        "Response: biznes=%s | zwykly=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s | nawiazanie=%s | sender=%s",
+        bool(response_data.get("biznes", {}).get("pdf",  {}).get("base64")),
+        bool(response_data.get("zwykly", {}).get("pdf",  {}).get("base64")),
+        "tak" if "scrabble" in response_data else "nie",
+        "tak" if "analiza"  in response_data else "nie",
+        "tak" if "emocje"   in response_data else "nie",
+        "tak" if "obrazek"  in response_data else "nie",
+        "tak" if response_data.get("nawiazanie", {}).get("has_history") else "nie",
+        sender_name or sender or "(brak)",
     )
 
     return jsonify(response_data), 200
 
 
 if __name__ == "__main__":
-    if not os.getenv("KLUCZ_GROQ"):
-        app.logger.warning("KLUCZ_GROQ nie ustawiony — wywołania AI zwrócą None.")
+    if not os.getenv("API_KEY_DEEPSEEK"):
+        app.logger.warning("API_KEY_DEEPSEEK nie ustawiony — wywołania AI zwrócą None.")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
