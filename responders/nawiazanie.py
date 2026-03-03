@@ -11,9 +11,10 @@ Przepływ:
   4. Render zwraca sekcję 'nawiazanie' → Apps Script wysyła osobny email
 
 Wymagane pola w webhooku (z Apps Script):
+  sender           — adres email nadawcy
+  sender_name      — imię i nazwisko z nagłówka From (np. "Jan Kowalski")
   previous_body    — treść ostatniej wiadomości od tego nadawcy (lub null)
   previous_subject — temat ostatniej wiadomości (lub null)
-  sender           — adres email nadawcy
 """
 
 import os
@@ -23,9 +24,9 @@ from flask import current_app
 from core.ai_client import call_groq as call_deepseek, MODEL_TYLER
 
 # ── Ścieżki ───────────────────────────────────────────────────────────────────
-BASE_DIR      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROMPTS_DIR   = os.path.join(BASE_DIR, "prompts")
-PROMPT_FILE   = os.path.join(PROMPTS_DIR, "prompt_nawiazanie.txt")
+BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
+PROMPT_FILE = os.path.join(PROMPTS_DIR, "prompt_nawiazanie.txt")
 
 
 # ── Wczytaj plik promptu ──────────────────────────────────────────────────────
@@ -45,10 +46,13 @@ def _build_instruction(
     current_body: str,
     previous_body: str,
     previous_subject: str,
+    sender: str,
+    sender_name: str,
 ) -> str:
     template = _load_prompt(
         fallback=(
             "Porównaj dwie wiadomości od tej samej osoby.\n\n"
+            "NADAWCA: [SENDER_NAME] <[SENDER_EMAIL]>\n\n"
             "POPRZEDNIA WIADOMOŚĆ (temat: [PREVIOUS_SUBJECT]):\n[PREVIOUS_BODY]\n\n"
             "OBECNA WIADOMOŚĆ:\n[CURRENT_BODY]\n\n"
             "Nawiąż do poprzedniej wiadomości, zwróć się po imieniu, "
@@ -56,9 +60,11 @@ def _build_instruction(
         )
     )
 
-    instruction = template.replace("[PREVIOUS_SUBJECT]", previous_subject or "brak tematu")
-    instruction = instruction.replace("[PREVIOUS_BODY]",   previous_body[:1500])
-    instruction = instruction.replace("[CURRENT_BODY]",    current_body[:1500])
+    instruction = template.replace("[SENDER_NAME]",      sender_name or "")
+    instruction = instruction.replace("[SENDER_EMAIL]",  sender or "")
+    instruction = instruction.replace("[PREVIOUS_SUBJECT]", previous_subject or "brak tematu")
+    instruction = instruction.replace("[PREVIOUS_BODY]",    previous_body[:1500])
+    instruction = instruction.replace("[CURRENT_BODY]",     current_body[:1500])
     return instruction
 
 
@@ -68,6 +74,7 @@ def build_nawiazanie_section(
     previous_body: str | None,
     previous_subject: str | None,
     sender: str = "",
+    sender_name: str = "",
 ) -> dict:
     """
     Buduje sekcję 'nawiazanie'.
@@ -79,13 +86,15 @@ def build_nawiazanie_section(
       body             — treść obecnej wiadomości
       previous_body    — treść ostatniej wiadomości od tego nadawcy (lub None)
       previous_subject — temat ostatniej wiadomości (lub None)
-      sender           — adres email nadawcy (do logów)
+      sender           — adres email nadawcy
+      sender_name      — imię i nazwisko z nagłówka From (np. "Jan Kowalski")
     """
 
     # Brak historii — cicho, nic nie robimy
     if not previous_body or not previous_body.strip():
         current_app.logger.info(
-            "Nawiązanie: brak historii dla nadawcy %s — pomijam", sender
+            "Nawiązanie: brak historii dla %s <%s> — pomijam",
+            sender_name or "(brak imienia)", sender
         )
         return {
             "has_history": False,
@@ -94,12 +103,15 @@ def build_nawiazanie_section(
         }
 
     current_app.logger.info(
-        "Nawiązanie: znaleziono historię dla %s | poprzedni temat: %s",
-        sender, previous_subject
+        "Nawiązanie: znaleziono historię dla %s <%s> | poprzedni temat: %s",
+        sender_name or "(brak imienia)", sender, previous_subject
     )
 
     # Buduj instrukcję i wywołaj DeepSeek
-    instruction = _build_instruction(body, previous_body, previous_subject or "")
+    instruction = _build_instruction(
+        body, previous_body, previous_subject or "",
+        sender, sender_name
+    )
 
     result = call_deepseek(instruction, "", MODEL_TYLER)
 
@@ -118,7 +130,8 @@ def build_nawiazanie_section(
     analysis_html = analysis.replace("\n", "<br>")
 
     current_app.logger.info(
-        "Nawiązanie: analiza gotowa dla %s (%.150s...)", sender, analysis
+        "Nawiązanie: analiza gotowa dla %s <%s> (%.150s...)",
+        sender_name or "(brak)", sender, analysis
     )
 
     reply_html = (

@@ -32,8 +32,9 @@ def webhook():
     if not body or not body.strip():
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
 
-    # ── Pola z historią (przesyłane przez Apps Script z Google Sheets) ─────────
-    sender           = data.get("sender", "")
+    # ── Pola nadawcy i historia (przesyłane przez Apps Script) ────────────────
+    sender           = data.get("sender",      "")
+    sender_name      = data.get("sender_name", "")  # "Jan Kowalski" z nagłówka From
     previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None
 
@@ -44,13 +45,12 @@ def webhook():
     }
 
     # ── Nawiązanie do poprzedniej wiadomości (zawsze sprawdzane) ──────────────
-    # Jeśli Apps Script nie przesłał previous_body, has_history=False i
-    # sekcja jest pusta — Apps Script może to sprawdzić przed wysłaniem emaila
     response_data["nawiazanie"] = build_nawiazanie_section(
         body=body,
         previous_body=previous_body,
         previous_subject=previous_subject,
         sender=sender,
+        sender_name=sender_name,
     )
 
     # ── Generowane tylko na żądanie (flaga wants_scrabble z Apps Script) ──────
@@ -73,14 +73,15 @@ def webhook():
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     app.logger.info(
-        "Response: biznes.pdf=%s | zwykly.pdf=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s | nawiazanie=%s",
+        "Response: biznes.pdf=%s | zwykly.pdf=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s | nawiazanie=%s | sender_name=%s",
         bool(response_data["biznes"].get("pdf",  {}).get("base64")),
         bool(response_data["zwykly"].get("pdf",  {}).get("base64")),
-        "tak" if "scrabble"                               in response_data else "nie",
-        "tak" if "analiza"                                in response_data else "nie",
-        "tak" if "emocje"                                 in response_data else "nie",
-        "tak" if "obrazek"                                in response_data else "nie",
+        "tak" if "scrabble"                                 in response_data else "nie",
+        "tak" if "analiza"                                  in response_data else "nie",
+        "tak" if "emocje"                                   in response_data else "nie",
+        "tak" if "obrazek"                                  in response_data else "nie",
         "tak" if response_data["nawiazanie"]["has_history"] else "nie (brak historii)",
+        sender_name or "(brak)",
     )
 
     return jsonify(response_data), 200
