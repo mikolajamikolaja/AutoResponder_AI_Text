@@ -1,6 +1,7 @@
 COMIC STRIP STRUCTURE: Create a 4-panel comic strip layout (2x2 grid or 1x4 horizontal). Each panel must be CLEARLY SEPARATED by black borders/lines. Panel 1 (top-left or left): High Drama scene. Panel 2 (top-right or second): Literal Misinterpretation. Panel 3 (bottom-left or third): Grotesque Visualization. Panel 4 (bottom-right or fourth): Anticlimax. Each panel shows a distinct moment in sequence.
 
 Style: Black and white only, thick uniform ink lines, no shading or color.
+Visual rules: Pure black (#000000) and pure white (#FFFFFF) only.
 
 Character design: Oversized heads, small torso, long thick nose, small hands and feet, exaggerated expressions.
 
