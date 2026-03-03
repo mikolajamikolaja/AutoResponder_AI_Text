@@ -13,12 +13,13 @@ Aby dodać nowy responder:
 import os
 from flask import Flask, request, jsonify
 
-from responders.zwykly   import build_zwykly_section
-from responders.biznes   import build_biznes_section
-from responders.scrabble import build_scrabble_section
-from responders.analiza  import build_analiza_section
-from responders.emocje   import build_emocje_section
-from responders.obrazek  import build_obrazek_section
+from responders.zwykly     import build_zwykly_section
+from responders.biznes     import build_biznes_section
+from responders.scrabble   import build_scrabble_section
+from responders.analiza    import build_analiza_section
+from responders.emocje     import build_emocje_section
+from responders.obrazek    import build_obrazek_section
+from responders.nawiazanie import build_nawiazanie_section
 
 app = Flask(__name__)
 
@@ -31,11 +32,26 @@ def webhook():
     if not body or not body.strip():
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
 
+    # ── Pola z historią (przesyłane przez Apps Script z Google Sheets) ─────────
+    sender           = data.get("sender", "")
+    previous_body    = data.get("previous_body")    or None
+    previous_subject = data.get("previous_subject") or None
+
     # ── Zawsze generowane ─────────────────────────────────────────────────────
     response_data = {
         "zwykly": build_zwykly_section(body),
         "biznes": build_biznes_section(body),
     }
+
+    # ── Nawiązanie do poprzedniej wiadomości (zawsze sprawdzane) ──────────────
+    # Jeśli Apps Script nie przesłał previous_body, has_history=False i
+    # sekcja jest pusta — Apps Script może to sprawdzić przed wysłaniem emaila
+    response_data["nawiazanie"] = build_nawiazanie_section(
+        body=body,
+        previous_body=previous_body,
+        previous_subject=previous_subject,
+        sender=sender,
+    )
 
     # ── Generowane tylko na żądanie (flaga wants_scrabble z Apps Script) ──────
     if data.get("wants_scrabble"):
@@ -57,13 +73,14 @@ def webhook():
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     app.logger.info(
-        "Response: biznes.pdf=%s | zwykly.pdf=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s",
+        "Response: biznes.pdf=%s | zwykly.pdf=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s | nawiazanie=%s",
         bool(response_data["biznes"].get("pdf",  {}).get("base64")),
         bool(response_data["zwykly"].get("pdf",  {}).get("base64")),
-        "tak" if "scrabble" in response_data else "nie",
-        "tak" if "analiza"  in response_data else "nie",
-        "tak" if "emocje"   in response_data else "nie",
-        "tak" if "obrazek"  in response_data else "nie",
+        "tak" if "scrabble"                               in response_data else "nie",
+        "tak" if "analiza"                                in response_data else "nie",
+        "tak" if "emocje"                                 in response_data else "nie",
+        "tak" if "obrazek"                                in response_data else "nie",
+        "tak" if response_data["nawiazanie"]["has_history"] else "nie (brak historii)",
     )
 
     return jsonify(response_data), 200
