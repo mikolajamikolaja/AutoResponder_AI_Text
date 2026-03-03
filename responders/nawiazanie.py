@@ -7,7 +7,7 @@ Przepływ:
      razem z webhookiem — jeśli była w Google Sheets
   2. Jeśli previous_body istnieje → wysyłamy do DeepSeek:
      obecna wiadomość + poprzednia + instrukcja z prompt_nawiazanie.txt
-  3. DeepSeek wywołany z timeout 20s i tylko 1 próbą — nie blokuje webhooka
+  3. DeepSeek wywołany z timeout 20s i tylko 3 prób — nie blokuje webhooka
   4. Render zwraca sekcję 'nawiazanie' → Apps Script wysyła osobny email
 
 Wymagane pola w webhooku (z Apps Script):
@@ -25,8 +25,8 @@ from core.ai_client import call_deepseek, MODEL_TYLER
 
 # ── Stałe ─────────────────────────────────────────────────────────────────────
 # Krótki timeout i tylko 1 próba — nawiązanie nie może blokować webhooka
-NAWIAZANIE_TIMEOUT    = 25   # sekund na odpowiedź DeepSeek
-NAWIAZANIE_MAX_RETRY  = 1    # tylko jedna próba — nie czekamy na retry
+NAWIAZANIE_TIMEOUT    = 40   # sekund na odpowiedź DeepSeek
+NAWIAZANIE_MAX_RETRY  = 3    # tylko jedna próba — nie czekamy na retry
 
 # ── Ścieżki ───────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
