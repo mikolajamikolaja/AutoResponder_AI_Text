@@ -1,17 +1,18 @@
 """
 responders/obrazek.py
-Responder OBRAZEK — generuje 4-ujęciowy komiks AI z treści maila.
+Responder OBRAZEK — generuje 2 wersje 4-ujęciowego komiksu AI z treści maila.
 
 Przepływ:
   1. Treść maila (X) → DeepSeek z instrukcją z pliku
      prompts/1_przygotowanie_opisu_scen_obrazka.txt
      → powstaje scenariusz 4 scen komiksowych (Y)
-  2. Scenariusz (Y) + styl z pliku
-     prompts/2_prompt_obrazek_styl.txt
-     → HF FLUX.1-schnell generuje obrazek PNG
-  3. Mail zwrotny zawiera treść Y i obrazek PNG w załączniku
+  2. Scenariusz (Y) + styl z pliku prompts/2_prompt_obrazek_styl.txt
+     → HF FLUX.1-schnell generuje obrazek PNG #1 (czarno-biały komiks)
+  3. Scenariusz (Y) + styl z pliku prompts/3_prompt_obrazek_styl.txt
+     → HF FLUX.1-schnell generuje obrazek PNG #2 (retro-pop lata 60.)
+  Kroki 2 i 3 wykonywane ASYNCHRONICZNIE (ThreadPoolExecutor).
 
-Tokeny HF w Render: HF_TOKEN, HF_TOKEN1, HF_TOKEN2, HF_TOKEN3, HF_TOKEN4
+Tokeny HF w Render: HF_TOKEN, HF_TOKEN1 ... HF_TOKEN7
 Klucz DeepSeek w Render: API_KEY_DEEPSEEK
 """
 
@@ -19,6 +20,7 @@ import os
 import re
 import base64
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import current_app
 
 from core.ai_client import call_groq as call_deepseek, MODEL_TYLER
@@ -30,12 +32,13 @@ HF_API_URLS = [
 ]
 HF_STEPS    = 30
 HF_GUIDANCE = 3.5
-TIMEOUT_SEC = 60
+TIMEOUT_SEC = 55  # nieco poniżej 60s aby nie kolidować z timeoutem Render
 
-BASE_DIR       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROMPTS_DIR    = os.path.join(BASE_DIR, "prompts")
-SCENE_FILE     = os.path.join(PROMPTS_DIR, "1_przygotowanie_opisu_scen_obrazka.txt")
-STYLE_FILE     = os.path.join(PROMPTS_DIR, "2_prompt_obrazek_styl.txt")
+BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
+SCENE_FILE  = os.path.join(PROMPTS_DIR, "1_przygotowanie_opisu_scen_obrazka.txt")
+STYLE1_FILE = os.path.join(PROMPTS_DIR, "2_prompt_obrazek_styl.txt")
+STYLE2_FILE = os.path.join(PROMPTS_DIR, "3_prompt_obrazek_styl.txt")
 
 
 # ── Wczytaj plik promptu ──────────────────────────────────────────────────────
@@ -52,11 +55,6 @@ def _load_file(path: str, fallback: str) -> str:
 
 # ── KROK 1: Mail → DeepSeek → scenariusz 4 scen (Y) ──────────────────────────
 def _build_scene_prompt(body: str) -> str:
-    """
-    Wysyła treść maila do DeepSeek z instrukcją z pliku
-    1_przygotowanie_opisu_scen_obrazka.txt.
-    Zwraca scenariusz 4 scen komiksowych po angielsku (treść Y).
-    """
     instruction_template = _load_file(
         SCENE_FILE,
         fallback=(
@@ -65,48 +63,31 @@ def _build_scene_prompt(body: str) -> str:
             "EMAIL CONTENT:\n[PASTE EMAIL HERE]"
         )
     )
-
-    # Podmień placeholder na treść maila
     instruction = instruction_template.replace("[PASTE EMAIL HERE]", body[:2000])
-
     current_app.logger.info("DeepSeek — generuję scenariusz 4 scen...")
 
     result = call_deepseek(instruction, "", MODEL_TYLER)
 
     if result and result.strip():
-        # Usuń ewentualne cudzysłowy i nadmiarowe nowe linie
         scene_text = re.sub(r'"{3,}', '', result.strip())
         scene_text = re.sub(r'\n{3,}', '\n\n', scene_text)
-        current_app.logger.info(
-            "DeepSeek scenariusz (%.200s...)", scene_text
-        )
+        current_app.logger.info("DeepSeek scenariusz (%.200s...)", scene_text)
         return scene_text
 
-    # Fallback jeśli DeepSeek zawiedzie
     current_app.logger.warning("DeepSeek nie zwrócił scenariusza — używam fallback")
     return "Two people arguing about emotions. One dramatic, one eating a sandwich."
 
 
-# ── KROK 2: Scenariusz (Y) + styl → pełny prompt do HF ───────────────────────
-def _build_hf_prompt(scene_text: str) -> str:
-    """
-    Łączy scenariusz scen (Y) ze stylem komiksowym z pliku
-    2_prompt_obrazek_styl.txt.
-    """
-    style = _load_file(
-        STYLE_FILE,
-        fallback=(
-            "4-panel comic strip, black and white, thick ink lines, "
-            "oversized heads, exaggerated expressions, no text outside bubbles."
-        )
-    )
+# ── KROK 2: Scenariusz (Y) + plik stylu → pełny prompt HF ───────────────────
+def _build_hf_prompt(scene_text: str, style_file: str, fallback_style: str) -> str:
+    style = _load_file(style_file, fallback=fallback_style)
     return f"{scene_text}\n\n{style}"
 
 
 # ── Zbierz tokeny HF ──────────────────────────────────────────────────────────
 def _get_hf_tokens() -> list:
-    names  = ["HF_TOKEN", "HF_TOKEN1", "HF_TOKEN2", "HF_TOKEN3", "HF_TOKEN4",
-              "HF_TOKEN5", "HF_TOKEN6", "HF_TOKEN7"]
+    names  = ["HF_TOKEN", "HF_TOKEN1", "HF_TOKEN2", "HF_TOKEN3",
+              "HF_TOKEN4", "HF_TOKEN5", "HF_TOKEN6", "HF_TOKEN7"]
     tokens = []
     for name in names:
         val = os.getenv(name, "").strip()
@@ -115,17 +96,18 @@ def _get_hf_tokens() -> list:
     return tokens
 
 
-# ── KROK 3: Prompt → HF (FLUX / SD3) → PNG ──────────────────────────────────
-def _generate_image_hf(full_prompt: str) -> bytes:
+# ── Generowanie pojedynczego obrazka przez HF ────────────────────────────────
+def _generate_image_hf(full_prompt: str, label: str) -> bytes:
     """
     Wysyła pełny prompt do HF.
     Próbuje modeli w kolejności: FLUX.1-schnell → Stable Diffusion 3.
     Dla każdego modelu próbuje tokeny po kolei.
+    label — tylko do logów ("obrazek_1" / "obrazek_2").
     Zwraca bytes PNG lub b'' przy błędzie.
     """
     tokens = _get_hf_tokens()
     if not tokens:
-        current_app.logger.error("Brak HF_TOKEN w zmiennych środowiskowych!")
+        current_app.logger.error("[%s] Brak HF_TOKEN w zmiennych środowiskowych!", label)
         return b""
 
     payload = {
@@ -137,15 +119,14 @@ def _generate_image_hf(full_prompt: str) -> bytes:
     }
 
     current_app.logger.info(
-        "HF — tokeny: %s | prompt: %.150s",
-        [n for n, _ in tokens], full_prompt,
+        "[%s] HF — tokeny: %s | prompt: %.150s",
+        label, [n for n, _ in tokens], full_prompt,
     )
 
-    # Próbuj każdy model
     for model_url in HF_API_URLS:
         model_name = model_url.split("/")[-1]
-        current_app.logger.info("Próbuję model: %s", model_name)
-        
+        current_app.logger.info("[%s] Próbuję model: %s", label, model_name)
+
         for name, token in tokens:
             headers = {
                 "Authorization": f"Bearer {token}",
@@ -157,44 +138,41 @@ def _generate_image_hf(full_prompt: str) -> bytes:
                 )
                 if resp.status_code == 200:
                     current_app.logger.info(
-                        "✓ Sukces! Model=%s | token=%s | PNG %d B", 
-                        model_name, name, len(resp.content)
+                        "[%s] ✓ Sukces! Model=%s | token=%s | PNG %d B",
+                        label, model_name, name, len(resp.content)
                     )
                     return resp.content
                 elif resp.status_code in (401, 403):
                     current_app.logger.warning(
-                        "Model=%s token %s nieważny — następny token",
-                        model_name, name
+                        "[%s] Model=%s token %s nieważny — następny token",
+                        label, model_name, name
                     )
                 elif resp.status_code in (503, 529):
                     current_app.logger.warning(
-                        "Model=%s token %s przeciążony — następny token",
-                        model_name, name
+                        "[%s] Model=%s token %s przeciążony — następny token",
+                        label, model_name, name
                     )
                 else:
                     current_app.logger.warning(
-                        "Model=%s token %s błąd %s — następny token",
-                        model_name, name, resp.status_code
+                        "[%s] Model=%s token %s błąd %s — następny token",
+                        label, model_name, name, resp.status_code
                     )
             except requests.exceptions.Timeout:
                 current_app.logger.warning(
-                    "Model=%s token %s timeout — następny token",
-                    model_name, name
+                    "[%s] Model=%s token %s timeout — następny token",
+                    label, model_name, name
                 )
             except Exception as e:
                 current_app.logger.warning(
-                    "Model=%s token %s błąd: %s — następny token",
-                    model_name, name, str(e)[:50]
+                    "[%s] Model=%s token %s błąd: %s — następny token",
+                    label, model_name, name, str(e)[:50]
                 )
-        
+
         current_app.logger.info(
-            "Model %s zawiódł ze wszystkimi tokenami — próbuję następny model",
-            model_name
+            "[%s] Model %s zawiódł — próbuję następny model", label, model_name
         )
 
-    current_app.logger.error(
-        "Wszystkie modele i tokeny zawiodły!"
-    )
+    current_app.logger.error("[%s] Wszystkie modele i tokeny zawiodły!", label)
     return b""
 
 
@@ -203,61 +181,111 @@ def build_obrazek_section(body: str) -> dict:
     """
     Buduje sekcję 'obrazek':
       Krok 1 — treść maila (X) → DeepSeek → scenariusz 4 scen (Y)
-      Krok 2 — scenariusz (Y) + styl → pełny prompt HF
-      Krok 3 — HF FLUX.1-schnell (fallback: SD3) → PNG
-      Krok 4 — mail zwrotny z treścią Y i obrazkiem PNG
+      Krok 2 — (Y) + styl 1 i (Y) + styl 2 → dwa pełne prompty HF
+      Krok 3 — oba obrazki generowane ASYNCHRONICZNIE przez ThreadPoolExecutor
+      Krok 4 — mail zwrotny z treścią Y i dwoma obrazkami PNG w załącznikach
     """
     if not body or not body.strip():
+        empty_image = {
+            "base64":       None,
+            "content_type": "image/png",
+            "filename":     "komiks_ai.png",
+        }
         return {
             "reply_html": "<p>Brak treści do wygenerowania obrazka.</p>",
-            "image": {
-                "base64":       None,
-                "content_type": "image/png",
-                "filename":     "komiks_ai.png",
-            },
+            "image":      empty_image,
+            "image2":     {**empty_image, "filename": "komiks_ai_retro.png"},
             "prompt_used": "",
         }
 
-    # Krok 1 — DeepSeek generuje scenariusz Y
+    # Krok 1 — DeepSeek generuje scenariusz Y (wspólny dla obu obrazków)
     scene_text = _build_scene_prompt(body)
 
-    # Krok 2 — łączymy Y ze stylem
-    full_prompt = _build_hf_prompt(scene_text)
-    current_app.logger.info("Pełny prompt HF: %.300s", full_prompt)
+    # Krok 2 — budujemy dwa pełne prompty
+    prompt1 = _build_hf_prompt(
+        scene_text, STYLE1_FILE,
+        fallback_style=(
+            "4-panel comic strip, black and white, thick ink lines, "
+            "oversized heads, exaggerated expressions, no text outside bubbles."
+        )
+    )
+    prompt2 = _build_hf_prompt(
+        scene_text, STYLE2_FILE,
+        fallback_style=(
+            "4-panel comic strip, bold flat colors, retro 1960s pop-art style, "
+            "halftone dots, vibrant primary colors, Lichtenstein-inspired."
+        )
+    )
 
-    # Krok 3 — HF generuje PNG
-    png_bytes = _generate_image_hf(full_prompt)
-    png_b64   = base64.b64encode(png_bytes).decode("ascii") if png_bytes else None
+    current_app.logger.info("Pełny prompt HF #1: %.200s", prompt1)
+    current_app.logger.info("Pełny prompt HF #2: %.200s", prompt2)
+
+    # Krok 3 — generujemy oba obrazki równolegle
+    png1 = b""
+    png2 = b""
+
+    # Potrzebujemy app context w wątkach
+    from flask import current_app as flask_app
+    app = flask_app._get_current_object()
+
+    def gen1():
+        with app.app_context():
+            return _generate_image_hf(prompt1, "obrazek_1")
+
+    def gen2():
+        with app.app_context():
+            return _generate_image_hf(prompt2, "obrazek_2")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future1 = executor.submit(gen1)
+        future2 = executor.submit(gen2)
+        png1 = future1.result()
+        png2 = future2.result()
+
+    png1_b64 = base64.b64encode(png1).decode("ascii") if png1 else None
+    png2_b64 = base64.b64encode(png2).decode("ascii") if png2 else None
 
     # Krok 4 — treść maila zwrotnego
-    # Pokazujemy nadawcy scenariusz Y (bez części stylistycznej)
     scene_html = scene_text.replace("\n", "<br>")
 
-    if png_b64:
+    status_parts = []
+    if png1_b64:
+        status_parts.append("komiks czarno-biały")
+    if png2_b64:
+        status_parts.append("komiks retro-pop")
+
+    if status_parts:
         reply_html = (
             "<p>Na podstawie Twojej treści automatycznie utworzyłem prompt "
-            "do obrazka, który załączam:</p>"
+            "do obrazków, które załączam "
+            f"({' i '.join(status_parts)}):</p>"
             f"<blockquote>{scene_html}</blockquote>"
         )
     else:
         reply_html = (
             "<p>Na podstawie Twojej treści automatycznie utworzyłem prompt "
-            "do obrazka:</p>"
+            "do obrazków:</p>"
             f"<blockquote>{scene_html}</blockquote>"
-            "<p>Jednak wystąpił błąd podczas generowania obrazka po stronie "
+            "<p>Jednak wystąpił błąd podczas generowania obrazków po stronie "
             "serwisu AI. Spróbuj ponownie za chwilę.</p>"
         )
 
     current_app.logger.info(
-        "Obrazek AI: sukces=%s | PNG=%d B", bool(png_b64), len(png_bytes)
+        "Obrazki AI: #1 sukces=%s (%d B) | #2 sukces=%s (%d B)",
+        bool(png1_b64), len(png1), bool(png2_b64), len(png2)
     )
 
     return {
-        "reply_html": reply_html,
+        "reply_html":  reply_html,
         "image": {
-            "base64":       png_b64,
+            "base64":       png1_b64,
             "content_type": "image/png",
             "filename":     "komiks_ai.png",
+        },
+        "image2": {
+            "base64":       png2_b64,
+            "content_type": "image/png",
+            "filename":     "komiks_ai_retro.png",
         },
         "prompt_used": scene_text,
     }

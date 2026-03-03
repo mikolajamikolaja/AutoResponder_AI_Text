@@ -1,0 +1,13 @@
+COMIC STRIP STRUCTURE: Create a 4-panel comic strip layout (2x2 grid or 1x4 horizontal). Each panel must be CLEARLY SEPARATED by bold retro borders. Panel 1 (top-left or left): High Drama scene. Panel 2 (top-right or second): Literal Misinterpretation. Panel 3 (bottom-left or third): Grotesque Visualization. Panel 4 (bottom-right or fourth): Anticlimax. Each panel shows a distinct moment in sequence.
+
+Style: Bold flat colors, retro 1960s pop-art illustration. Inspired by Roy Lichtenstein and vintage comic advertising. Limited vibrant palette: primary reds, yellows, blues, with halftone dot patterns in shaded areas. High contrast outlines.
+
+Character design: Oversized heads, small torso, long thick nose, small hands and feet, exaggerated expressions. Characters styled like 1960s advertising illustrations — slick hair, mod clothing, bright solid colors.
+
+Text: Rounded retro speech bubbles with ALL CAPS dialogue, bold black outline font. Exclamation marks encouraged!
+
+Background: Simple flat color fills per panel — alternating warm tones (yellow, orange, red) and cool tones (sky blue, mint). Halftone dot texture on shadows.
+
+Proportions: All elements exaggerated for comedic pop-art effect — big eyes, dramatic gestures, oversized props.
+
+Format: 1960s pop-art newspaper comic style, vibrant and bold, reminiscent of vintage American comic strips and Lichtenstein paintings.

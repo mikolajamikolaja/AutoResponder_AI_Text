@@ -11,6 +11,7 @@
  *   KEYWORDS3        - słowa kluczowe → analiza powtórzeń (DOCX)
  *   KEYWORDS4        - słowa kluczowe → analiza emocjonalna (wykresy PNG)
  *   KEYWORDS_JOKER   - słowa testowe → aktywuje WSZYSTKIE respondery (np. joker)
+ *   KEYWORDS_OBRAZEK - słowa kluczowe → obrazek wygenerowany przez AI
  */
 
 function _getListFromProps(name) {
@@ -182,6 +183,56 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
   }
 }
 
+// ── Wysyłka: obrazek AI ───────────────────────────────────────────────────────
+function executeObrazekMailSend(data, recipient, subject, msg) {
+  if (!data) {
+    console.warn("Brak danych obrazka dla " + recipient);
+    return;
+  }
+
+  var inlineImages = {};
+  var attachments  = [];
+
+  if (data.image && data.image.base64) {
+    try {
+      var imgBlob = Utilities.newBlob(
+        Utilities.base64Decode(data.image.base64),
+        data.image.content_type || "image/png",
+        data.image.filename     || "obrazek_ai.png"
+      );
+      inlineImages["obrazek_cid"] = imgBlob;
+      attachments.push(imgBlob);
+    } catch (e) {
+      console.error("Błąd obrazka AI: " + e.message);
+    }
+  }
+
+  var htmlBody = (data.reply_html || "<p>Obrazek AI w załączniku.</p>") +
+    (inlineImages["obrazek_cid"]
+      ? '<p><img src="cid:obrazek_cid" alt="Obrazek AI" style="max-width:100%;border-radius:8px;"></p>'
+      : "");
+
+  try {
+    msg.reply("", {
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Obrazek AI – Autoresponder"
+    });
+    console.log("Wysłano obrazek AI -> " + recipient);
+  } catch (e) {
+    console.warn("reply() nie działa, wysyłam nowy mail: " + e.message);
+    MailApp.sendEmail({
+      to:           recipient,
+      subject:      "RE: " + subject,
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Obrazek AI – Autoresponder"
+    });
+  }
+}
+
 // ── Główna funkcja ────────────────────────────────────────────────────────────
 function processEmailsFinal() {
   var props = PropertiesService.getScriptProperties();
@@ -191,14 +242,15 @@ function processEmailsFinal() {
     return;
   }
 
-  var BIZ_LIST       = _getListFromProps("BIZ_LIST");
-  var ALLOWED_LIST   = _getListFromProps("ALLOWED_LIST");
-  var KEYWORDS       = _getListFromProps("KEYWORDS");
-  var KEYWORDS1      = _getListFromProps("KEYWORDS1");
-  var KEYWORDS2      = _getListFromProps("KEYWORDS2");
-  var KEYWORDS3      = _getListFromProps("KEYWORDS3");
-  var KEYWORDS4      = _getListFromProps("KEYWORDS4");
-  var KEYWORDS_JOKER = _getListFromProps("KEYWORDS_JOKER");  // ← joker
+  var BIZ_LIST         = _getListFromProps("BIZ_LIST");
+  var ALLOWED_LIST     = _getListFromProps("ALLOWED_LIST");
+  var KEYWORDS         = _getListFromProps("KEYWORDS");
+  var KEYWORDS1        = _getListFromProps("KEYWORDS1");
+  var KEYWORDS2        = _getListFromProps("KEYWORDS2");
+  var KEYWORDS3        = _getListFromProps("KEYWORDS3");
+  var KEYWORDS4        = _getListFromProps("KEYWORDS4");
+  var KEYWORDS_JOKER   = _getListFromProps("KEYWORDS_JOKER");
+  var KEYWORDS_OBRAZEK = _getListFromProps("KEYWORDS_OBRAZEK"); // ← NOWE
 
   var maskMode = false;
 
@@ -231,21 +283,27 @@ function processEmailsFinal() {
     var containsKeyword4 = KEYWORDS4.some(function(k){
       return k && searchText.indexOf(k) !== -1;
     });
+    // ── NOWE: flaga obrazka ───────────────────────────────────────────────────
+    var containsKeywordObrazek = KEYWORDS_OBRAZEK.some(function(k){
+      return k && searchText.indexOf(k) !== -1;
+    });
 
     // ── JOKER — aktywuje wszystkie respondery ─────────────────────────────────
     var containsJoker = KEYWORDS_JOKER.some(function(k){
       return k && searchText.indexOf(k) !== -1;
     });
     if (containsJoker) {
-      containsKeyword  = true;
-      containsKeyword2 = true;
-      containsKeyword3 = true;
-      containsKeyword4 = true;
+      containsKeyword        = true;
+      containsKeyword2       = true;
+      containsKeyword3       = true;
+      containsKeyword4       = true;
+      containsKeywordObrazek = true; // ← JOKER włącza też obrazek
     }
 
     // Ignoruj jeśli nie spełnia żadnego warunku
     if (!isBiz && !isAllowed && !containsKeyword &&
-        !containsKeyword2 && !containsKeyword3 && !containsKeyword4) {
+        !containsKeyword2 && !containsKeyword3 &&
+        !containsKeyword4 && !containsKeywordObrazek) {
       var label = GmailApp.getUserLabelByName("processed");
       if (!label) label = GmailApp.createLabel("processed");
       thread.addLabel(label);
@@ -258,7 +316,8 @@ function processEmailsFinal() {
       .concat(KEYWORDS2)
       .concat(KEYWORDS3)
       .concat(KEYWORDS4)
-      .concat(KEYWORDS_JOKER)  // ← joker też usuwamy z treści
+      .concat(KEYWORDS_JOKER)
+      .concat(KEYWORDS_OBRAZEK) // ← NOWE
       .filter(Boolean);
     var sanitizedBody = removeKeywordsFromText(plainBody, combinedKeywords, maskMode);
 
@@ -275,10 +334,11 @@ function processEmailsFinal() {
       msg.getSubject(),
       sanitizedBody,
       webhookUrl,
-      containsKeyword2,   // wants_scrabble
-      containsKeyword3,   // wants_analiza
-      containsKeyword4,   // wants_emocje
-      allAttachments      // lista [{base64, name}, ...]
+      containsKeyword2,        // wants_scrabble
+      containsKeyword3,        // wants_analiza
+      containsKeyword4,        // wants_emocje
+      containsKeywordObrazek,  // wants_obrazek ← NOWE
+      allAttachments
     );
 
     if (response && response.json) {
@@ -309,6 +369,10 @@ function processEmailsFinal() {
       if (containsKeyword4 && json.emocje) {
         executeEmocjeMailSend(json.emocje, fromEmail, msg.getSubject(), msg);
       }
+      // KEYWORDS_OBRAZEK → obrazek AI ← NOWE
+      if (containsKeywordObrazek && json.obrazek) {
+        executeObrazekMailSend(json.obrazek, fromEmail, msg.getSubject(), msg);
+      }
     }
 
     thread.markRead();
@@ -323,7 +387,7 @@ function extractEmail(fromHeader) {
 }
 
 function _callBackend(sender, subject, body, url,
-                      wantsScrabble, wantsAnaliza, wantsEmocje, attachments) {
+                      wantsScrabble, wantsAnaliza, wantsEmocje, wantsObrazek, attachments) {
   var secret = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
   var payload = {
     from:           sender,
@@ -332,6 +396,7 @@ function _callBackend(sender, subject, body, url,
     wants_scrabble: wantsScrabble ? true : false,
     wants_analiza:  wantsAnaliza  ? true : false,
     wants_emocje:   wantsEmocje   ? true : false,
+    wants_obrazek:  wantsObrazek  ? true : false, // ← NOWE
     attachments:    attachments   || []
   };
   var options = {
