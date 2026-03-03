@@ -2,8 +2,12 @@
 """
 app.py
 Webhook backend dla Google Apps Script.
-Wszystkie respondery uruchamiane RÓWNOLEGLE przez ThreadPoolExecutor.
-Dzięki temu czas odpowiedzi = czas najwolniejszego respondera, nie suma wszystkich.
+
+Respondery uruchamiane w DWÓCH FALACH równolegle:
+  Fala 1 (lekkie — tylko AI text): zwykly, biznes, nawiazanie, scrabble
+  Fala 2 (ciężkie — obrazy/pliki): obrazek, emocje, analiza
+
+Dzięki temu RAM nie przekracza 512MB na darmowym Renderze.
 """
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,6 +22,21 @@ from responders.obrazek    import build_obrazek_section
 from responders.nawiazanie import build_nawiazanie_section
 
 app = Flask(__name__)
+
+
+def _run_parallel(tasks: dict, flask_app) -> dict:
+    """Uruchamia słownik {klucz: lambda} równolegle, zwraca {klucz: wynik}."""
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        futures = {executor.submit(fn): key for key, fn in tasks.items()}
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                results[key] = future.result()
+            except Exception as e:
+                flask_app.logger.error("Błąd responderu '%s': %s", key, e)
+                results[key] = {}
+    return results
 
 
 @app.route("/webhook", methods=["POST"])
@@ -41,17 +60,16 @@ def webhook():
     wants_emocje   = bool(data.get("wants_emocje"))
     wants_obrazek  = bool(data.get("wants_obrazek"))
 
-    flask_app = app._get_current_object()
+    flask_app = app
 
-    # ── Pomocnicza funkcja: uruchom w app context ─────────────────────────────
     def run(fn, *args, **kwargs):
         with flask_app.app_context():
             return fn(*args, **kwargs)
 
-    # ── Zbuduj listę zadań do równoległego wykonania ──────────────────────────
-    tasks = {
-        "zwykly":    lambda: run(build_zwykly_section, body),
-        "biznes":    lambda: run(build_biznes_section, body),
+    # ── FALA 1: lekkie respondery (tylko tekst AI) ────────────────────────────
+    wave1 = {
+        "zwykly":  lambda: run(build_zwykly_section, body),
+        "biznes":  lambda: run(build_biznes_section, body),
         "nawiazanie": lambda: run(
             build_nawiazanie_section,
             body=body,
@@ -61,38 +79,34 @@ def webhook():
             sender_name=sender_name,
         ),
     }
-
     if wants_scrabble:
-        tasks["scrabble"] = lambda: run(build_scrabble_section, body)
-    if wants_analiza:
-        tasks["analiza"]  = lambda: run(build_analiza_section, body, attachments)
-    if wants_emocje:
-        tasks["emocje"]   = lambda: run(build_emocje_section, body, attachments)
+        wave1["scrabble"] = lambda: run(build_scrabble_section, body)
+
+    response_data = _run_parallel(wave1, flask_app)
+
+    # ── FALA 2: ciężkie respondery (obrazy, pliki) ────────────────────────────
+    wave2 = {}
     if wants_obrazek:
-        tasks["obrazek"]  = lambda: run(build_obrazek_section, body)
+        wave2["obrazek"] = lambda: run(build_obrazek_section, body)
+    if wants_emocje:
+        wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
+    if wants_analiza:
+        wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
 
-    # ── Uruchom wszystkie równolegle ──────────────────────────────────────────
-    response_data = {}
-    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = {executor.submit(fn): key for key, fn in tasks.items()}
-        for future in as_completed(futures):
-            key = futures[future]
-            try:
-                response_data[key] = future.result()
-            except Exception as e:
-                app.logger.error("Błąd responderu '%s': %s", key, e)
-                # Zwróć pustą sekcję zamiast crashować cały webhook
-                response_data[key] = {}
+    if wave2:
+        response_data.update(_run_parallel(wave2, flask_app))
 
-    # Upewnij się że nawiazanie zawsze ma has_history (zabezpieczenie)
+    # Zabezpieczenie — nawiazanie zawsze ma has_history
     if "nawiazanie" not in response_data:
-        response_data["nawiazanie"] = {"has_history": False, "reply_html": "", "analysis": ""}
+        response_data["nawiazanie"] = {
+            "has_history": False, "reply_html": "", "analysis": ""
+        }
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     app.logger.info(
         "Response: biznes=%s | zwykly=%s | scrabble=%s | analiza=%s | emocje=%s | obrazek=%s | nawiazanie=%s | sender=%s",
-        bool(response_data.get("biznes", {}).get("pdf",  {}).get("base64")),
-        bool(response_data.get("zwykly", {}).get("pdf",  {}).get("base64")),
+        bool(response_data.get("biznes",    {}).get("pdf",  {}).get("base64")),
+        bool(response_data.get("zwykly",    {}).get("pdf",  {}).get("base64")),
         "tak" if "scrabble" in response_data else "nie",
         "tak" if "analiza"  in response_data else "nie",
         "tak" if "emocje"   in response_data else "nie",
