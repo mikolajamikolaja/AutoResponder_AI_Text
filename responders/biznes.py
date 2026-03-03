@@ -6,7 +6,7 @@ Wykrywa temat notarialny, generuje odpowiedź, dołącza właściwy PDF.
 import os
 from flask import current_app
 
-from core.ai_client    import call_groq, extract_clean_text, sanitize_model_output, MODEL_BIZ
+from core.ai_client    import call_deepseek, extract_clean_text, sanitize_model_output, MODEL_BIZ
 from core.files        import read_file_base64, load_prompt
 from core.html_builder import build_html_reply
 
@@ -33,7 +33,7 @@ def detect_topic(body_text: str) -> str:
         f"Tematy:\n{topics_list}\n\n"
         f"Tekst:\n{body_text}\n\nOdpowiedź (jedna etykieta lub UNKNOWN):"
     )
-    res = call_groq("Detektor tematu notarialnego (jedna etykieta lub UNKNOWN)", prompt, MODEL_BIZ)
+    res = call_deepseek("Detektor tematu notarialnego (jedna etykieta lub UNKNOWN)", prompt, MODEL_BIZ)
     if not res:
         return "UNKNOWN"
     token = res.strip().lower()
@@ -74,7 +74,7 @@ def build_biznes_section(body: str) -> dict:
     )
     prompt_for_model = prompt_template.replace("{{USER_TEXT}}", body[:3000])
 
-    res_raw   = call_groq(prompt_for_model, "", MODEL_BIZ)
+    res_raw   = call_deepseek(prompt_for_model, "", MODEL_BIZ)
     res_clean = sanitize_model_output(res_raw) if res_raw else ""
     res_text  = extract_clean_text(res_clean)
     if not res_text:
