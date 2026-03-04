@@ -1,5 +1,6 @@
 /**
  * __AAA_processEmails - Google Apps Script
+ * (nazwa AAA_ sprawia że funkcja jest pierwsza na liście)
  *
  * Script Properties:
  *   WEBHOOK_URL         - URL do backendu (Render)
@@ -41,23 +42,17 @@ function removeKeywordsFromText(text, keywords, maskMode) {
   return sanitized.trim();
 }
 
-// ── Helper: wyciągnij email i imię z nagłówka From ───────────────────────────
-function extractEmail(fromHeader) {
-  var m = fromHeader.match(/<([^>]+)>/);
-  if (m) return m[1];
-  return fromHeader.split(" ")[0];
-}
-
-function extractName(fromHeader) {
-  // "Jan Kowalski <jan@example.com>" → "Jan Kowalski"
-  // "jan@example.com" → ""
-  var m = fromHeader.match(/^(.+?)\s*</);
-  if (m) return m[1].trim().replace(/"/g, "");
-  return "";
-}
-
 // ── Google Sheets: historia wiadomości ───────────────────────────────────────
 
+/**
+ * Zapisuje wiadomość do arkusza historii.
+ * Kolumny: Data | Nadawca | Temat | Treść
+ *
+ * Optymalizacja: zamiast zawsze dodawać nowy wiersz (appendRow),
+ * szuka istniejącego wiersza dla danego nadawcy i nadpisuje go.
+ * Dzięki temu arkusz ma zawsze tyle wierszy ile unikalnych nadawców
+ * i nigdy nie rośnie — co gwarantuje stałą prędkość odczytu.
+ */
 function saveToHistory(senderEmail, subject, body) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
@@ -65,20 +60,50 @@ function saveToHistory(senderEmail, subject, body) {
       console.warn("Brak HISTORY_SHEET_ID — historia nie zostanie zapisana.");
       return;
     }
-    var ss    = SpreadsheetApp.openById(sheetId);
-    var sheet = ss.getSheets()[0];
-    sheet.appendRow([
+    var ss      = SpreadsheetApp.openById(sheetId);
+    var sheet   = ss.getSheets()[0];
+    var lastRow = sheet.getLastRow();
+
+    // ── Szukaj istniejącego wiersza tej osoby ────────────────────────────────
+    var foundRow = -1;
+    if (lastRow >= 2) {
+      var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+      for (var i = 0; i < emailCol.length; i++) {
+        if ((emailCol[i][0] || "").toString().toLowerCase().trim() === senderEmail.toLowerCase().trim()) {
+          foundRow = i + 2; // numer wiersza w arkuszu (1-based, +1 za nagłówek)
+          break;
+        }
+      }
+    }
+
+    var rowData = [
       new Date(),
       senderEmail,
       subject || "",
       (body || "").substring(0, 2000)
-    ]);
-    console.log("Historia zapisana dla: " + senderEmail);
+    ];
+
+    if (foundRow !== -1) {
+      // ── Nadpisz istniejący wiersz ─────────────────────────────────────────
+      sheet.getRange(foundRow, 1, 1, 4).setValues([rowData]);
+      console.log("Historia zaktualizowana dla: " + senderEmail);
+    } else {
+      // ── Nowa osoba — dodaj nowy wiersz ───────────────────────────────────
+      sheet.appendRow(rowData);
+      console.log("Historia dodana dla: " + senderEmail);
+    }
   } catch (e) {
     console.error("Błąd zapisu historii: " + e.message);
   }
 }
-
+/**
+ * Pobiera ostatnią wiadomość od danego nadawcy z arkusza historii.
+ * Zwraca obiekt { subject, body } lub null jeśli brak historii.
+ *
+ * Optymalizacja: zamiast ładować cały arkusz do pamięci,
+ * pobiera najpierw tylko kolumnę B (Nadawca), szuka emaila od końca,
+ * a dopiero po znalezieniu pobiera temat i treść z tego jednego wiersza.
+ */
 function findLastMessageBySender(senderEmail) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
@@ -86,27 +111,31 @@ function findLastMessageBySender(senderEmail) {
       console.warn("Brak HISTORY_SHEET_ID — nie można sprawdzić historii.");
       return null;
     }
-    var ss    = SpreadsheetApp.openById(sheetId);
-    var sheet = ss.getSheets()[0];
-    var data  = sheet.getDataRange().getValues();
-    var result = null;
+    var ss      = SpreadsheetApp.openById(sheetId);
+    var sheet   = ss.getSheets()[0];
+    var lastRow = sheet.getLastRow();
 
-    for (var i = data.length - 1; i >= 1; i--) {
-      var rowEmail = (data[i][1] || "").toString().toLowerCase().trim();
-      if (rowEmail === senderEmail.toLowerCase().trim()) {
-        result = {
-          subject: (data[i][2] || "").toString(),
-          body:    (data[i][3] || "").toString()
+    if (lastRow < 2) return null; // arkusz pusty
+
+    // ── Krok 1: pobierz TYLKO kolumnę B (Nadawca) ────────────────────────────
+    var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+
+    // ── Krok 2: szukaj od końca ───────────────────────────────────────────────
+    for (var i = emailCol.length - 1; i >= 0; i--) {
+      if ((emailCol[i][0] || "").toString().toLowerCase().trim() === senderEmail.toLowerCase().trim()) {
+
+        // ── Krok 3: pobierz tylko ten jeden wiersz (temat + treść) ───────────
+        var row = sheet.getRange(i + 2, 3, 1, 2).getValues()[0];
+        console.log("Znaleziono historię dla: " + senderEmail);
+        return {
+          subject: (row[0] || "").toString(),
+          body:    (row[1] || "").toString()
         };
-        break;
       }
     }
 
-    console.log(result
-      ? "Znaleziono historię dla: " + senderEmail
-      : "Brak historii dla: "       + senderEmail
-    );
-    return result;
+    console.log("Brak historii dla: " + senderEmail);
+    return null;
   } catch (e) {
     console.error("Błąd odczytu historii: " + e.message);
     return null;
@@ -238,7 +267,10 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
 
 // ── Wysyłka: analiza powtórzeń DOCX ──────────────────────────────────────────
 function executeAnalizaMailSend(data, recipient, subject, msg) {
-  if (!data) { console.warn("Brak danych analizy dla " + recipient); return; }
+  if (!data) {
+    console.warn("Brak danych analizy dla " + recipient);
+    return;
+  }
 
   var attachments = [];
   var docxList = data.docx_list || [];
@@ -252,7 +284,9 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         d.filename || ("analiza_" + (i + 1) + ".docx")
       ));
-    } catch (e) { console.error("Błąd dekodowania DOCX [" + i + "]: " + e.message); }
+    } catch (e) {
+      console.error("Błąd dekodowania DOCX [" + i + "]: " + e.message);
+    }
   }
 
   var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
@@ -264,6 +298,7 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
     });
     console.log("Wysłano analizę powtórzeń (" + attachments.length + " DOCX) -> " + recipient);
   } catch (e) {
+    console.warn("reply() nie działa, wysyłam nowy mail: " + e.message);
     MailApp.sendEmail({
       to:          recipient,
       subject:     "RE: " + subject,
@@ -276,7 +311,10 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
 
 // ── Wysyłka: analiza emocjonalna PNG + raporty TXT ───────────────────────────
 function executeEmocjeMailSend(data, recipient, subject, msg) {
-  if (!data) { console.warn("Brak danych emocji dla " + recipient); return; }
+  if (!data) {
+    console.warn("Brak danych emocji dla " + recipient);
+    return;
+  }
 
   var attachments = [];
 
@@ -290,7 +328,9 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
         img.content_type || "image/png",
         img.filename     || ("wykres_" + (i + 1) + ".png")
       ));
-    } catch (e) { console.error("Błąd wykresu [" + i + "]: " + e.message); }
+    } catch (e) {
+      console.error("Błąd wykresu [" + i + "]: " + e.message);
+    }
   }
 
   var docs = data.docs || [];
@@ -303,7 +343,9 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
         doc.content_type || "text/plain",
         doc.filename     || ("raport_" + (j + 1) + ".txt")
       ));
-    } catch (e) { console.error("Błąd raportu TXT [" + j + "]: " + e.message); }
+    } catch (e) {
+      console.error("Błąd raportu TXT [" + j + "]: " + e.message);
+    }
   }
 
   var htmlBody = data.reply_html || "<p>Analiza emocjonalna w załącznikach.</p>";
@@ -313,8 +355,10 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
       attachments: attachments,
       name:        "Analiza Emocjonalna – Autoresponder"
     });
-    console.log("Wysłano analizę emocjonalną (" + images.length + " PNG, " + docs.length + " TXT) -> " + recipient);
+    console.log("Wysłano analizę emocjonalną (" +
+      images.length + " PNG, " + docs.length + " TXT) -> " + recipient);
   } catch (e) {
+    console.warn("reply() nie działa: " + e.message);
     MailApp.sendEmail({
       to:          recipient,
       subject:     "RE: " + subject,
@@ -327,9 +371,11 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
 
 // ── Wysyłka: obrazek AI (dwa obrazki: czarno-biały + retro-pop) ──────────────
 function executeObrazekMailSend(data, recipient, subject, msg) {
-  if (!data) { console.warn("Brak danych obrazka dla " + recipient); return; }
+  if (!data) {
+    console.warn("Brak danych obrazka dla " + recipient);
+    return;
+  }
 
-  // Obrazek 1: czarno-biały komiks
   if (data.image && data.image.base64) {
     try {
       var inlineImages1 = {};
@@ -363,10 +409,11 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           name:         "Komiks AI – Autoresponder"
         });
       }
-    } catch (e) { console.error("Błąd obrazka 1: " + e.message); }
+    } catch (e) {
+      console.error("Błąd obrazka 1: " + e.message);
+    }
   }
 
-  // Obrazek 2: retro-pop lata 60.
   if (data.image2 && data.image2.base64) {
     try {
       var inlineImages2 = {};
@@ -401,13 +448,17 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           name:         "Komiks Retro – Autoresponder"
         });
       }
-    } catch (e) { console.error("Błąd obrazka 2: " + e.message); }
+    } catch (e) {
+      console.error("Błąd obrazka 2: " + e.message);
+    }
   }
 }
 
 // ── Wysyłka: nawiązanie do poprzedniej wiadomości ────────────────────────────
 function executeNawiazanieMailSend(data, recipient, subject, msg) {
-  if (!data || !data.has_history || !data.reply_html) return;
+  if (!data || !data.has_history || !data.reply_html) {
+    return;
+  }
 
   var htmlBody = data.reply_html;
   try {
@@ -427,21 +478,20 @@ function executeNawiazanieMailSend(data, recipient, subject, msg) {
 }
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
-function _callBackend(sender, senderName, subject, body, url,
+function _callBackend(sender, subject, body, url,
                       wantsScrabble, wantsAnaliza, wantsEmocje, wantsObrazek,
                       attachments, previousBody, previousSubject) {
   var secret = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
   var payload = {
     sender:           sender,
-    sender_name:      senderName      || "",   // ← imię i nazwisko z nagłówka From
     subject:          subject,
     body:             body,
-    wants_scrabble:   wantsScrabble   ? true : false,
-    wants_analiza:    wantsAnaliza    ? true : false,
-    wants_emocje:     wantsEmocje     ? true : false,
-    wants_obrazek:    wantsObrazek    ? true : false,
-    attachments:      attachments     || [],
-    previous_body:    previousBody    || null,
+    wants_scrabble:   wantsScrabble  ? true : false,
+    wants_analiza:    wantsAnaliza   ? true : false,
+    wants_emocje:     wantsEmocje    ? true : false,
+    wants_obrazek:    wantsObrazek   ? true : false,
+    attachments:      attachments    || [],
+    previous_body:    previousBody   || null,
     previous_subject: previousSubject || null
   };
   var options = {
@@ -491,13 +541,12 @@ function __AAA_processEmails() {
     var thread = threads[i];
     if (!thread.isUnread()) continue;
 
-    var messages  = thread.getMessages();
-    var msg       = messages[messages.length - 1];
-    var fromRaw   = msg.getFrom();
-    var fromEmail = extractEmail(fromRaw).toLowerCase();
-    var fromName  = extractName(fromRaw);           // ← "Jan Kowalski" lub ""
-    var subject   = msg.getSubject();
-    var plainBody = msg.getPlainBody();
+    var messages   = thread.getMessages();
+    var msg        = messages[messages.length - 1];
+    var fromRaw    = msg.getFrom();
+    var fromEmail  = extractEmail(fromRaw).toLowerCase();
+    var subject    = msg.getSubject();
+    var plainBody  = msg.getPlainBody();
     var searchText = (plainBody + " " + subject).toLowerCase();
 
     // ── Flagi ─────────────────────────────────────────────────────────────────
@@ -533,13 +582,14 @@ function __AAA_processEmails() {
       containsKeywordObrazek = true;
     }
 
-    // Ignoruj jeśli nie spełnia żadnego warunku
+    // ── Ignoruj jeśli nie spełnia żadnego warunku ─────────────────────────────
     if (!isBiz && !isAllowed && !containsKeyword &&
         !containsKeyword2 && !containsKeyword3 &&
         !containsKeyword4 && !containsKeywordObrazek) {
       var label = GmailApp.getUserLabelByName("processed");
       if (!label) label = GmailApp.createLabel("processed");
       thread.addLabel(label);
+      thread.markRead(); // POPRAWKA #1: oznacz jako przeczytane — nie przetwarzaj ponownie
       continue;
     }
 
@@ -554,6 +604,12 @@ function __AAA_processEmails() {
       .filter(Boolean);
     var sanitizedBody = removeKeywordsFromText(plainBody, combinedKeywords, maskMode);
 
+
+     // ── Pobierz historię z Google Sheets (dla nawiązania) ────────────────────
+    var previousData    = findLastMessageBySender(fromEmail);
+    var previousBody    = previousData ? previousData.body    : null;
+    var previousSubject = previousData ? previousData.subject : null;
+    
     // ── Pobierz załączniki ────────────────────────────────────────────────────
     var allAttachments = [];
     if (containsKeyword3 || containsKeyword4) {
@@ -561,68 +617,69 @@ function __AAA_processEmails() {
       console.log("Znaleziono załączników: " + allAttachments.length);
     }
 
-    // ── Pobierz historię z Google Sheets (dla nawiązania) ────────────────────
-    var previousData    = findLastMessageBySender(fromEmail);
-    var previousBody    = previousData ? previousData.body    : null;
-    var previousSubject = previousData ? previousData.subject : null;
-
     // ── Wywołaj backend ───────────────────────────────────────────────────────
     var response = _callBackend(
       fromEmail,
-      fromName,               // ← NOWE: imię i nazwisko z nagłówka
       subject,
       sanitizedBody,
       webhookUrl,
-      containsKeyword2,       // wants_scrabble
-      containsKeyword3,       // wants_analiza
-      containsKeyword4,       // wants_emocje
-      containsKeywordObrazek, // wants_obrazek
+      containsKeyword2,
+      containsKeyword3,
+      containsKeyword4,
+      containsKeywordObrazek,
       allAttachments,
       previousBody,
       previousSubject
     );
 
-    if (response && response.json) {
+if (response && response.json) {
       var json = response.json;
 
-      // BIZ_LIST → odpowiedź biznesowa
-      if (isBiz && json.biznes) {
+      if (json.biznes && (isBiz || (!isAllowed && containsKeyword))) {
         executeMailSend(json.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
       }
-      // ALLOWED_LIST → odpowiedź emocjonalna (Tyler)
-      if (isAllowed && json.zwykly) {
+      if (json.zwykly && (isAllowed || (!isBiz && containsKeyword))) {
         executeMailSend(json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
       }
-      // KEYWORDS/KEYWORDS1 → obie odpowiedzi
-      if (!isBiz && !isAllowed && containsKeyword) {
-        if (json.biznes) executeMailSend(json.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
-        if (json.zwykly) executeMailSend(json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-      }
-      // KEYWORDS2 → scrabble
       if (containsKeyword2 && json.scrabble) {
         executeScrabbleMailSend(json.scrabble, fromEmail, subject, msg);
       }
-      // KEYWORDS3 → analiza powtórzeń DOCX
       if (containsKeyword3 && json.analiza) {
         executeAnalizaMailSend(json.analiza, fromEmail, subject, msg);
       }
-      // KEYWORDS4 → analiza emocjonalna PNG
       if (containsKeyword4 && json.emocje) {
         executeEmocjeMailSend(json.emocje, fromEmail, subject, msg);
       }
-      // KEYWORDS_OBRAZEK → dwa obrazki AI
       if (containsKeywordObrazek && json.obrazek) {
         executeObrazekMailSend(json.obrazek, fromEmail, subject, msg);
       }
-      // NAWIĄZANIE → osobny email jeśli była historia (zawsze sprawdzane)
       if (json.nawiazanie) {
         executeNawiazanieMailSend(json.nawiazanie, fromEmail, subject, msg);
       }
+
+      // ✅ Zapisz i oznacz jako przeczytane TYLKO gdy backend odpowiedział
+      saveToHistory(fromEmail, subject, sanitizedBody);
+      thread.markRead();
+
+    } else {
+      // ❌ Backend niedostępny — zostaw wiadomość jako nieprzeczytaną,
+      //    żeby skrypt spróbował ponownie przy następnym uruchomieniu
+      console.warn("Pominięto oznaczenie jako przeczytane — backend nie odpowiedział dla: " + fromEmail);
     }
-
-    // ── Zapisz obecną wiadomość do historii (po wysłaniu odpowiedzi) ──────────
-    saveToHistory(fromEmail, subject, sanitizedBody);
-
-    thread.markRead();
   }
 }
+
+// ── Helper: wyciągnij email z nagłówka From ───────────────────────────────────
+function extractEmail(fromHeader) {
+  var m = fromHeader.match(/<([^>]+)>/);
+  if (m) return m[1];
+  return fromHeader.split(" ")[0];
+}
+
+function keepAlive() {
+  var url = PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
+  try {
+    UrlFetchApp.fetch(url.replace("/webhook", "/"), { muteHttpExceptions: true });
+  } catch(e) {}
+}
+
