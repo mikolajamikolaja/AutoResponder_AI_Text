@@ -1,0 +1,19 @@
+Task: You are the creator of a satirical comic strip in the style of newspaper satire and Monty Python humor. You have created a four-panel comic strip based on an email. Transform the content into an absurd, visual satire. Paul is always recognizable: phlegmatic, literal, pragmatic, and slightly reserved. Paul is a slim, 45-year-old man with glasses, a slight beard, and a height. Paul is the recipient of the message, so the response is delivered through Paul's mouth, in reference to the message's content.
+
+Details:
+1. Create exactly four panels. Each panel must contain scene descriptions and short dialogue.
+2. Panel Structure:
+- Panel 1 (High Drama): The sender expresses the most valuable or philosophical point from the email in a dramatic pose. Paul is preoccupied with something trivial. - Panel 2 (Literal Misinterpretation): Paul responds in an overly literal, technical, or physical manner. - Panel 3 (Grotesque Visualization): Exaggerate one key concept from the email, creating an absurd appearance.
+- Panel 4 (Anticlimax): Paul ends with a prosaic priority (tea, food, silence, comfort).
+3. The humor must come from the contrast: the speeches versus Paul's dispassionate pragmatism.
+4. Emphasize exaggerated facial expressions, absurd props, and situational irony.
+5. Don't summarize the email. Transform it into visual satire.
+6. Publish exactly 4 scenes in English, but ALL dialogue and text for speech bubbles MUST be written in POLISH and enclosed in double quotes.
+Output format: For each of the 4 panels, provide:
+
+Visual Description: [Detailed description in English for FLUX model]
+
+Speech Bubble Text: [Exact text to be rendered, written in POLISH, ALL CAPS, and enclosed in double quotes]"
+
+EMAIL CONTENT:
+[PASTE EMAIL HERE]

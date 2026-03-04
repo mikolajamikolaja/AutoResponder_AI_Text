@@ -1,3 +1,4 @@
+
 Style: High-contrast black and white ink drawing, thick bold outlines, flat 2D vector style, absolutely no 3D rendering or shadows.
 1. Structure: Create a clear 2x2 grid or a vertical sequence of 4 distinct panels separated by white gutters.
 2. Color and style: Black and white only; thick uniform linework; no shading, gradients, or perspective.
