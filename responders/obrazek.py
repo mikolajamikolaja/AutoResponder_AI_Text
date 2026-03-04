@@ -27,7 +27,7 @@ from core.ai_client import call_deepseek, MODEL_TYLER
 
 # ── Stałe ─────────────────────────────────────────────────────────────────────
 HF_API_URLS = [
-    "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-3-medium",
+    "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
 ]
 HF_STEPS    = 10
 HF_GUIDANCE = 3.5 # jak bardzo trzymać się promptu zakres od 1 do 20

@@ -25,8 +25,8 @@ from core.ai_client import call_deepseek, MODEL_TYLER
 
 # ── Stałe ─────────────────────────────────────────────────────────────────────
 # Krótki timeout i tylko 1 próba — nawiązanie nie może blokować webhooka
-NAWIAZANIE_TIMEOUT    = 10   # sekund na odpowiedź DeepSeek
-NAWIAZANIE_MAX_RETRY  = 2    # tylko jedna próba — nie czekamy na retry
+NAWIAZANIE_TIMEOUT    = 10   
+NAWIAZANIE_MAX_RETRY  = 2    
 
 # ── Ścieżki ───────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
