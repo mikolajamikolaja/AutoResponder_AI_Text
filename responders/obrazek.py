@@ -177,6 +177,28 @@ def _generate_image_hf(full_prompt: str, label: str) -> bytes:
     return b""
 
 
+def _scene_to_html(text: str) -> str:
+    import re
+    html = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.match(r'\*?\*?Panel\s+\d+', line, re.IGNORECASE):
+            clean = re.sub(r'\*+', '', line).strip()
+            html.append(f'<h3 style="color:#333;margin-top:16px">{clean}</h3>')
+        elif 'Visual Description' in line:
+            clean = re.sub(r'\*+', '', line).replace('Visual Description:', '').strip()
+            html.append(f'<p><strong>🎨 Scena:</strong> {clean}</p>')
+        elif re.match(r'\*?\*?(Rob|Paul|Speech Bubble)', line, re.IGNORECASE):
+            clean = re.sub(r'\*+', '', line).strip()
+            html.append(f'<p style="margin-left:16px">💬 {clean}</p>')
+        elif re.sub(r'[\*\s]', '', line):
+            clean = re.sub(r'\*+', '', line).strip()
+            html.append(f'<p style="margin-left:16px">{clean}</p>')
+    return '\n'.join(html)
+
+
 # ── Główna funkcja responderu ─────────────────────────────────────────────────
 def build_obrazek_section(body: str) -> dict:
     """
@@ -247,7 +269,7 @@ def build_obrazek_section(body: str) -> dict:
     png2_b64 = base64.b64encode(png2).decode("ascii") if png2 else None
 
     # Krok 4 — treść maila zwrotnego
-    scene_html = scene_text.replace("\n", "<br>")
+    scene_html = _scene_to_html(scene_text)
 
     status_parts = []
     if png1_b64:
