@@ -63,8 +63,8 @@ def _build_instruction(
     instruction = template.replace("[SENDER_NAME]",         sender_name or "")
     instruction = instruction.replace("[SENDER_EMAIL]",     sender or "")
     instruction = instruction.replace("[PREVIOUS_SUBJECT]", previous_subject or "brak tematu")
-    instruction = instruction.replace("[PREVIOUS_BODY]",    previous_body[:1500])
-    instruction = instruction.replace("[CURRENT_BODY]",     current_body[:1500])
+    instruction = instruction.replace("[PREVIOUS_BODY]",    previous_body[:600])
+    instruction = instruction.replace("[CURRENT_BODY]",     current_body[:600])
     return instruction
 
 
@@ -122,7 +122,7 @@ def build_nawiazanie_section(
 
     # Wywołaj DeepSeek (timeout i retry z ai_client.py)
     try:
-        result = call_deepseek("Jesteś asystentem analizującym historię korespondencji.", instruction, MODEL_TYLER)
+        result = call_deepseek("Jesteś asystentem analizującym historię korespondencji.", instruction, MODEL_TYLER, timeout=20)
     except Exception as e:
         current_app.logger.warning(
             "Nawiązanie: błąd DeepSeek dla %s: %s — pomijam",

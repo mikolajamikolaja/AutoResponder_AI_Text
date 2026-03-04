@@ -103,7 +103,7 @@ def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
 
     for attempt in range(1, max_retries + 1):
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            resp = requests.post(url, headers=headers, json=payload, timeout=(5, timeout))
 
             if resp.status_code == 429:
                 # Rate limit — czekaj przed retry, ale nie na ostatniej próbie
