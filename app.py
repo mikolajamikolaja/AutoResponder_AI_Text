@@ -3,12 +3,12 @@
 app.py
 Webhook backend dla Google Apps Script.
 
-Respondery uruchamiane w TRZECH FALACH równolegle:
-  Fala 1 (priorytet): nawiazanie — odpytuje DeepSeek jako pierwsze
-  Fala 2 (lekkie — tylko AI text): zwykly, biznes, scrabble
-  Fala 3 (ciężkie — obrazy/pliki): obrazek, emocje, analiza
+Respondery uruchamiane w DWÓCH FALACH równolegle:
+  Fala 1 (lekkie — tekst AI): zwykly, biznes, scrabble, nawiazanie
+  Fala 2 (ciężkie — obrazy/pliki): obrazek, emocje, analiza
 
-Dzięki temu nawiazanie dostaje DeepSeek gdy API jest wolne.
+Nawiazanie działa równolegle z biznes i zwykly — timeout DeepSeek
+nie blokuje już całego webhooka.
 """
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -51,7 +51,7 @@ def webhook():
     # ── Pola nadawcy i historia ───────────────────────────────────────────────
     sender           = data.get("sender",      "")
     sender_name      = data.get("sender_name", "")
-    previous_body = (data.get("previous_body") or "")[:1500] or None
+    previous_body    = (data.get("previous_body") or "")[:1500] or None
     previous_subject = data.get("previous_subject") or None
     attachments      = data.get("attachments") or []
 
@@ -67,8 +67,12 @@ def webhook():
         with flask_app.app_context():
             return fn(*args, **kwargs)
 
-    # ── FALA 1: nawiazanie (pierwsze — zanim DeepSeek się obciąży) ───────────
+    # ── FALA 1: lekkie respondery + nawiazanie (wszystkie równolegle) ─────────
+    # Nawiazanie działa równolegle z biznes/zwykly — jego timeout nie blokuje
+    # pozostałych responderów ani całego webhooka.
     wave1 = {
+        "zwykly": lambda: run(build_zwykly_section, body),
+        "biznes": lambda: run(build_biznes_section, body),
         "nawiazanie": lambda: run(
             build_nawiazanie_section,
             body=body,
@@ -78,29 +82,22 @@ def webhook():
             sender_name=sender_name,
         ),
     }
+    if wants_scrabble:
+        wave1["scrabble"] = lambda: run(build_scrabble_section, body)
+
     response_data = _run_parallel(wave1, flask_app)
 
-    # ── FALA 2: lekkie respondery (tylko tekst AI) ────────────────────────────
-    wave2 = {
-        "zwykly": lambda: run(build_zwykly_section, body),
-        "biznes": lambda: run(build_biznes_section, body),
-    }
-    if wants_scrabble:
-        wave2["scrabble"] = lambda: run(build_scrabble_section, body)
-
-    response_data.update(_run_parallel(wave2, flask_app))
-
-    # ── FALA 3: ciężkie respondery (obrazy, pliki) ────────────────────────────
-    wave3 = {}
+    # ── FALA 2: ciężkie respondery (obrazy, pliki) ────────────────────────────
+    wave2 = {}
     if wants_obrazek:
-        wave3["obrazek"] = lambda: run(build_obrazek_section, body)
+        wave2["obrazek"] = lambda: run(build_obrazek_section, body)
     if wants_emocje:
-        wave3["emocje"]  = lambda: run(build_emocje_section, body, attachments)
+        wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
     if wants_analiza:
-        wave3["analiza"] = lambda: run(build_analiza_section, body, attachments)
+        wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
 
-    if wave3:
-        response_data.update(_run_parallel(wave3, flask_app))
+    if wave2:
+        response_data.update(_run_parallel(wave2, flask_app))
 
     # Zabezpieczenie — nawiazanie zawsze ma has_history
     if "nawiazanie" not in response_data:
