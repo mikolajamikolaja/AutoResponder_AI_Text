@@ -25,7 +25,6 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
-from responders.gif_maker import make_gif
 
 # ── Stałe ─────────────────────────────────────────────────────────────────────
 HF_API_URLS = [
@@ -261,14 +260,6 @@ def build_obrazek_section(body: str) -> dict:
     png1_b64 = base64.b64encode(png1).decode("ascii") if png1 else None
     png2_b64 = base64.b64encode(png2).decode("ascii") if png2 else None
 
-    # Krok 3b — generujemy GIFy (zoom in po panelach) z obu obrazków
-    gif1_b64 = make_gif(png1_b64) if png1_b64 else None
-    gif2_b64 = make_gif(png2_b64) if png2_b64 else None
-    current_app.logger.info(
-        "GIFy: #1 sukces=%s | #2 sukces=%s",
-        bool(gif1_b64), bool(gif2_b64)
-    )
-
     # Krok 4 — treść maila zwrotnego
     scene_html = _scene_to_html(scene_text)
 
@@ -277,10 +268,6 @@ def build_obrazek_section(body: str) -> dict:
         status_parts.append("komiks czarno-biały")
     if png2_b64:
         status_parts.append("komiks retro-pop")
-    if gif1_b64:
-        status_parts.append("animacja GIF #1")
-    if gif2_b64:
-        status_parts.append("animacja GIF #2")
 
     if status_parts:
         reply_html = (
@@ -321,16 +308,6 @@ def build_obrazek_section(body: str) -> dict:
             "base64":       prompt2_b64,
             "content_type": "text/plain",
             "filename":     "3333.txt",
-        },
-        "gif1": {
-            "base64":       gif1_b64,
-            "content_type": "image/gif",
-            "filename":     "komiks_ai.gif",
-        },
-        "gif2": {
-            "base64":       gif2_b64,
-            "content_type": "image/gif",
-            "filename":     "komiks_ai_retro.gif",
         },
         "prompt_used": scene_text,
     }

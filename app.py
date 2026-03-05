@@ -9,8 +9,15 @@ Respondery uruchamiane w DWÓCH FALACH równolegle:
 
 Nawiazanie działa równolegle z biznes i zwykly — timeout DeepSeek
 nie blokuje już całego webhooka.
+
+Endpoint /webhook_gif:
+  Przyjmuje dwa PNG (base64), zwraca dwa GIFy (base64).
+  Wywoływany przez GAS osobno po odebraniu PNG z /webhook.
+  Dzięki temu GIF nie obciąża limitu 60s generowania obrazków FLUX.
 """
 import os
+import base64
+import io
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 
@@ -21,6 +28,7 @@ from responders.analiza    import build_analiza_section
 from responders.emocje     import build_emocje_section
 from responders.obrazek    import build_obrazek_section
 from responders.nawiazanie import build_nawiazanie_section
+from responders.gif_maker  import make_gif
 
 app = Flask(__name__)
 
@@ -68,8 +76,6 @@ def webhook():
             return fn(*args, **kwargs)
 
     # ── FALA 1: lekkie respondery + nawiazanie (wszystkie równolegle) ─────────
-    # Nawiazanie działa równolegle z biznes/zwykly — jego timeout nie blokuje
-    # pozostałych responderów ani całego webhooka.
     wave1 = {
         "zwykly": lambda: run(build_zwykly_section, body),
         "biznes": lambda: run(build_biznes_section, body),
@@ -119,6 +125,64 @@ def webhook():
     )
 
     return jsonify(response_data), 200
+
+
+@app.route("/webhook_gif", methods=["POST"])
+def webhook_gif():
+    """
+    Przyjmuje dwa PNG jako base64, zwraca dwa GIFy jako base64.
+    Wywoływany przez GAS osobno — poza limitem 60s głównego webhooka.
+
+    Oczekiwany JSON:
+      {
+        "png1_base64": "...",
+        "png2_base64": "..."
+      }
+
+    Odpowiedź:
+      {
+        "gif1": { "base64": "...", "content_type": "image/gif", "filename": "komiks_ai.gif" },
+        "gif2": { "base64": "...", "content_type": "image/gif", "filename": "komiks_ai_retro.gif" }
+      }
+    """
+    data = request.json or {}
+    png1_b64 = data.get("png1_base64")
+    png2_b64 = data.get("png2_base64")
+
+    if not png1_b64 and not png2_b64:
+        return jsonify({"error": "Brak png1_base64 i png2_base64"}), 400
+
+    app.logger.info("/webhook_gif — odebrano PNG: png1=%s png2=%s",
+                    bool(png1_b64), bool(png2_b64))
+
+    # Generuj GIFy równolegle
+    def gen_gif1():
+        return make_gif(png1_b64) if png1_b64 else None
+
+    def gen_gif2():
+        return make_gif(png2_b64) if png2_b64 else None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_gif1 = executor.submit(gen_gif1)
+        future_gif2 = executor.submit(gen_gif2)
+        gif1_b64 = future_gif1.result()
+        gif2_b64 = future_gif2.result()
+
+    app.logger.info("/webhook_gif — GIFy: gif1=%s gif2=%s",
+                    bool(gif1_b64), bool(gif2_b64))
+
+    return jsonify({
+        "gif1": {
+            "base64":       gif1_b64,
+            "content_type": "image/gif",
+            "filename":     "komiks_ai.gif",
+        },
+        "gif2": {
+            "base64":       gif2_b64,
+            "content_type": "image/gif",
+            "filename":     "komiks_ai_retro.gif",
+        },
+    }), 200
 
 
 if __name__ == "__main__":
