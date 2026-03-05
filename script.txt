@@ -44,14 +44,6 @@ function removeKeywordsFromText(text, keywords, maskMode) {
 
 // ── Google Sheets: historia wiadomości ───────────────────────────────────────
 
-/**
- * Zapisuje wiadomość do arkusza historii.
- * Kolumny: Data | Nadawca | Temat | Treść
- *
- * Optymalizacja: szuka istniejącego wiersza dla danego nadawcy i nadpisuje go.
- * Dzięki temu arkusz ma zawsze tyle wierszy ile unikalnych nadawców
- * i nigdy nie rośnie — co gwarantuje stałą prędkość odczytu.
- */
 function saveToHistory(senderEmail, subject, body) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
@@ -93,10 +85,6 @@ function saveToHistory(senderEmail, subject, body) {
   }
 }
 
-/**
- * Pobiera ostatnią wiadomość od danego nadawcy z arkusza historii.
- * Zwraca obiekt { subject, body } lub null jeśli brak historii.
- */
 function findLastMessageBySender(senderEmail) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
@@ -131,10 +119,6 @@ function findLastMessageBySender(senderEmail) {
   }
 }
 
-/**
- * Pobiera listę wszystkich znanych nadawców z kolumny B arkusza historii.
- * Wywoływana RAZ przed pętlą — 1 zapytanie do Sheets zamiast 20.
- */
 function _getKnownSenders() {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
@@ -380,12 +364,47 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
 }
 
 // ── Wysyłka: obrazek AI (dwa obrazki: czarno-biały + retro-pop) ──────────────
+// Każdy mail zawiera parę: obrazek PNG + plik TXT z promptem wysłanym do FLUX
+// ── Konwersja obrazka do BW przez drugi webhook Render ───────────────────────
+function _convertToBW(imageBase64, contentType, webhookUrl) {
+  var bwUrl = webhookUrl.replace("/webhook", "/webhook_bw");
+  var payload = {
+    image_base64:  imageBase64,
+    content_type:  contentType || "image/png"
+  };
+  var options = {
+    method:             "post",
+    contentType:        "application/json",
+    payload:            JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  try {
+    var resp = UrlFetchApp.fetch(bwUrl, options);
+    if (resp.getResponseCode() === 200) {
+      var json = JSON.parse(resp.getContentText());
+      console.log("BW konwersja OK, rozmiar: " + resp.getContentText().length);
+      return json.image_base64 || null;
+    } else {
+      console.error("BW webhook błąd: " + resp.getResponseCode());
+      return null;
+    }
+  } catch(e) {
+    console.error("BW webhook wyjątek: " + e.message);
+    return null;
+  }
+}
+
+
+// ── Wysyłka: obrazek AI — zastępuje poprzednią wersję ────────────────────────
 function executeObrazekMailSend(data, recipient, subject, msg) {
   if (!data) {
     console.warn("Brak danych obrazka dla " + recipient);
     return;
   }
 
+  var webhookUrl = PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
+
+  // ── Mail 1: komiks czarno-biały (kolor z FLUX) + 2222.txt ──
   if (data.image && data.image.base64) {
     try {
       var inlineImages1 = {};
@@ -398,9 +417,16 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
       inlineImages1["obrazek_cid"] = imgBlob1;
       attachments1.push(imgBlob1);
 
+      if (data.prompt1_txt && data.prompt1_txt.base64) {
+        attachments1.push(Utilities.newBlob(
+          Utilities.base64Decode(data.prompt1_txt.base64),
+          data.prompt1_txt.content_type || "text/plain",
+          data.prompt1_txt.filename     || "2222.txt"
+        ));
+      }
+
       var htmlBody1 = (data.reply_html || "<p>Obrazek AI w załączniku.</p>") +
         '<p><img src="cid:obrazek_cid" alt="Komiks AI" style="max-width:100%;border-radius:8px;"></p>';
-
       try {
         msg.reply("", {
           htmlBody:     htmlBody1,
@@ -408,22 +434,54 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           attachments:  attachments1,
           name:         "Komiks AI – Autoresponder"
         });
-        console.log("Wysłano obrazek 1 (czarno-biały) -> " + recipient);
-      } catch (e) {
+        console.log("Wysłano obrazek 1 (kolor) + 2222.txt -> " + recipient);
+      } catch(e) {
         MailApp.sendEmail({
-          to:           recipient,
-          subject:      "RE: " + subject + " [komiks]",
-          htmlBody:     htmlBody1,
-          inlineImages: inlineImages1,
-          attachments:  attachments1,
-          name:         "Komiks AI – Autoresponder"
+          to: recipient, subject: "RE: " + subject + " [komiks]",
+          htmlBody: htmlBody1, inlineImages: inlineImages1,
+          attachments: attachments1, name: "Komiks AI – Autoresponder"
         });
       }
-    } catch (e) {
-      console.error("Błąd obrazka 1: " + e.message);
-    }
+    } catch(e) { console.error("Błąd obrazka 1: " + e.message); }
+
+    // ── Mail 3: obrazek 1 po konwersji BW ──
+    try {
+      var bw1Base64 = _convertToBW(
+        data.image.base64,
+        data.image.content_type || "image/png",
+        webhookUrl
+      );
+      if (bw1Base64) {
+        var inlineImagesBW1 = {};
+        var bwBlob1 = Utilities.newBlob(
+          Utilities.base64Decode(bw1Base64),
+          "image/png",
+          "komiks_ai_bw.png"
+        );
+        inlineImagesBW1["bw1_cid"] = bwBlob1;
+        var htmlBodyBW1 =
+          "<p>Komiks AI – wersja czarno-biała:</p>" +
+          '<p><img src="cid:bw1_cid" alt="Komiks BW" style="max-width:100%;border-radius:8px;"></p>';
+        try {
+          msg.reply("", {
+            htmlBody:     htmlBodyBW1,
+            inlineImages: inlineImagesBW1,
+            attachments:  [bwBlob1],
+            name:         "Komiks AI BW – Autoresponder"
+          });
+          console.log("Wysłano obrazek 1 BW -> " + recipient);
+        } catch(e) {
+          MailApp.sendEmail({
+            to: recipient, subject: "RE: " + subject + " [komiks BW]",
+            htmlBody: htmlBodyBW1, inlineImages: inlineImagesBW1,
+            attachments: [bwBlob1], name: "Komiks AI BW – Autoresponder"
+          });
+        }
+      }
+    } catch(e) { console.error("Błąd BW obrazka 1: " + e.message); }
   }
 
+  // ── Mail 2: komiks retro-pop (kolor z FLUX) + 3333.txt ──
   if (data.image2 && data.image2.base64) {
     try {
       var inlineImages2 = {};
@@ -436,10 +494,17 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
       inlineImages2["obrazek2_cid"] = imgBlob2;
       attachments2.push(imgBlob2);
 
+      if (data.prompt2_txt && data.prompt2_txt.base64) {
+        attachments2.push(Utilities.newBlob(
+          Utilities.base64Decode(data.prompt2_txt.base64),
+          data.prompt2_txt.content_type || "text/plain",
+          data.prompt2_txt.filename     || "3333.txt"
+        ));
+      }
+
       var htmlBody2 =
         "<p>Ta sama historia, styl retro-pop lata 60.:</p>" +
         '<p><img src="cid:obrazek2_cid" alt="Komiks Retro" style="max-width:100%;border-radius:8px;"></p>';
-
       try {
         msg.reply("", {
           htmlBody:     htmlBody2,
@@ -447,20 +512,51 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           attachments:  attachments2,
           name:         "Komiks Retro – Autoresponder"
         });
-        console.log("Wysłano obrazek 2 (retro-pop) -> " + recipient);
-      } catch (e) {
+        console.log("Wysłano obrazek 2 (kolor) + 3333.txt -> " + recipient);
+      } catch(e) {
         MailApp.sendEmail({
-          to:           recipient,
-          subject:      "RE: " + subject + " [retro]",
-          htmlBody:     htmlBody2,
-          inlineImages: inlineImages2,
-          attachments:  attachments2,
-          name:         "Komiks Retro – Autoresponder"
+          to: recipient, subject: "RE: " + subject + " [retro]",
+          htmlBody: htmlBody2, inlineImages: inlineImages2,
+          attachments: attachments2, name: "Komiks Retro – Autoresponder"
         });
       }
-    } catch (e) {
-      console.error("Błąd obrazka 2: " + e.message);
-    }
+    } catch(e) { console.error("Błąd obrazka 2: " + e.message); }
+
+    // ── Mail 4: obrazek 2 po konwersji BW ──
+    try {
+      var bw2Base64 = _convertToBW(
+        data.image2.base64,
+        data.image2.content_type || "image/png",
+        webhookUrl
+      );
+      if (bw2Base64) {
+        var inlineImagesBW2 = {};
+        var bwBlob2 = Utilities.newBlob(
+          Utilities.base64Decode(bw2Base64),
+          "image/png",
+          "komiks_retro_bw.png"
+        );
+        inlineImagesBW2["bw2_cid"] = bwBlob2;
+        var htmlBodyBW2 =
+          "<p>Komiks Retro – wersja czarno-biała:</p>" +
+          '<p><img src="cid:bw2_cid" alt="Komiks Retro BW" style="max-width:100%;border-radius:8px;"></p>';
+        try {
+          msg.reply("", {
+            htmlBody:     htmlBodyBW2,
+            inlineImages: inlineImagesBW2,
+            attachments:  [bwBlob2],
+            name:         "Komiks Retro BW – Autoresponder"
+          });
+          console.log("Wysłano obrazek 2 BW -> " + recipient);
+        } catch(e) {
+          MailApp.sendEmail({
+            to: recipient, subject: "RE: " + subject + " [retro BW]",
+            htmlBody: htmlBodyBW2, inlineImages: inlineImagesBW2,
+            attachments: [bwBlob2], name: "Komiks Retro BW – Autoresponder"
+          });
+        }
+      }
+    } catch(e) { console.error("Błąd BW obrazka 2: " + e.message); }
   }
 }
 
@@ -561,7 +657,6 @@ function __AAA_processEmails() {
 
   var maskMode = false;
 
-  // ── Wczytaj znanych nadawców z Sheets RAZ przed pętlą (1 zapytanie) ────────
   var knownSenders = _getKnownSenders();
   console.log("Znani nadawcy z historii: " + knownSenders.length);
 
@@ -581,7 +676,6 @@ function __AAA_processEmails() {
     var plainBody  = msg.getPlainBody();
     var searchText = (plainBody + " " + subject).toLowerCase();
 
-    // ── Flagi ─────────────────────────────────────────────────────────────────
     var isBiz          = BIZ_LIST.indexOf(fromEmail) !== -1;
     var isAllowed      = ALLOWED_LIST.indexOf(fromEmail) !== -1;
     var isKnownSender  = knownSenders.indexOf(fromEmail) !== -1;
@@ -603,7 +697,6 @@ function __AAA_processEmails() {
       return k && searchText.indexOf(k) !== -1;
     });
 
-    // ── JOKER — aktywuje wszystkie respondery ─────────────────────────────────
     var containsJoker = KEYWORDS_JOKER.some(function(k){
       return k && searchText.indexOf(k) !== -1;
     });
@@ -615,7 +708,6 @@ function __AAA_processEmails() {
       containsKeywordObrazek = true;
     }
 
-    // ── Ignoruj jeśli nie spełnia żadnego warunku ─────────────────────────────
     if (!isBiz && !isAllowed && !isKnownSender && !containsKeyword &&
         !containsKeyword2 && !containsKeyword3 &&
         !containsKeyword4 && !containsKeywordObrazek) {
@@ -626,7 +718,6 @@ function __AAA_processEmails() {
       continue;
     }
 
-    // ── Wyczyść treść ─────────────────────────────────────────────────────────
     var combinedKeywords = KEYWORDS
       .concat(KEYWORDS1)
       .concat(KEYWORDS2)
@@ -637,19 +728,16 @@ function __AAA_processEmails() {
       .filter(Boolean);
     var sanitizedBody = removeKeywordsFromText(plainBody, combinedKeywords, maskMode);
 
-    // ── Pobierz historię z Google Sheets (dla nawiązania) ────────────────────
     var previousData    = findLastMessageBySender(fromEmail);
     var previousBody    = previousData ? previousData.body    : null;
     var previousSubject = previousData ? previousData.subject : null;
 
-    // ── Pobierz załączniki ────────────────────────────────────────────────────
     var allAttachments = [];
     if (containsKeyword3 || containsKeyword4) {
       allAttachments = getAllAttachments(msg);
       console.log("Znaleziono załączników: " + allAttachments.length);
     }
 
-    // ── Wywołaj backend ───────────────────────────────────────────────────────
     var response = _callBackend(
       fromEmail,
       senderName,
@@ -690,13 +778,10 @@ function __AAA_processEmails() {
         executeNawiazanieMailSend(json.nawiazanie, fromEmail, subject, msg);
       }
 
-      // ✅ Zapisz i oznacz jako przeczytane TYLKO gdy backend odpowiedział
       saveToHistory(fromEmail, subject, sanitizedBody);
       thread.markRead();
 
     } else {
-      // ❌ Backend niedostępny — zostaw jako nieprzeczytane
-      // przy następnym uruchomieniu skrypt spróbuje ponownie
       console.warn("Pominięto oznaczenie jako przeczytane — backend nie odpowiedział dla: " + fromEmail);
     }
   }
