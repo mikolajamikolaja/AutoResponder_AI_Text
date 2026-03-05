@@ -13,11 +13,11 @@ from PIL import Image
 
 
 # ── Ustawienia animacji ───────────────────────────────────────────────────────
-FRAMES_PER_PANEL = 20      # klatek na panel = 2 sekundy przy 100ms/klatkę
-FRAME_DURATION   = 100     # ms na klatkę
+FRAMES_PER_PANEL = 8      # klatek na panel = 2 sekundy przy 100ms/klatkę
+FRAME_DURATION   = 250     # ms na klatkę
 ZOOM_START       = 1.0     # początkowy zoom (100% panelu)
 ZOOM_END         = 1.25    # końcowy zoom (125% — delikatny zoom in)
-OUTPUT_SIZE      = (600, 600)  # rozmiar wyjściowego GIF
+OUTPUT_SIZE      = (256, 256)  # rozmiar wyjściowego GIF
 
 
 def _crop_panels(img: Image.Image) -> list:
