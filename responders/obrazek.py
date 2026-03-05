@@ -288,6 +288,10 @@ def build_obrazek_section(body: str) -> dict:
         bool(png1_b64), len(png1), bool(png2_b64), len(png2)
     )
 
+    # Krok 5 — kodujemy prompty jako base64 text/plain do załączników
+    prompt1_b64 = base64.b64encode(prompt1.encode("utf-8")).decode("ascii")
+    prompt2_b64 = base64.b64encode(prompt2.encode("utf-8")).decode("ascii")
+
     return {
         "reply_html":  reply_html,
         "image": {
@@ -299,6 +303,16 @@ def build_obrazek_section(body: str) -> dict:
             "base64":       png2_b64,
             "content_type": "image/png",
             "filename":     "komiks_ai_retro.png",
+        },
+        "prompt1_txt": {
+            "base64":       prompt1_b64,
+            "content_type": "text/plain",
+            "filename":     "2222.txt",
+        },
+        "prompt2_txt": {
+            "base64":       prompt2_b64,
+            "content_type": "text/plain",
+            "filename":     "3333.txt",
         },
         "prompt_used": scene_text,
     }
