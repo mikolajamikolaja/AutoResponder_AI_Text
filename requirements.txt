@@ -1,0 +1,23 @@
+Flask>=2.2.5
+gunicorn>=20.1.0
+requests>=2.31.0
+setuptools>=67.0.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
+python-docx>=1.1.0
+
+# Dodane dla responders/emocje.py (analiza emocjonalna + wykresy)
+numpy>=1.24.0
+matplotlib>=3.7.0
+pandas>=2.0.0
+snowballstemmer>=2.2.0
+
+# Dodane dla responders/analiza.py (PDF)
+pdfplumber>=0.10.0
+pypdf>=3.0.0
+
+docx2txt>=0.8
+lxml>=4.9.0
+cryptography>=36.0.0
+
+reportlab>=4.1.0
