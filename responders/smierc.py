@@ -94,11 +94,16 @@ def _get_hf_tokens() -> list:
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
-# ── Generuj obrazek FLUX — zwraca (dict|None, prompt_użyty) ──────────────────
+# ── Generuj obrazek FLUX — zwraca dict|None ─────────────────────────────────
 def _generate_flux_image(prompt: str):
+    """
+    Wysyła pełny prompt do HF FLUX.1-schnell.
+    Dla każdego tokenu próbuje po kolei aż któryś zadziała.
+    Zwraca dict z base64 PNG lub None przy błędzie.
+    """
     tokens = _get_hf_tokens()
     if not tokens:
-        current_app.logger.error("[wyslannik] Brak tokenów HF!")
+        current_app.logger.error("[wyslannik] Brak HF_TOKEN w zmiennych środowiskowych!")
         return None
 
     payload = {
@@ -108,15 +113,25 @@ def _generate_flux_image(prompt: str):
             "guidance_scale":      HF_GUIDANCE,
         },
     }
-    current_app.logger.info("[wyslannik] FLUX prompt PEŁNY: %s", prompt)
+
+    current_app.logger.info(
+        "[wyslannik] FLUX — tokeny dostępne: %s | prompt: %.150s",
+        [n for n, _ in tokens], prompt,
+    )
 
     for name, token in tokens:
-        headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept":        "image/png",
+        }
         try:
-            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
+            resp = requests.post(
+                HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC
+            )
             if resp.status_code == 200:
                 current_app.logger.info(
-                    "[wyslannik] FLUX sukces token=%s PNG %d B", name, len(resp.content)
+                    "[wyslannik] ✓ Sukces! Token=%s | PNG %d B",
+                    name, len(resp.content)
                 )
                 return {
                     "base64":       base64.b64encode(resp.content).decode("ascii"),
@@ -124,18 +139,30 @@ def _generate_flux_image(prompt: str):
                     "filename":     "niebo_wyslannik.png",
                 }
             elif resp.status_code in (401, 403):
-                current_app.logger.warning("[wyslannik] token %s nieważny", name)
+                current_app.logger.warning(
+                    "[wyslannik] Token %s nieważny — następny token",
+                    name
+                )
             elif resp.status_code in (503, 529):
-                current_app.logger.warning("[wyslannik] token %s przeciążony", name)
+                current_app.logger.warning(
+                    "[wyslannik] Token %s przeciążony — następny token",
+                    name
+                )
             else:
                 current_app.logger.warning(
-                    "[wyslannik] token %s błąd %s: %s",
-                    name, resp.status_code, resp.text[:100]
+                    "[wyslannik] Token %s błąd %s — następny token",
+                    name, resp.status_code
                 )
         except requests.exceptions.Timeout:
-            current_app.logger.warning("[wyslannik] token %s timeout", name)
+            current_app.logger.warning(
+                "[wyslannik] Token %s timeout — następny token",
+                name
+            )
         except Exception as e:
-            current_app.logger.warning("[wyslannik] token %s wyjątek: %s", name, str(e)[:50])
+            current_app.logger.warning(
+                "[wyslannik] Token %s błąd: %s — następny token",
+                name, str(e)[:50]
+            )
 
     current_app.logger.error("[wyslannik] Wszystkie tokeny zawiodły!")
     return None

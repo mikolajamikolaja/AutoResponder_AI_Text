@@ -1,20 +1,14 @@
 /**
  * __AAA_processEmails - Google Apps Script
- * (nazwa AAA_ sprawia że funkcja jest pierwsza na liście)
- *
- * Script Properties:
- *   WEBHOOK_URL         - URL do backendu (Render)
- *   WEBHOOK_SECRET      - (opcjonalnie)
- *   HISTORY_SHEET_ID    - ID arkusza Google Sheets do historii wiadomości
- *   BIZ_LIST            - emails → odpowiedź biznesowa
- *   ALLOWED_LIST        - emails → odpowiedź emocjonalna
- *   KEYWORDS            - słowa kluczowe → biz + zwykly
- *   KEYWORDS1           - drugi zestaw → biz + zwykly
- *   KEYWORDS2           - słowa kluczowe → scrabble
- *   KEYWORDS3           - słowa kluczowe → analiza powtórzeń (DOCX)
- *   KEYWORDS4           - słowa kluczowe → analiza emocjonalna (wykresy PNG)
- *   KEYWORDS_JOKER      - słowa testowe → aktywuje WSZYSTKIE respondery
- *   KEYWORDS_OBRAZEK    - słowa kluczowe → obrazek wygenerowany przez AI
+ * WERSJA 3 - prawidłowe czytanie struktury z arkusza smierc
+ * 
+ * Struktura SMIERC arkusza:
+ * - Każda zakładka = email osoby (nazwa: email_z_underscore, np. persecyfr_gmail_com)
+ * - Kolumna A: nr etapu (1, 2, 3...)
+ * - Kolumna B: data_smierci
+ * - Kolumna C: mail_od_osoby
+ * - Kolumna D: odpowiedz_pawla
+ * - Kolumna E: last_msg_id
  */
 
 // ── Helpers: Script Properties ───────────────────────────────────────────────
@@ -42,8 +36,14 @@ function removeKeywordsFromText(text, keywords, maskMode) {
   return sanitized.trim();
 }
 
-// ── Google Sheets: historia wiadomości ───────────────────────────────────────
+function removeGeneratorPdfKeyword(text, keyword) {
+  if (!text || !keyword) return text;
+  var shortened = keyword.slice(0, -1);
+  var re = new RegExp(escapeRegExp(keyword), "gi");
+  return text.replace(re, shortened);
+}
 
+// ── Google Sheets: historia zwykłych wiadomości ───────────────────────────────
 function saveToHistory(senderEmail, subject, body) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
@@ -136,7 +136,159 @@ function _getKnownSenders() {
   }
 }
 
-// ── Pobierz załączniki DOCX/ODT/PDF/TXT ──────────────────────────────────────
+// ── Moduł SMIERC: czytanie z arkusza gdzie zakładki to emaile ────────────────
+function _isResponseToSmircMessage(msg, senderEmail) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+    if (!sheetId) return false;
+    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
+    var sheets = ss.getSheets();
+    var sheet = null;
+    
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
+        sheet = sheets[i];
+        break;
+      }
+    }
+    
+    if (!sheet) {
+      console.log("DEBUG _isResponseToSmircMessage: brak arkusza dla " + senderEmail);
+      return false;
+    }
+    
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      console.log("DEBUG _isResponseToSmircMessage: arkusz pusty");
+      return false;
+    }
+    
+    // Kolumna E (5) = last_msg_id z poprzedniego maila
+    var lastMsgId = sheet.getRange(lastRow, 5).getValue().toString().trim();
+    var currentThreadId = msg.getThread().getId();
+    
+    console.log("DEBUG _isResponseToSmircMessage: lastMsgId=" + lastMsgId + " currentThreadId=" + currentThreadId);
+    console.log("DEBUG: osoba " + senderEmail + " ma historię smierc");
+    
+    // Jeśli osoba ma wpis w arkuszu smierc → to potencjalna odpowiedź
+    return true;
+    
+  } catch(e) {
+    console.error("Błąd _isResponseToSmircMessage: " + e.message);
+    return false;
+  }
+}
+
+function _getSmircData(senderEmail) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+    if (!sheetId) {
+      console.warn("Brak SMIERC_HISTORY_SHEET_ID");
+      return null;
+    }
+    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheet = null;
+    
+    // Zamień @ i . na _ dla szukania arkusza (nazwa zakładki)
+    var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
+    
+    console.log("DEBUG _getSmircData: szukam arkusza dla email=" + senderEmail + " szukam=" + sheetNameForEmail);
+    
+    // Szukaj arkusza (zakładki) o nazwie = email_z_underscore
+    var sheets = ss.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      console.log("DEBUG: arkusz [" + i + "] = " + sheets[i].getName());
+      if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
+        sheet = sheets[i];
+        console.log("DEBUG: ZNALEZIONO arkusz!");
+        break;
+      }
+    }
+    
+    if (!sheet) {
+      console.log("Brak arkusza dla email: " + senderEmail + " (szukałem: " + sheetNameForEmail + ")");
+      return null;
+    }
+    
+    // Czytaj ostatnią linię (ostatni etap)
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      console.log("Arkusz pusty: " + senderEmail);
+      return null;
+    }
+    
+    var row = sheet.getRange(lastRow, 1, 1, 5).getValues()[0];
+    var etap = parseInt(row[0]) || 1;
+    var data_smierci = (row[1] || "nieznanego dnia").toString();
+    
+    console.log("Smierc data dla " + senderEmail + ": etap=" + etap + " data=" + data_smierci);
+    
+    return {
+      etap: etap,
+      data_smierci: data_smierci,
+      historia: []
+    };
+  } catch(e) {
+    console.error("Błąd _getSmircData: " + e.message);
+    return null;
+  }
+}
+
+function _updateSmircData(senderEmail, newEtap) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+    if (!sheetId) return;
+    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheet = null;
+    
+    // Zamień @ i . na _ dla szukania arkusza (nazwa zakładki)
+    var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
+    
+    // Szukaj arkusza o nazwie = email_z_underscore
+    var sheets = ss.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
+        sheet = sheets[i];
+        break;
+      }
+    }
+    
+    if (!sheet) {
+      console.log("Nie można zaktualizować - brak arkusza: " + senderEmail + " (szukałem: " + sheetNameForEmail + ")");
+      return;
+    }
+    
+    // Zaktualizuj ostatnią linię - kolumna A (etap)
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      sheet.getRange(lastRow, 1).setValue(newEtap);
+      console.log("Smierc etap zaktualizowany: " + senderEmail + " → etap " + newEtap);
+    }
+  } catch(e) {
+    console.error("Błąd _updateSmircData: " + e.message);
+  }
+}
+
+function _threadHasLabel(thread, labelName) {
+  try {
+    var labels = thread.getLabels();
+    for (var i = 0; i < labels.length; i++) {
+      if (labels[i].getName() === labelName) {
+        return true;
+      }
+    }
+    return false;
+  } catch(e) {
+    console.error("Błąd sprawdzenia etykiety: " + e.message);
+    return false;
+  }
+}
+
+// ── Pobierz załączniki ───────────────────────────────────────────────────────
 function getAllAttachments(msg) {
   var attachments = msg.getAttachments();
   if (!attachments || !attachments.length) return [];
@@ -174,7 +326,7 @@ function getAllAttachments(msg) {
   return result;
 }
 
-// ── Wysyłka: standardowa (biznes / zwykly) ───────────────────────────────────
+// ── Wysyłka: standardowa ─────────────────────────────────────────────────────
 function executeMailSend(data, recipient, subject, msg, senderName) {
   var inlineImages = {};
   var attachments  = [];
@@ -219,7 +371,112 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
   }
 }
 
-// ── Wysyłka: scrabble ────────────────────────────────────────────────────────
+function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
+  if (!data) {
+    console.warn("Brak danych generator_pdf dla " + recipient);
+    return;
+  }
+
+  var attachments = [];
+  if (data.pdf && data.pdf.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.pdf.base64),
+        "application/pdf",
+        data.pdf.filename || "egzamin.pdf"
+      ));
+    } catch (e) {
+      console.error("Błąd PDF egzaminu: " + e.message);
+    }
+  }
+
+  var htmlBody = data.reply_html ||
+    "<p>Oto PDF aktywny utworzony na podstawie Twojego tekstu.</p>";
+
+  try {
+    msg.reply("", {
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Generator Egzaminów – Autoresponder"
+    });
+    console.log("Wysłano egzamin PDF -> " + recipient);
+  } catch (e) {
+    MailApp.sendEmail({
+      to:          recipient,
+      subject:     "RE: " + subject + " [egzamin PDF]",
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Generator Egzaminów – Autoresponder"
+    });
+  }
+}
+
+function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
+  if (!data) {
+    console.warn("Brak danych smierc dla " + recipient);
+    return;
+  }
+
+  var attachments = [];
+  var inlineImages = {};
+
+  if (data.image && data.image.base64) {
+    try {
+      var imgBlob = Utilities.newBlob(
+        Utilities.base64Decode(data.image.base64),
+        data.image.content_type || "image/png",
+        data.image.filename     || "niebo.png"
+      );
+      inlineImages["smirc_img_cid"] = imgBlob;
+      attachments.push(imgBlob);
+    } catch (e) { console.error("Błąd obrazka smierc: " + e.message); }
+  }
+
+  if (data.mp4 && data.mp4.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.mp4.base64),
+        data.mp4.content_type || "video/mp4",
+        data.mp4.filename     || "niebo.mp4"
+      ));
+    } catch (e) { console.error("Błąd wideo smierc: " + e.message); }
+  }
+
+  if (data.debug_txt && data.debug_txt.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.debug_txt.base64),
+        data.debug_txt.content_type || "text/plain",
+        data.debug_txt.filename     || "debug_flux.txt"
+      ));
+    } catch (e) { console.error("Błąd debug TXT: " + e.message); }
+  }
+
+  var htmlBody = (data.reply_html || "<p>(Brak treści)</p>") +
+    (inlineImages["smirc_img_cid"]
+      ? '<p><img src="cid:smirc_img_cid" alt="Zaświaty" style="max-width:100%;border-radius:8px;"></p>'
+      : "");
+
+  try {
+    msg.reply("", {
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Paweł – Autoresponder pośmiertny"
+    });
+    console.log("Wysłano smierc (etap " + newEtap + ") -> " + recipient);
+  } catch (e) {
+    MailApp.sendEmail({
+      to:           recipient,
+      subject:      "RE: " + subject,
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Paweł – Autoresponder pośmiertny"
+    });
+  }
+}
+
 function executeScrabbleMailSend(data, recipient, subject, msg) {
   var inlineImages = {};
   var attachments  = [];
@@ -259,7 +516,6 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
   }
 }
 
-// ── Wysyłka: analiza powtórzeń DOCX ──────────────────────────────────────────
 function executeAnalizaMailSend(data, recipient, subject, msg) {
   if (!data) {
     console.warn("Brak danych analizy dla " + recipient);
@@ -303,7 +559,6 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
   }
 }
 
-// ── Wysyłka: analiza emocjonalna PNG + raporty TXT ───────────────────────────
 function executeEmocjeMailSend(data, recipient, subject, msg) {
   if (!data) {
     console.warn("Brak danych emocji dla " + recipient);
@@ -363,39 +618,6 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
   }
 }
 
-// ── Wysyłka: obrazek AI (dwa obrazki: czarno-biały + retro-pop) ──────────────
-// Każdy mail zawiera parę: obrazek PNG + plik TXT z promptem wysłanym do FLUX
-// ── Konwersja obrazka do BW przez drugi webhook Render ───────────────────────
-function _convertToBW(imageBase64, contentType, webhookUrl) {
-  var bwUrl = webhookUrl.replace("/webhook", "/webhook_bw");
-  var payload = {
-    image_base64:  imageBase64,
-    content_type:  contentType || "image/png"
-  };
-  var options = {
-    method:             "post",
-    contentType:        "application/json",
-    payload:            JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-  try {
-    var resp = UrlFetchApp.fetch(bwUrl, options);
-    if (resp.getResponseCode() === 200) {
-      var json = JSON.parse(resp.getContentText());
-      console.log("BW konwersja OK, rozmiar: " + resp.getContentText().length);
-      return json.image_base64 || null;
-    } else {
-      console.error("BW webhook błąd: " + resp.getResponseCode());
-      return null;
-    }
-  } catch(e) {
-    console.error("BW webhook wyjątek: " + e.message);
-    return null;
-  }
-}
-
-
-// ── NOWA funkcja: wywołuje /webhook_gif z dwoma PNG, odbiera dwa GIFy ────────
 function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
   var gifUrl = webhookUrl.replace("/webhook", "/webhook_gif");
   var payload = {
@@ -412,12 +634,10 @@ function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
     var resp = UrlFetchApp.fetch(gifUrl, options);
     if (resp.getResponseCode() === 200) {
       var json = JSON.parse(resp.getContentText());
-      console.log("webhook_gif OK — gif1=%s gif2=%s",
-        !!json.gif1, !!json.gif2);
+      console.log("webhook_gif OK");
       return json;
     } else {
-      console.error("webhook_gif błąd: " + resp.getResponseCode() +
-        " — " + resp.getContentText().substring(0, 200));
+      console.error("webhook_gif błąd: " + resp.getResponseCode());
       return null;
     }
   } catch(e) {
@@ -426,11 +646,6 @@ function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
   }
 }
 
-// Wysyła 4 maile:
-//   Mail 1 — PNG czarno-biały + 2222.txt
-//   Mail 2 — PNG retro-pop    + 3333.txt
-//   Mail 3 — GIF animowany z komiksu czarno-białego
-//   Mail 4 — GIF animowany z komiksu retro-pop
 function executeObrazekMailSend(data, recipient, subject, msg) {
   if (!data) {
     console.warn("Brak danych obrazka dla " + recipient);
@@ -439,7 +654,6 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
 
   var webhookUrl = PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
 
-  // ── Mail 1: PNG czarno-biały + 2222.txt ───────────────────────────────────
   if (data.image && data.image.base64) {
     try {
       var inlineImages1 = {};
@@ -467,7 +681,7 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           htmlBody: htmlBody1, inlineImages: inlineImages1,
           attachments: attachments1, name: "Komiks AI – Autoresponder"
         });
-        console.log("Wysłano obrazek 1 (PNG) + 2222.txt -> " + recipient);
+        console.log("Wysłano obrazek 1 -> " + recipient);
       } catch(e) {
         MailApp.sendEmail({
           to: recipient, subject: "RE: " + subject + " [komiks]",
@@ -478,7 +692,6 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
     } catch(e) { console.error("Błąd obrazka 1: " + e.message); }
   }
 
-  // ── Mail 2: PNG retro-pop + 3333.txt ──────────────────────────────────────
   if (data.image2 && data.image2.base64) {
     try {
       var inlineImages2 = {};
@@ -507,7 +720,7 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           htmlBody: htmlBody2, inlineImages: inlineImages2,
           attachments: attachments2, name: "Komiks Retro – Autoresponder"
         });
-        console.log("Wysłano obrazek 2 (PNG) + 3333.txt -> " + recipient);
+        console.log("Wysłano obrazek 2 -> " + recipient);
       } catch(e) {
         MailApp.sendEmail({
           to: recipient, subject: "RE: " + subject + " [retro]",
@@ -518,14 +731,12 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
     } catch(e) { console.error("Błąd obrazka 2: " + e.message); }
   }
 
-  // ── Wywołaj /webhook_gif — odeślij oba PNG do Rendera po GIFy ─────────────
   var png1b64 = (data.image  && data.image.base64)  ? data.image.base64  : null;
   var png2b64 = (data.image2 && data.image2.base64) ? data.image2.base64 : null;
 
   if ((png1b64 || png2b64) && webhookUrl) {
     var gifData = _callWebhookGif(png1b64, png2b64, webhookUrl);
 
-    // ── Mail 3: GIF animowany — komiks czarno-biały ──────────────────────────
     if (gifData && gifData.gif1 && gifData.gif1.base64) {
       try {
         var gifBlob1 = Utilities.newBlob(
@@ -533,9 +744,7 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           gifData.gif1.content_type || "image/gif",
           gifData.gif1.filename     || "komiks_ai.gif"
         );
-        var htmlBodyGif1 =
-          "<p>Komiks AI – animacja (zoom po panelach):</p>" +
-          "<p><i>Animowany GIF w załączniku.</i></p>";
+        var htmlBodyGif1 = "<p>Komiks AI – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
         try {
           msg.reply("", {
             htmlBody: htmlBodyGif1, attachments: [gifBlob1],
@@ -552,7 +761,6 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
       } catch(e) { console.error("Błąd GIF 1: " + e.message); }
     }
 
-    // ── Mail 4: GIF animowany — komiks retro-pop ─────────────────────────────
     if (gifData && gifData.gif2 && gifData.gif2.base64) {
       try {
         var gifBlob2 = Utilities.newBlob(
@@ -560,9 +768,7 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           gifData.gif2.content_type || "image/gif",
           gifData.gif2.filename     || "komiks_ai_retro.gif"
         );
-        var htmlBodyGif2 =
-          "<p>Komiks Retro – animacja (zoom po panelach):</p>" +
-          "<p><i>Animowany GIF w załączniku.</i></p>";
+        var htmlBodyGif2 = "<p>Komiks Retro – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
         try {
           msg.reply("", {
             htmlBody: htmlBodyGif2, attachments: [gifBlob2],
@@ -581,9 +787,6 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
   }
 }
 
-
-
-// ── Wysyłka: nawiązanie do poprzedniej wiadomości ────────────────────────────
 function executeNawiazanieMailSend(data, recipient, subject, msg) {
   if (!data || !data.has_history || !data.reply_html) {
     return;
@@ -609,33 +812,32 @@ function executeNawiazanieMailSend(data, recipient, subject, msg) {
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
 function _callBackend(sender, senderName, subject, body, url,
                       wantsScrabble, wantsAnaliza, wantsEmocje, wantsObrazek,
-                      attachments, previousBody, previousSubject) {
+                      wantsGeneratorPdf, wantsSmierc, smircData,
+                      attachments, previousBody, previousSubject,
+                      isBiz, isAllowed, isKnownSender, containsKeyword) {
   var secret = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
   var payload = {
-    sender:           sender,
-    sender_name:      senderName    || "",
-    subject:          subject,
-    body:             body,
-    wants_scrabble:   wantsScrabble  ? true : false,
-    wants_analiza:    wantsAnaliza   ? true : false,
-    wants_emocje:     wantsEmocje    ? true : false,
-    wants_obrazek:    wantsObrazek   ? true : false,
-    attachments:      attachments    || [],
-    previous_body:    previousBody   || null,
-    previous_subject: previousSubject || null
+    sender:               sender,
+    sender_name:          senderName         || "",
+    subject:              subject,
+    body:                 body,
+    wants_scrabble:       wantsScrabble       ? true : false,
+    wants_analiza:        wantsAnaliza        ? true : false,
+    wants_emocje:         wantsEmocje         ? true : false,
+    wants_obrazek:        wantsObrazek        ? true : false,
+    wants_generator_pdf:  wantsGeneratorPdf   ? true : false,
+    wants_smierc:         wantsSmierc         ? true : false,
+    etap:                 smircData ? smircData.etap : 1,
+    data_smierci:         smircData ? smircData.data_smierci : "nieznanego dnia",
+    historia:             smircData ? smircData.historia : [],
+    wants_text_reply:     (isBiz || isAllowed || containsKeyword) ? true : false,
+    attachments:          attachments         || [],
+    previous_body:        previousBody        || null,
+    previous_subject:     previousSubject     || null
   };
 
   console.log("Webhook — sender: " + payload.sender);
-  console.log("Webhook — sender_name: " + payload.sender_name);
-  console.log("Webhook — subject: " + (payload.subject || "(brak)"));
-  console.log("Webhook — body długość: " + (payload.body ? payload.body.length : 0) + " znaków");
-  console.log("Webhook — previous_body: " + (payload.previous_body ? payload.previous_body.length + " znaków" : "null"));
-  console.log("Webhook — previous_subject: " + (payload.previous_subject || "null"));
-  console.log("Webhook — flagi: scrabble=" + payload.wants_scrabble +
-    " | analiza=" + payload.wants_analiza +
-    " | emocje=" + payload.wants_emocje +
-    " | obrazek=" + payload.wants_obrazek);
-  console.log("Webhook — załączniki: " + payload.attachments.length);
+  console.log("Webhook — flagi: smierc=" + payload.wants_smierc + " etap=" + payload.etap);
 
   var options = {
     method:             "post",
@@ -648,10 +850,10 @@ function _callBackend(sender, senderName, subject, body, url,
     var resp = UrlFetchApp.fetch(url, options);
     var code = resp.getResponseCode();
     if (code === 200) {
-      console.log("Webhook — odpowiedź OK (200), rozmiar: " + resp.getContentText().length + " znaków");
+      console.log("Webhook — odpowiedź OK (200)");
       return { json: JSON.parse(resp.getContentText()) };
     } else {
-      console.error("Backend zwrócił kod " + code + ": " + resp.getContentText());
+      console.error("Backend zwrócił kod " + code);
     }
   } catch (e) {
     console.error("Błąd połączenia z backendem: " + e.message);
@@ -668,22 +870,27 @@ function __AAA_processEmails() {
     return;
   }
 
-  var BIZ_LIST         = _getListFromProps("BIZ_LIST");
-  var ALLOWED_LIST     = _getListFromProps("ALLOWED_LIST");
-  var KEYWORDS         = _getListFromProps("KEYWORDS");
-  var KEYWORDS1        = _getListFromProps("KEYWORDS1");
-  var KEYWORDS2        = _getListFromProps("KEYWORDS2");
-  var KEYWORDS3        = _getListFromProps("KEYWORDS3");
-  var KEYWORDS4        = _getListFromProps("KEYWORDS4");
-  var KEYWORDS_JOKER   = _getListFromProps("KEYWORDS_JOKER");
-  var KEYWORDS_OBRAZEK = _getListFromProps("KEYWORDS_OBRAZEK");
+  var BIZ_LIST                   = _getListFromProps("BIZ_LIST");
+  var ALLOWED_LIST               = _getListFromProps("ALLOWED_LIST");
+  var ALLOWED_LIST_GENERATOR_PDF = _getListFromProps("ALLOWED_LIST_GENERATOR_PDF");
+  var KEYWORDS                   = _getListFromProps("KEYWORDS");
+  var KEYWORDS1                  = _getListFromProps("KEYWORDS1");
+  var KEYWORDS2                  = _getListFromProps("KEYWORDS2");
+  var KEYWORDS3                  = _getListFromProps("KEYWORDS3");
+  var KEYWORDS4                  = _getListFromProps("KEYWORDS4");
+  var KEYWORDS_JOKER             = _getListFromProps("KEYWORDS_JOKER");
+  var KEYWORDS_OBRAZEK           = _getListFromProps("KEYWORDS_OBRAZEK");
+  var KEYWORDS_GENERATOR_PDF     = _getListFromProps("KEYWORDS_GENERATOR_PDF");
+  var KEYWORDS_SMIERC            = _getListFromProps("KEYWORDS_SMIERC");
+
+  var DATA_SMIERCI = props.getProperty("DATA_SMIERCI") || "nieznanego dnia";
 
   var maskMode = false;
 
   var knownSenders = _getKnownSenders();
   console.log("Znani nadawcy z historii: " + knownSenders.length);
 
-  var threads = GmailApp.getInboxThreads(0, 20);
+  var threads = GmailApp.getInboxThreads(0, 10);
   for (var i = 0; i < threads.length; i++) {
     var thread = threads[i];
     if (!thread.isUnread()) continue;
@@ -699,9 +906,31 @@ function __AAA_processEmails() {
     var plainBody  = msg.getPlainBody();
     var searchText = (plainBody + " " + subject).toLowerCase();
 
-    var isBiz          = BIZ_LIST.indexOf(fromEmail) !== -1;
-    var isAllowed      = ALLOWED_LIST.indexOf(fromEmail) !== -1;
-    var isKnownSender  = knownSenders.indexOf(fromEmail) !== -1;
+    var isBiz         = BIZ_LIST.indexOf(fromEmail) !== -1;
+    var isAllowed     = ALLOWED_LIST.indexOf(fromEmail) !== -1;
+    var isKnownSender = knownSenders.indexOf(fromEmail) !== -1;
+
+    var isAllowedGeneratorPdf = ALLOWED_LIST_GENERATOR_PDF.indexOf(fromEmail) !== -1;
+    var containsKeywordGeneratorPdf = KEYWORDS_GENERATOR_PDF.some(function(k) {
+      return k && searchText.indexOf(k) !== -1;
+    });
+    var wantsGeneratorPdf = isAllowedGeneratorPdf || containsKeywordGeneratorPdf;
+
+    var containsKeywordSmierc = KEYWORDS_SMIERC.some(function(k) {
+      return k && searchText.indexOf(k) !== -1;
+    });
+    var wantsSmierc = false;
+    var smircData = null;
+    
+    console.log("DEBUG: containsKeywordSmierc=" + containsKeywordSmierc);
+    
+    // NOWA LOGIKA: Jeśli osoba ma arkusz w SMIERC → automatycznie smierc
+    // (nie potrzebuje słowa kluczowego, wystarczy że jest w bazie)
+    smircData = _getSmircData(fromEmail);
+    if (smircData) {
+      wantsSmierc = true;
+      console.log("SMIERC aktywowany automatycznie dla: " + fromEmail + " etap=" + smircData.etap);
+    }
 
     var containsKeyword = (
       KEYWORDS.some(function(k){  return k && searchText.indexOf(k) !== -1; }) ||
@@ -726,14 +955,13 @@ function __AAA_processEmails() {
     if (containsJoker) {
       containsKeyword        = true;
       containsKeyword2       = true;
-      containsKeyword3       = true;
-      containsKeyword4       = true;
       containsKeywordObrazek = true;
+      wantsGeneratorPdf      = true;
     }
 
     if (!isBiz && !isAllowed && !isKnownSender && !containsKeyword &&
         !containsKeyword2 && !containsKeyword3 &&
-        !containsKeyword4 && !containsKeywordObrazek) {
+        !containsKeyword4 && !containsKeywordObrazek && !wantsGeneratorPdf && !wantsSmierc) {
       var label = GmailApp.getUserLabelByName("processed");
       if (!label) label = GmailApp.createLabel("processed");
       thread.addLabel(label);
@@ -748,8 +976,16 @@ function __AAA_processEmails() {
       .concat(KEYWORDS4)
       .concat(KEYWORDS_JOKER)
       .concat(KEYWORDS_OBRAZEK)
+      .concat(KEYWORDS_SMIERC)
       .filter(Boolean);
     var sanitizedBody = removeKeywordsFromText(plainBody, combinedKeywords, maskMode);
+
+    if (containsKeywordGeneratorPdf) {
+      KEYWORDS_GENERATOR_PDF.forEach(function(k) {
+        sanitizedBody = removeGeneratorPdfKeyword(sanitizedBody, k);
+        subject       = removeGeneratorPdfKeyword(subject, k);
+      });
+    }
 
     var previousData    = findLastMessageBySender(fromEmail);
     var previousBody    = previousData ? previousData.body    : null;
@@ -759,6 +995,10 @@ function __AAA_processEmails() {
     if (containsKeyword3 || containsKeyword4) {
       allAttachments = getAllAttachments(msg);
       console.log("Znaleziono załączników: " + allAttachments.length);
+    }
+
+    if (!smircData && wantsSmierc === false) {
+      smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
     }
 
     var response = _callBackend(
@@ -771,9 +1011,16 @@ function __AAA_processEmails() {
       containsKeyword3,
       containsKeyword4,
       containsKeywordObrazek,
+      wantsGeneratorPdf,
+      wantsSmierc,
+      smircData,
       allAttachments,
       previousBody,
-      previousSubject
+      previousSubject,
+      isBiz,
+      isAllowed,
+      isKnownSender,
+      containsKeyword
     );
 
     if (response && response.json) {
@@ -800,17 +1047,25 @@ function __AAA_processEmails() {
       if (json.nawiazanie) {
         executeNawiazanieMailSend(json.nawiazanie, fromEmail, subject, msg);
       }
+      if (wantsGeneratorPdf && json.generator_pdf) {
+        executeGeneratorPdfMailSend(json.generator_pdf, fromEmail, subject, msg);
+      }
+      if (wantsSmierc && json.smierc) {
+        var newEtap = json.smierc.nowy_etap || smircData.etap;
+        executeSmircMailSend(json.smierc, fromEmail, subject, msg, newEtap);
+        _updateSmircData(fromEmail, newEtap);
+      }
 
       saveToHistory(fromEmail, subject, sanitizedBody);
       thread.markRead();
 
     } else {
-      console.warn("Pominięto oznaczenie jako przeczytane — backend nie odpowiedział dla: " + fromEmail);
+      console.warn("Backend nie odpowiedział dla: " + fromEmail);
     }
   }
 }
 
-// ── Helper: wyciągnij email z nagłówka From ───────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function extractEmail(fromHeader) {
   var m = fromHeader.match(/<([^>]+)>/);
   if (m) return m[1];
