@@ -5,13 +5,14 @@ Webhook backend dla Google Apps Script.
 
 Respondery uruchamiane w DWÓCH FALACH równolegle:
   Fala 1 (lekkie — tekst AI): zwykly, biznes, scrabble, nawiazanie
-  Fala 2 (ciężkie — obrazy/pliki): obrazek, emocje, analiza, generator_pdf
+  Fala 2 (ciężkie — obrazy/pliki): obrazek, emocje, analiza, generator_pdf, smierc
 
-Nowy responder: generator_pdf
-  - Aktywowany przez flagę wants_generator_pdf (słowo kluczowe w GAS)
-  - Lub przez ALLOWED_LIST_GENERATOR_PDF (adres email zawsze generuje PDF)
-  - Groq → DeepSeek fallback
-  - Zwraca PDF jako base64 w polu "generator_pdf"
+Respondery:
+  - generator_pdf: Aktywowany przez flagę wants_generator_pdf
+  - smierc: Pośmiertny autoresponder — aktywowany przez wants_smierc
+    * Wymaga dodatkowych pól: etap, data_smierci, historia
+    * Generuje odpowiedzi z zaświatów z progressją etapów
+    * Etap 8+: Wysłannik generujący obrazki FLUX
 """
 import os
 import base64
@@ -69,6 +70,7 @@ def webhook():
     wants_emocje         = bool(data.get("wants_emocje"))
     wants_obrazek        = bool(data.get("wants_obrazek"))
     wants_generator_pdf  = bool(data.get("wants_generator_pdf"))
+    wants_smierc         = bool(data.get("wants_smierc"))
 
     flask_app = app
 
@@ -113,6 +115,21 @@ def webhook():
         wave2["generator_pdf"] = lambda: run(
             build_generator_pdf_section, _body, sender_name=_sn
         )
+    if wants_smierc:
+        # Moduł pośmiertny — wymaga dodatkowych pól
+        _sender = sender
+        _body_smierc = body
+        _etap = data.get("etap", 1)
+        _data_smierci = data.get("data_smierci", "nieznanego dnia")
+        _historia = data.get("historia", [])
+        wave2["smierc"] = lambda: run(
+            build_smierc_section,
+            sender_email=_sender,
+            body=_body_smierc,
+            etap=_etap,
+            data_smierci_str=_data_smierci,
+            historia=_historia,
+        )
 
     if wave2:
         response_data.update(_run_parallel(wave2, flask_app))
@@ -126,7 +143,7 @@ def webhook():
     # ── Logowanie ─────────────────────────────────────────────────────────────
     app.logger.info(
         "Response: biznes=%s | zwykly=%s | scrabble=%s | analiza=%s | emocje=%s "
-        "| obrazek=%s | nawiazanie=%s | generator_pdf=%s | sender=%s",
+        "| obrazek=%s | nawiazanie=%s | generator_pdf=%s | smierc=%s | sender=%s",
         bool(response_data.get("biznes",    {}).get("pdf",  {}).get("base64")),
         bool(response_data.get("zwykly",    {}).get("pdf",  {}).get("base64")),
         "tak" if "scrabble"       in response_data else "nie",
@@ -135,52 +152,11 @@ def webhook():
         "tak" if "obrazek"        in response_data else "nie",
         "tak" if response_data.get("nawiazanie", {}).get("has_history") else "nie",
         "tak" if response_data.get("generator_pdf", {}).get("pdf") else "nie",
+        "tak" if "smierc"         in response_data else "nie",
         sender_name or sender or "(brak)",
     )
 
     return jsonify(response_data), 200
-
-
-@app.route("/webhook_smierc", methods=["POST"])
-def webhook_smierc():
-    """
-    Pośmiertny autoresponder Pawła.
-    Oczekiwany JSON: sender, body, etap, data_smierci, historia
-    """
-    data = request.json or {}
-
-    sender       = data.get("sender",       "")
-    body         = data.get("body",         "")[:2000]
-    etap         = int(data.get("etap",     1))
-    data_smierci = data.get("data_smierci", "nieznanego dnia")
-    historia     = data.get("historia",     [])
-
-    if not body:
-        return jsonify({"error": "Brak treści wiadomości"}), 400
-
-    app.logger.info(
-        "webhook_smierc — sender=%s | etap=%d | historia=%d wpisów",
-        sender, etap, len(historia)
-    )
-
-    wynik = build_smierc_section(
-        sender_email     = sender,
-        body             = body,
-        etap             = etap,
-        data_smierci_str = data_smierci,
-        historia         = historia,
-    )
-
-    wynik["reply_html"] = wynik.get("reply_html", "") + \
-        "<p><i>W razie dalszych pytań pisz śmiało.</i></p>"
-
-    app.logger.info(
-        "webhook_smierc — nowy_etap=%d | html=%d znaków",
-        wynik.get("nowy_etap", etap),
-        len(wynik.get("reply_html", ""))
-    )
-
-    return jsonify(wynik), 200
 
 
 @app.route("/webhook_gif", methods=["POST"])
