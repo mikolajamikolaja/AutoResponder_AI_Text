@@ -119,11 +119,12 @@ def _call_deepseek_flux_fallback(system: str, user: str) -> str | None:
 
 
 # ── Generuj kreatywny prompt FLUX przez Groq (+ fallback DeepSeek) ─────────────
-def _generate_flux_prompt(wyslannik_text: str) -> str:
+def _generate_flux_prompt(wyslannik_text: str) -> tuple:
     """
     Groq dostaje tekst odpowiedzi Wysłannika i generuje kreatywny prompt FLUX.
     Fallback: DeepSeek z tym samym systemem.
     Fallback 2: statyczny styl z pliku IMAGE_STYLE.
+    Zwraca (prompt, provider_name).
     """
     system = _load_txt(
         FILE_WYSLANNIK_FLUX_GROQ_SYS,
@@ -143,14 +144,14 @@ def _generate_flux_prompt(wyslannik_text: str) -> str:
     result = _call_groq(system, user)
     if result:
         current_app.logger.info("[flux-prompt] Wygenerowano przez Groq")
-        return result
+        return result, "Groq"
 
     # Próba 2: DeepSeek fallback
     current_app.logger.warning("[flux-prompt] Groq zawiódł — próbuję DeepSeek")
     result = _call_deepseek_flux_fallback(system, user)
     if result:
         current_app.logger.info("[flux-prompt] Wygenerowano przez DeepSeek (fallback)")
-        return result
+        return result, "DeepSeek (fallback po Groq)"
 
     # Próba 3: statyczny fallback z pliku
     current_app.logger.warning("[flux-prompt] Oba API zawiodły — używam statycznego stylu")
@@ -159,7 +160,7 @@ def _generate_flux_prompt(wyslannik_text: str) -> str:
         fallback="surreal heavenly paradise, divine golden light, celestial beings, "
                  "otherworldly atmosphere, vivid colors, digital art"
     )
-    return image_style
+    return image_style, "statyczny fallback (oba API zawiodły)"
 
 
 # ── Wczytaj etapy z pliku ─────────────────────────────────────────────────────
@@ -354,12 +355,11 @@ def build_smierc_section(
         )
 
         # 2. Prompt FLUX — Groq (fallback: DeepSeek, potem statyczny)
-        flux_prompt   = _generate_flux_prompt(wynik_tekst or body)
-        flux_provider = "Groq→FLUX" if _call_groq.__doc__ else "fallback"
+        flux_prompt, flux_provider = _generate_flux_prompt(wynik_tekst or body)
 
         # 3. Generuj obrazek
         image     = _generate_flux_image(flux_prompt)
-        debug_txt = _build_debug_txt(wynik_tekst or "", flux_prompt, "Groq (fallback: DeepSeek)", etap)
+        debug_txt = _build_debug_txt(wynik_tekst or "", flux_prompt, flux_provider, etap)
 
         current_app.logger.info(
             "[wyslannik] etap=%d | flux_prompt=%.100s | image=%s",

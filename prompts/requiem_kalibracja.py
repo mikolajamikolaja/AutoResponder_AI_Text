@@ -155,7 +155,7 @@ def generate_flux_image(prompt: str):
 
 # ── Backup ────────────────────────────────────────────────────────────────────
 def save_backup(image_bytes, flux_prompt, flux_provider,
-                wyslannik_text, email_provider, provider_info):
+                wyslannik_text, email_provider, body_text):
     ts       = datetime.datetime.now().strftime("%H_%M_%S")
     run_dir  = BACKUP_DIR / f"Wyniki_{ts}"
     prom_dir = run_dir / "prompts"
@@ -163,6 +163,10 @@ def save_backup(image_bytes, flux_prompt, flux_provider,
 
     if image_bytes:
         (run_dir / "niebo_wyslannik.png").write_bytes(image_bytes)
+
+    # tekst_zrodlowy.txt — wiadomość nadawcy użyta do testów
+    if body_text:
+        (run_dir / "tekst_zrodlowy.txt").write_text(body_text, encoding="utf-8")
 
     debug = (
         f"=== REQUIEM RESPONDER — DEBUG FLUX ===\n"
@@ -475,7 +479,8 @@ class RequiemApp:
                 "nigdy liczbami. Ton: dostojny, poetycki, lekko absurdalny. Max 4 zdania. "
                 "Podpisz się: — Wysłannik z wyższych sfer")
             result, prov = call_llm_email(system, f"Osoba pyta: {body}")
-            self._last_wyslannik = result or ""
+            self._last_wyslannik  = result or ""
+            self._last_email_prov = prov
             self.root.after(0, lambda: (
                 self._set(self.res_wyslannik, result or "[Błąd API]"),
                 self.wyslannik_prov.configure(
@@ -556,18 +561,20 @@ class RequiemApp:
 
     def _save_backup(self):
         try:
+            body = self._get_body()
             run_dir = save_backup(
                 self._last_img_bytes,
                 self._last_flux,
                 self._last_flux_prov,
                 self._last_wyslannik,
                 self._last_email_prov,
-                ""
+                body
             )
             messagebox.showinfo("✓ Backup zapisany",
                 f"Zapisano do:\n{run_dir}\n\n"
                 f"  niebo_wyslannik.png\n"
                 f"  _.txt\n"
+                f"  tekst_zrodlowy.txt\n"
                 f"  prompts/ (wszystkie .txt + smierc.txt)")
 
             for w in [self.res_pawel, self.res_pawel7, self.res_wyslannik, self.flux_text]:
