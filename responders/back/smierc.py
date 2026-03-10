@@ -8,13 +8,6 @@ Tryby:
   ETAP 8+   — WYSŁANNIK: odpowiedź w stylu Księgi Urantii
               + obrazek FLUX z rzeczownikami z wiadomości
               + załącznik _.txt z pełnym promptem wysłanym do FLUX
-
-Pliki promptów w katalogu prompts/:
-  requiem_PAWEL_system_1-6.txt       — system prompt Pawła (etapy 1-6)
-  requiem_PAWEL_system_7.txt         — system prompt Pawła (etap 7, reinkarnacja)
-  requiem_WYSLANNIK_system_8_.txt    — system prompt Wysłannika (etap 8+)
-  requiem_WYSLANNIK_IMAGE_STYLE.txt  — styl obrazka FLUX
-  requiem_WYSLANNIK_flux_prompt.txt  — szablon promptu FLUX (placeholdery: {translated}, {IMAGE_STYLE})
 """
 
 import os
@@ -30,28 +23,16 @@ PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 MEDIA_DIR   = os.path.join(BASE_DIR, "media")
 ETAPY_FILE  = os.path.join(PROMPTS_DIR, "pozagrobowe.txt")
 
-# ── Ścieżki plików promptów ───────────────────────────────────────────────────
-FILE_PAWEL_SYSTEM_1_6      = os.path.join(PROMPTS_DIR, "requiem_PAWEL_system_1-6.txt")
-FILE_PAWEL_SYSTEM_7        = os.path.join(PROMPTS_DIR, "requiem_PAWEL_system_7.txt")
-FILE_WYSLANNIK_SYSTEM_8_   = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_system_8_.txt")
-FILE_WYSLANNIK_IMAGE_STYLE = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_IMAGE_STYLE.txt")
-FILE_WYSLANNIK_FLUX_PROMPT = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_flux_prompt.txt")
-
 # ── Stałe FLUX ────────────────────────────────────────────────────────────────
 HF_API_URL  = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
 HF_STEPS    = 5
 HF_GUIDANCE = 5
 TIMEOUT_SEC = 55
 
-
-# ── Wczytaj plik tekstowy ─────────────────────────────────────────────────────
-def _load_txt(path: str, fallback: str = "") -> str:
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read().strip()
-    except Exception as e:
-        current_app.logger.warning("Błąd wczytywania pliku %s: %s", path, e)
-        return fallback
+WYSLANNIK_IMAGE_STYLE = (
+    "heavenly paradise scene, bright golden light, clouds, magical atmosphere, "
+    "colorful, joyful, vibrant colors, digital art style, beautiful and uplifting"
+)
 
 
 # ── Wczytaj etapy z pliku ─────────────────────────────────────────────────────
@@ -113,11 +94,16 @@ def _get_hf_tokens() -> list:
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
-# ── Generuj obrazek FLUX — zwraca dict|None ──────────────────────────────────
+# ── Generuj obrazek FLUX — zwraca dict|None ─────────────────────────────────
 def _generate_flux_image(prompt: str):
+    """
+    Wysyła pełny prompt do HF FLUX.1-schnell.
+    Dla każdego tokenu próbuje po kolei aż któryś zadziała.
+    Zwraca dict z base64 PNG lub None przy błędzie.
+    """
     tokens = _get_hf_tokens()
     if not tokens:
-        current_app.logger.error("[wyslannik] Brak tokenów HF!")
+        current_app.logger.error("[wyslannik] Brak HF_TOKEN w zmiennych środowiskowych!")
         return None
 
     payload = {
@@ -127,15 +113,25 @@ def _generate_flux_image(prompt: str):
             "guidance_scale":      HF_GUIDANCE,
         },
     }
-    current_app.logger.info("[wyslannik] FLUX prompt PEŁNY: %s", prompt)
+
+    current_app.logger.info(
+        "[wyslannik] FLUX — tokeny dostępne: %s | prompt: %.150s",
+        [n for n, _ in tokens], prompt,
+    )
 
     for name, token in tokens:
-        headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept":        "image/png",
+        }
         try:
-            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
+            resp = requests.post(
+                HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC
+            )
             if resp.status_code == 200:
                 current_app.logger.info(
-                    "[wyslannik] FLUX sukces token=%s PNG %d B", name, len(resp.content)
+                    "[wyslannik] ✓ Sukces! Token=%s | PNG %d B",
+                    name, len(resp.content)
                 )
                 return {
                     "base64":       base64.b64encode(resp.content).decode("ascii"),
@@ -143,18 +139,30 @@ def _generate_flux_image(prompt: str):
                     "filename":     "niebo_wyslannik.png",
                 }
             elif resp.status_code in (401, 403):
-                current_app.logger.warning("[wyslannik] token %s nieważny", name)
+                current_app.logger.warning(
+                    "[wyslannik] Token %s nieważny — następny token",
+                    name
+                )
             elif resp.status_code in (503, 529):
-                current_app.logger.warning("[wyslannik] token %s przeciążony", name)
+                current_app.logger.warning(
+                    "[wyslannik] Token %s przeciążony — następny token",
+                    name
+                )
             else:
                 current_app.logger.warning(
-                    "[wyslannik] token %s błąd %s: %s",
-                    name, resp.status_code, resp.text[:100]
+                    "[wyslannik] Token %s błąd %s — następny token",
+                    name, resp.status_code
                 )
         except requests.exceptions.Timeout:
-            current_app.logger.warning("[wyslannik] token %s timeout", name)
+            current_app.logger.warning(
+                "[wyslannik] Token %s timeout — następny token",
+                name
+            )
         except Exception as e:
-            current_app.logger.warning("[wyslannik] token %s wyjątek: %s", name, str(e)[:50])
+            current_app.logger.warning(
+                "[wyslannik] Token %s błąd: %s — następny token",
+                name, str(e)[:50]
+            )
 
     current_app.logger.error("[wyslannik] Wszystkie tokeny zawiodły!")
     return None
@@ -178,7 +186,9 @@ def _extract_nouns(body: str) -> list:
     if not wynik or "BRAK" in wynik.upper():
         return []
 
+    # Wyczyść odpowiedź — usuń ewentualne zdania, zostaw tylko słowa
     nouns = [n.strip().lower() for n in wynik.split(",") if n.strip()]
+    # Odfiltruj zbyt długie frazy (DeepSeek czasem dodaje zdania)
     nouns = [n for n in nouns if len(n.split()) <= 3]
     current_app.logger.info("[wyslannik] Rzeczowniki po filtracji: %s", nouns)
     return nouns[:7]
@@ -198,6 +208,7 @@ def _translate_nouns(nouns: list) -> str:
     if not translated:
         return ", ".join(nouns)
 
+    # Wyczyść — tylko słowa i przecinki
     translated = re.sub(r'[^a-zA-Z,\s]', '', translated).strip().lower()
     current_app.logger.info("[wyslannik] Tłumaczenie czyste: %s", translated)
     return translated
@@ -205,36 +216,29 @@ def _translate_nouns(nouns: list) -> str:
 
 # ── Zbuduj prompt FLUX dla wysłannika ────────────────────────────────────────
 def _build_wyslannik_flux_prompt(nouns: list) -> str:
-    image_style = _load_txt(
-        FILE_WYSLANNIK_IMAGE_STYLE,
-        fallback="heavenly paradise scene, bright golden light, clouds, magical atmosphere, "
-                 "colorful, joyful, vibrant colors, digital art style, beautiful and uplifting"
-    )
-
     if not nouns:
-        return f"paradise heaven scene, golden light, clouds, angels, {image_style}"
+        return f"paradise heaven scene, golden light, clouds, angels, {WYSLANNIK_IMAGE_STYLE}"
 
     translated = _translate_nouns(nouns)
     if not translated:
         translated = ", ".join(nouns)
 
-    flux_template = _load_txt(
-        FILE_WYSLANNIK_FLUX_PROMPT,
-        fallback=(
-            "heavenly paradise made entirely of {translated}, "
-            "surreal paradise where {translated} float and multiply endlessly, "
-            "divine golden light, overwhelming abundance of {translated}, "
-            "joyful absurd heavenly scene, {IMAGE_STYLE}"
-        )
+    prompt = (
+        f"heavenly paradise scene with flying colorful {translated}, "
+        f"magical floating {translated} in paradise clouds, "
+        f"golden divine light, joyful cheerful atmosphere, "
+        f"{WYSLANNIK_IMAGE_STYLE}"
     )
-
-    prompt = flux_template.replace("{translated}", translated).replace("{IMAGE_STYLE}", image_style)
     current_app.logger.info("[wyslannik] FLUX prompt zbudowany: %s", prompt)
-    return prompt, translated
+    return prompt
 
 
 # ── Zbuduj załącznik _.txt z debugiem promptu ────────────────────────────────
 def _build_debug_txt(nouns: list, translated: str, flux_prompt: str, etap: int) -> dict:
+    """
+    Buduje plik _.txt z pełnymi danymi wysłanymi do FLUX.
+    Załączany do każdej odpowiedzi wysłannika.
+    """
     content = (
         f"=== REQUIEM RESPONDER — DEBUG FLUX ===\n"
         f"Etap: {etap}\n\n"
@@ -292,14 +296,13 @@ def build_smierc_section(
     # ── WYSŁANNIK (etap 8+) ───────────────────────────────────────────────────
     if etap > max_etap:
         historia_txt = _format_historia(historia)
-        system = _load_txt(
-            FILE_WYSLANNIK_SYSTEM_8_,
-            fallback=(
-                "Jesteś wysłannikiem z wyższych sfer duchowych piszącym po polsku. "
-                "Przebijasz każdą rzecz wymienioną przez nadawcę — nie liczbami, lecz przymiotnikami. "
-                "Ton: dostojny, ciepły, lekko absurdalny. Odpowiedź maksymalnie 4 zdania. "
-                "Podpisz się: — Wysłannik z wyższych sfer"
-            )
+        system = (
+            "Jesteś wysłannikiem z wyższych sfer duchowych. "
+            "Odpowiadasz z głęboką mądrością kosmiczną. "
+            "Nigdy nie ujawniasz źródła swojej wiedzy. "
+            "Piszesz po polsku, spokojnie, z dostojeństwem i ciepłem. "
+            "Reklamujesz niebo jako miejsce niesamowitej radości i wolności. "
+            "Odpowiedź maksymalnie 4 zdania."
         )
         user_msg    = f"Osoba pyta: {body}\n\nHistoria:\n{historia_txt}"
         wynik_tekst = call_deepseek(system, user_msg, MODEL_TYLER)
@@ -311,11 +314,12 @@ def build_smierc_section(
                  "<br><i>— Wysłannik z wyższych sfer</i></p>"
         )
 
-        # Wyciągnij rzeczowniki → zbuduj prompt (tłumaczenie wewnątrz) → generuj
-        nouns                  = _extract_nouns(body)
-        flux_prompt, translated = _build_wyslannik_flux_prompt(nouns)
-        image                  = _generate_flux_image(flux_prompt)
-        debug_txt              = _build_debug_txt(nouns, translated, flux_prompt, etap)
+        # Wyciągnij rzeczowniki → przetłumacz → zbuduj prompt → generuj
+        nouns       = _extract_nouns(body)
+        translated  = _translate_nouns(nouns) if nouns else ""
+        flux_prompt = _build_wyslannik_flux_prompt(nouns)
+        image       = _generate_flux_image(flux_prompt)
+        debug_txt   = _build_debug_txt(nouns, translated, flux_prompt, etap)
 
         current_app.logger.info(
             "[wyslannik] etap=%d | rzeczowniki=%s | image=%s",
@@ -333,17 +337,15 @@ def build_smierc_section(
     if etap < max_etap:
         etap_tresc   = etapy.get(etap, "Podróż trwa")
         historia_txt = _format_historia(historia)
-        system_tmpl  = _load_txt(
-            FILE_PAWEL_SYSTEM_1_6,
-            fallback=(
-                "Jesteś Pawłem — zmarłym mężczyzną piszącym z zaświatów. "
-                "Piszesz po polsku. Ton: spokojny, lekko absurdalny, z humorem. "
-                "Odpowiedź maksymalnie 5 zdań. Na końcu podpisz się: '— Autoresponder Pawła-zza-światów' "
-                "Koniecznie wspomnij że umarłeś na suchoty dnia {data_smierci_str}. "
-                "Opisz swój aktualny etap rozwijając podany punkt. Nie wspominaj Księgi Urantii."
-            )
+        system = (
+            "Jesteś Pawłem — zmarłym mężczyzną piszącym z zaświatów. "
+            "Piszesz po polsku. Ton: spokojny, lekko absurdalny, z humorem. "
+            "Odpowiedź maksymalnie 5 zdań. Na końcu podpisz się: '— Autoresponder Pawła-zza-światów' "
+            f"Koniecznie wspomnij że umarłeś na suchoty dnia {data_smierci_str}. "
+            "Nawiąż do wiadomości tej osoby paradoksalnie chwaląc, to że na Ziemi jest lepiej niż w niebie pomimo, że ta osoba będzie narzekać  "
+            "Opisz swój aktualny etap rozwijając podany punkt. "
+            "Nie wspominaj Księgi Urantii."
         )
-        system     = system_tmpl.replace("{data_smierci_str}", data_smierci_str)
         user_msg   = f"Etap w zaświatach: {etap_tresc}\nWiadomość: {body}\nHistoria:\n{historia_txt}"
         wynik      = call_deepseek(system, user_msg, MODEL_TYLER)
         reply_html = (
@@ -361,19 +363,15 @@ def build_smierc_section(
     # ── ETAP 7 — reinkarnacja ─────────────────────────────────────────────────
     etap_tresc   = etapy.get(max_etap, "Reinkarnacja nadchodzi nieuchronnie")
     historia_txt = _format_historia(historia)
-    system_tmpl  = _load_txt(
-        FILE_PAWEL_SYSTEM_7,
-        fallback=(
-            "Jesteś Pawłem — zmarłym mężczyzną piszącym z zaświatów. "
-            "Piszesz po polsku. Ton: spokojny, wzruszający, tajemniczy. "
-            "Odpowiedź maksymalnie 5 zdań. "
-            "Umarłem na suchoty dnia {data_smierci_str}. "
-            "Poinformuj że właśnie nadchodzi moment reinkarnacji. "
-            "Nie możesz powiedzieć gdzie ani kim się urodzisz. "
-            "Pożegnaj się ciepło. Nie wspominaj Księgi Urantii."
-        )
+    system = (
+        "Jesteś Pawłem — zmarłym mężczyzną piszącym z zaświatów. "
+        "Piszesz po polsku. Ton: spokojny, wzruszający, tajemniczy. "
+        "Odpowiedź maksymalnie 5 zdań. "
+        f"Umarłem na suchoty dnia {data_smierci_str}. "
+        "Poinformuj że właśnie nadchodzi moment reinkarnacji. "
+        "Nie możesz powiedzieć gdzie ani kim się urodzisz. "
+        "Pożegnaj się ciepło. Nie wspominaj Księgi Urantii."
     )
-    system     = system_tmpl.replace("{data_smierci_str}", data_smierci_str)
     user_msg   = f"Etap: {etap_tresc}\nWiadomość: {body}\nHistoria:\n{historia_txt}"
     wynik      = call_deepseek(system, user_msg, MODEL_TYLER)
     reply_html = (
