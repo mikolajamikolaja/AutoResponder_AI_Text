@@ -1,0 +1,1147 @@
+/**
+ * __AAA_processEmails - Google Apps Script
+ * WERSJA 3 - prawidłowe czytanie struktury z arkusza smierc
+ * 
+ * Struktura SMIERC arkusza:
+ * - Każda zakładka = email osoby (nazwa: email_z_underscore, np. persecyfr_gmail_com)
+ * - Kolumna A: nr etapu (1, 2, 3...)
+ * - Kolumna B: data_smierci
+ * - Kolumna C: mail_od_osoby
+ * - Kolumna D: odpowiedz_pawla
+ * - Kolumna E: last_msg_id
+ */
+
+// ── Helpers: Script Properties ───────────────────────────────────────────────
+function _getListFromProps(name) {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(name) || "";
+  return raw.split(",").map(function(s){ return s.trim().toLowerCase(); }).filter(Boolean);
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removeKeywordsFromText(text, keywords, maskMode) {
+  if (!text || !keywords || !keywords.length) return text;
+  var sanitized = text;
+  var sorted = keywords.slice().filter(Boolean).sort(function(a, b){ return b.length - a.length; });
+  sorted.forEach(function(k) {
+    if (!k) return;
+    var re = new RegExp(escapeRegExp(k), "gi");
+    sanitized = sanitized.replace(re, maskMode ? "[REDACTED]" : "");
+  });
+  sanitized = sanitized.replace(/[ \t]{2,}/g, " ");
+  sanitized = sanitized.replace(/\n{3,}/g, "\n\n");
+  return sanitized.trim();
+}
+
+function removeGeneratorPdfKeyword(text, keyword) {
+  if (!text || !keyword) return text;
+  var shortened = keyword.slice(0, -1);
+  var re = new RegExp(escapeRegExp(keyword), "gi");
+  return text.replace(re, shortened);
+}
+
+// ── Google Sheets: historia zwykłych wiadomości ───────────────────────────────
+function saveToHistory(senderEmail, subject, body) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
+    if (!sheetId) {
+      console.warn("Brak HISTORY_SHEET_ID — historia nie zostanie zapisana.");
+      return;
+    }
+    var ss      = SpreadsheetApp.openById(sheetId);
+    var sheet   = ss.getSheets()[0];
+    var lastRow = sheet.getLastRow();
+
+    var foundRow = -1;
+    if (lastRow >= 2) {
+      var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+      for (var i = 0; i < emailCol.length; i++) {
+        if ((emailCol[i][0] || "").toString().toLowerCase().trim() === senderEmail.toLowerCase().trim()) {
+          foundRow = i + 2;
+          break;
+        }
+      }
+    }
+
+    var rowData = [
+      new Date(),
+      senderEmail,
+      subject || "",
+      (body || "").substring(0, 2000)
+    ];
+
+    if (foundRow !== -1) {
+      sheet.getRange(foundRow, 1, 1, 4).setValues([rowData]);
+      console.log("Historia zaktualizowana dla: " + senderEmail);
+    } else {
+      sheet.appendRow(rowData);
+      console.log("Historia dodana dla: " + senderEmail);
+    }
+  } catch (e) {
+    console.error("Błąd zapisu historii: " + e.message);
+  }
+}
+
+function findLastMessageBySender(senderEmail) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
+    if (!sheetId) {
+      console.warn("Brak HISTORY_SHEET_ID — nie można sprawdzić historii.");
+      return null;
+    }
+    var ss      = SpreadsheetApp.openById(sheetId);
+    var sheet   = ss.getSheets()[0];
+    var lastRow = sheet.getLastRow();
+
+    if (lastRow < 2) return null;
+
+    var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+
+    for (var i = emailCol.length - 1; i >= 0; i--) {
+      if ((emailCol[i][0] || "").toString().toLowerCase().trim() === senderEmail.toLowerCase().trim()) {
+        var row = sheet.getRange(i + 2, 3, 1, 2).getValues()[0];
+        console.log("Znaleziono historię dla: " + senderEmail);
+        return {
+          subject: (row[0] || "").toString(),
+          body:    (row[1] || "").toString()
+        };
+      }
+    }
+
+    console.log("Brak historii dla: " + senderEmail);
+    return null;
+  } catch (e) {
+    console.error("Błąd odczytu historii: " + e.message);
+    return null;
+  }
+}
+
+function _getKnownSenders() {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
+    if (!sheetId) return [];
+    var sheet   = SpreadsheetApp.openById(sheetId).getSheets()[0];
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+    var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+    return emailCol.map(function(r){
+      return (r[0] || "").toString().toLowerCase().trim();
+    }).filter(Boolean);
+  } catch(e) {
+    console.error("Błąd _getKnownSenders: " + e.message);
+    return [];
+  }
+}
+
+// ── Moduł SMIERC: czytanie z arkusza gdzie zakładki to emaile ────────────────
+function _isResponseToSmircMessage(msg, senderEmail) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+    if (!sheetId) return false;
+    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
+    var sheets = ss.getSheets();
+    var sheet = null;
+    
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
+        sheet = sheets[i];
+        break;
+      }
+    }
+    
+    if (!sheet) {
+      console.log("DEBUG _isResponseToSmircMessage: brak arkusza dla " + senderEmail);
+      return false;
+    }
+    
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      console.log("DEBUG _isResponseToSmircMessage: arkusz pusty");
+      return false;
+    }
+    
+    var lastMsgId = sheet.getRange(lastRow, 5).getValue().toString().trim();
+    var currentThreadId = msg.getThread().getId();
+    
+    console.log("DEBUG _isResponseToSmircMessage: lastMsgId=" + lastMsgId + " currentThreadId=" + currentThreadId);
+    console.log("DEBUG: osoba " + senderEmail + " ma historię smierc");
+    
+    return true;
+    
+  } catch(e) {
+    console.error("Błąd _isResponseToSmircMessage: " + e.message);
+    return false;
+  }
+}
+
+function _getSmircData(senderEmail) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+    if (!sheetId) {
+      console.warn("Brak SMIERC_HISTORY_SHEET_ID");
+      return null;
+    }
+    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheet = null;
+    
+    var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
+    
+    console.log("DEBUG _getSmircData: szukam arkusza dla email=" + senderEmail + " szukam=" + sheetNameForEmail);
+    
+    var sheets = ss.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      console.log("DEBUG: arkusz [" + i + "] = " + sheets[i].getName());
+      if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
+        sheet = sheets[i];
+        console.log("DEBUG: ZNALEZIONO arkusz!");
+        break;
+      }
+    }
+    
+    if (!sheet) {
+      console.log("Brak arkusza dla email: " + senderEmail + " (szukałem: " + sheetNameForEmail + ")");
+      return null;
+    }
+    
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      console.log("Arkusz pusty: " + senderEmail);
+      return null;
+    }
+    
+    var row = sheet.getRange(lastRow, 1, 1, 5).getValues()[0];
+    var etap = parseInt(row[0]) || 1;
+    
+    var data_smierci = sheet.getRange(2, 2).getValue().toString().trim();
+    if (!data_smierci) {
+      data_smierci = "nieznanego dnia";
+    }
+    
+    console.log("Smierc data dla " + senderEmail + ": etap=" + etap + " data=" + data_smierci);
+    
+    return {
+      etap: etap,
+      data_smierci: data_smierci,
+      historia: []
+    };
+  } catch(e) {
+    console.error("Błąd _getSmircData: " + e.message);
+    return null;
+  }
+}
+
+function _updateSmircData(senderEmail, newEtap) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+    if (!sheetId) return;
+    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheet = null;
+    
+    var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
+    
+    var sheets = ss.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
+        sheet = sheets[i];
+        break;
+      }
+    }
+    
+    if (!sheet) {
+      console.log("Nie można zaktualizować - brak arkusza: " + senderEmail + " (szukałem: " + sheetNameForEmail + ")");
+      return;
+    }
+    
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      sheet.getRange(lastRow, 1).setValue(newEtap);
+      console.log("Smierc etap zaktualizowany: " + senderEmail + " → etap " + newEtap);
+    }
+  } catch(e) {
+    console.error("Błąd _updateSmircData: " + e.message);
+  }
+}
+
+// ── Moduł SMIERC: tworzenie nowego arkusza dla osoby ─────────────────────────
+function _createSmircSheetForEmail(senderEmail, dataSmierciFallback) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+    if (!sheetId) {
+      console.warn("Brak SMIERC_HISTORY_SHEET_ID - nie można utworzyć arkusza");
+      return false;
+    }
+    
+    var ss = SpreadsheetApp.openById(sheetId);
+    var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
+    
+    // Sprawdź czy arkusz już istnieje
+    var sheets = ss.getSheets();
+    for (var i = 0; i < sheets.length; i++) {
+      if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
+        console.log("Arkusz już istnieje dla: " + senderEmail);
+        return true;
+      }
+    }
+    
+    // Utwórz nowy arkusz
+    var newSheet = ss.insertSheet(sheetNameForEmail);
+    
+    // Nagłówki
+    newSheet.getRange(1, 1, 1, 5).setValues([[
+      "nr_etapu", "data_smierci", "mail_od_osoby", "odpowiedz_pawla", "last_msg_id"
+    ]]);
+    
+    // Pierwszy wiersz z danymi
+    newSheet.getRange(2, 1, 1, 5).setValues([[
+      1,
+      dataSmierciFallback || "nieznanego dnia",
+      "",
+      "",
+      ""
+    ]]);
+    
+    console.log("Utworzono nowy arkusz SMIERC dla: " + senderEmail);
+    return true;
+    
+  } catch(e) {
+    console.error("Błąd tworzenia arkusza SMIERC: " + e.message);
+    return false;
+  }
+}
+
+function _threadHasLabel(thread, labelName) {
+  try {
+    var labels = thread.getLabels();
+    for (var i = 0; i < labels.length; i++) {
+      if (labels[i].getName() === labelName) {
+        return true;
+      }
+    }
+    return false;
+  } catch(e) {
+    console.error("Błąd sprawdzenia etykiety: " + e.message);
+    return false;
+  }
+}
+
+// ── Pobierz załączniki ───────────────────────────────────────────────────────
+function getAllAttachments(msg) {
+  var attachments = msg.getAttachments();
+  if (!attachments || !attachments.length) return [];
+
+  var docTypes = [
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.oasis.opendocument.text-template",
+    "application/pdf",
+    "text/plain",
+  ];
+
+  var result = [];
+  for (var i = 0; i < attachments.length; i++) {
+    var att  = attachments[i];
+    var mime = att.getContentType();
+    var name = att.getName().toLowerCase();
+
+    var isDoc = docTypes.indexOf(mime) !== -1 ||
+                name.endsWith(".docx") ||
+                name.endsWith(".doc")  ||
+                name.endsWith(".odt")  ||
+                name.endsWith(".ott")  ||
+                name.endsWith(".pdf")  ||
+                name.endsWith(".txt");
+
+    if (isDoc) {
+      result.push({
+        base64: Utilities.base64Encode(att.getBytes()),
+        name:   att.getName()
+      });
+    }
+  }
+  return result;
+}
+
+// ── Wysyłka: standardowa ─────────────────────────────────────────────────────
+function executeMailSend(data, recipient, subject, msg, senderName) {
+  var inlineImages = {};
+  var attachments  = [];
+
+  if (data.emoticon && data.emoticon.base64) {
+    try {
+      inlineImages["emotka_cid"] = Utilities.newBlob(
+        Utilities.base64Decode(data.emoticon.base64),
+        data.emoticon.content_type || "image/png",
+        data.emoticon.filename     || "emotka.png"
+      );
+    } catch (e) { console.error("Błąd obrazka: " + e.message); }
+  }
+  if (data.pdf && data.pdf.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.pdf.base64),
+        "application/pdf",
+        data.pdf.filename || "dokument.pdf"
+      ));
+    } catch (e) { console.error("Błąd PDF: " + e.message); }
+  }
+
+  var htmlBody = data.reply_html || "<p>(Brak treści)</p>";
+  try {
+    msg.reply("", {
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         senderName
+    });
+    console.log("Wysłano: " + senderName + " -> " + recipient);
+  } catch (e) {
+    MailApp.sendEmail({
+      to:           recipient,
+      subject:      "RE: " + subject,
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         senderName
+    });
+  }
+}
+
+function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
+  if (!data) {
+    console.warn("Brak danych generator_pdf dla " + recipient);
+    return;
+  }
+
+  var attachments = [];
+  if (data.pdf && data.pdf.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.pdf.base64),
+        "application/pdf",
+        data.pdf.filename || "egzamin.pdf"
+      ));
+    } catch (e) {
+      console.error("Błąd PDF egzaminu: " + e.message);
+    }
+  }
+
+  var htmlBody = data.reply_html ||
+    "<p>Oto PDF aktywny utworzony na podstawie Twojego tekstu.</p>";
+
+  try {
+    msg.reply("", {
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Generator Egzaminów – Autoresponder"
+    });
+    console.log("Wysłano egzamin PDF -> " + recipient);
+  } catch (e) {
+    MailApp.sendEmail({
+      to:          recipient,
+      subject:     "RE: " + subject + " [egzamin PDF]",
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Generator Egzaminów – Autoresponder"
+    });
+  }
+}
+
+function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
+  if (!data) {
+    console.warn("Brak danych smierc dla " + recipient);
+    return;
+  }
+
+  var attachments = [];
+  var inlineImages = {};
+
+  if (data.image && data.image.base64) {
+    try {
+      var imgBlob = Utilities.newBlob(
+        Utilities.base64Decode(data.image.base64),
+        data.image.content_type || "image/png",
+        data.image.filename     || "niebo.png"
+      );
+      inlineImages["smirc_img_cid"] = imgBlob;
+      attachments.push(imgBlob);
+    } catch (e) { console.error("Błąd obrazka smierc: " + e.message); }
+  }
+
+  if (data.mp4 && data.mp4.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.mp4.base64),
+        data.mp4.content_type || "video/mp4",
+        data.mp4.filename     || "niebo.mp4"
+      ));
+    } catch (e) { console.error("Błąd wideo smierc: " + e.message); }
+  }
+
+  if (data.debug_txt && data.debug_txt.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.debug_txt.base64),
+        data.debug_txt.content_type || "text/plain",
+        data.debug_txt.filename     || "debug_flux.txt"
+      ));
+    } catch (e) { console.error("Błąd debug TXT: " + e.message); }
+  }
+
+  var htmlBody = (data.reply_html || "<p>(Brak treści)</p>") +
+    (inlineImages["smirc_img_cid"]
+      ? '<p><img src="cid:smirc_img_cid" alt="Zaświaty" style="max-width:100%;border-radius:8px;"></p>'
+      : "");
+
+  try {
+    msg.reply("", {
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Paweł – Autoresponder pośmiertny"
+    });
+    console.log("Wysłano smierc (etap " + newEtap + ") -> " + recipient);
+  } catch (e) {
+    MailApp.sendEmail({
+      to:           recipient,
+      subject:      "RE: " + subject,
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Paweł – Autoresponder pośmiertny"
+    });
+  }
+}
+
+function executeScrabbleMailSend(data, recipient, subject, msg) {
+  var inlineImages = {};
+  var attachments  = [];
+
+  if (data.image && data.image.base64) {
+    try {
+      var imgBlob = Utilities.newBlob(
+        Utilities.base64Decode(data.image.base64),
+        data.image.content_type || "image/png",
+        data.image.filename     || "scrabble_odpowiedz.png"
+      );
+      inlineImages["scrabble_cid"] = imgBlob;
+      attachments.push(imgBlob);
+    } catch (e) { console.error("Błąd obrazka scrabble: " + e.message); }
+  }
+
+  var htmlBody = (data.reply_html || "") +
+    (inlineImages["scrabble_cid"]
+      ? '<p><img src="cid:scrabble_cid" alt="Scrabble" style="max-width:100%;"></p>'
+      : "");
+  try {
+    msg.reply("", {
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Scrabble – Autoresponder"
+    });
+  } catch (e) {
+    MailApp.sendEmail({
+      to:           recipient,
+      subject:      "RE: " + subject,
+      htmlBody:     htmlBody,
+      inlineImages: inlineImages,
+      attachments:  attachments,
+      name:         "Scrabble – Autoresponder"
+    });
+  }
+}
+
+function executeAnalizaMailSend(data, recipient, subject, msg) {
+  if (!data) {
+    console.warn("Brak danych analizy dla " + recipient);
+    return;
+  }
+
+  var attachments = [];
+  var docxList = data.docx_list || [];
+
+  for (var i = 0; i < docxList.length; i++) {
+    var d = docxList[i];
+    if (!d || !d.base64) continue;
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(d.base64),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        d.filename || ("analiza_" + (i + 1) + ".docx")
+      ));
+    } catch (e) {
+      console.error("Błąd dekodowania DOCX [" + i + "]: " + e.message);
+    }
+  }
+
+  var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
+  try {
+    msg.reply("", {
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Analiza Powtórzeń – Autoresponder"
+    });
+    console.log("Wysłano analizę powtórzeń (" + attachments.length + " DOCX) -> " + recipient);
+  } catch (e) {
+    console.warn("reply() nie działa, wysyłam nowy mail: " + e.message);
+    MailApp.sendEmail({
+      to:          recipient,
+      subject:     "RE: " + subject,
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Analiza Powtórzeń – Autoresponder"
+    });
+  }
+}
+
+function executeEmocjeMailSend(data, recipient, subject, msg) {
+  if (!data) {
+    console.warn("Brak danych emocji dla " + recipient);
+    return;
+  }
+
+  var attachments = [];
+
+  var images = data.images || [];
+  for (var i = 0; i < images.length; i++) {
+    var img = images[i];
+    if (!img || !img.base64) continue;
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(img.base64),
+        img.content_type || "image/png",
+        img.filename     || ("wykres_" + (i + 1) + ".png")
+      ));
+    } catch (e) {
+      console.error("Błąd wykresu [" + i + "]: " + e.message);
+    }
+  }
+
+  var docs = data.docs || [];
+  for (var j = 0; j < docs.length; j++) {
+    var doc = docs[j];
+    if (!doc || !doc.base64) continue;
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(doc.base64),
+        doc.content_type || "text/plain",
+        doc.filename     || ("raport_" + (j + 1) + ".txt")
+      ));
+    } catch (e) {
+      console.error("Błąd raportu TXT [" + j + "]: " + e.message);
+    }
+  }
+
+  var htmlBody = data.reply_html || "<p>Analiza emocjonalna w załącznikach.</p>";
+  try {
+    msg.reply("", {
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Analiza Emocjonalna – Autoresponder"
+    });
+    console.log("Wysłano analizę emocjonalną (" +
+      images.length + " PNG, " + docs.length + " TXT) -> " + recipient);
+  } catch (e) {
+    console.warn("reply() nie działa: " + e.message);
+    MailApp.sendEmail({
+      to:          recipient,
+      subject:     "RE: " + subject,
+      htmlBody:    htmlBody,
+      attachments: attachments,
+      name:        "Analiza Emocjonalna – Autoresponder"
+    });
+  }
+}
+
+function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
+  var gifUrl = webhookUrl.replace("/webhook", "/webhook_gif");
+  var payload = {
+    png1_base64: png1Base64 || null,
+    png2_base64: png2Base64 || null
+  };
+  var options = {
+    method:             "post",
+    contentType:        "application/json",
+    payload:            JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  try {
+    var resp = UrlFetchApp.fetch(gifUrl, options);
+    if (resp.getResponseCode() === 200) {
+      var json = JSON.parse(resp.getContentText());
+      console.log("webhook_gif OK");
+      return json;
+    } else {
+      console.error("webhook_gif błąd: " + resp.getResponseCode());
+      return null;
+    }
+  } catch(e) {
+    console.error("webhook_gif wyjątek: " + e.message);
+    return null;
+  }
+}
+
+function executeObrazekMailSend(data, recipient, subject, msg) {
+  if (!data) {
+    console.warn("Brak danych obrazka dla " + recipient);
+    return;
+  }
+
+  var webhookUrl = PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
+
+  if (data.image && data.image.base64) {
+    try {
+      var inlineImages1 = {};
+      var attachments1  = [];
+      var imgBlob1 = Utilities.newBlob(
+        Utilities.base64Decode(data.image.base64),
+        data.image.content_type || "image/png",
+        data.image.filename     || "komiks_ai.png"
+      );
+      inlineImages1["obrazek_cid"] = imgBlob1;
+      attachments1.push(imgBlob1);
+
+      if (data.prompt1_txt && data.prompt1_txt.base64) {
+        attachments1.push(Utilities.newBlob(
+          Utilities.base64Decode(data.prompt1_txt.base64),
+          data.prompt1_txt.content_type || "text/plain",
+          data.prompt1_txt.filename     || "2222.txt"
+        ));
+      }
+
+      var htmlBody1 = (data.reply_html || "<p>Obrazek AI w załączniku.</p>") +
+        '<p><img src="cid:obrazek_cid" alt="Komiks AI" style="max-width:100%;border-radius:8px;"></p>';
+      try {
+        msg.reply("", {
+          htmlBody: htmlBody1, inlineImages: inlineImages1,
+          attachments: attachments1, name: "Komiks AI – Autoresponder"
+        });
+        console.log("Wysłano obrazek 1 -> " + recipient);
+      } catch(e) {
+        MailApp.sendEmail({
+          to: recipient, subject: "RE: " + subject + " [komiks]",
+          htmlBody: htmlBody1, inlineImages: inlineImages1,
+          attachments: attachments1, name: "Komiks AI – Autoresponder"
+        });
+      }
+    } catch(e) { console.error("Błąd obrazka 1: " + e.message); }
+  }
+
+  if (data.image2 && data.image2.base64) {
+    try {
+      var inlineImages2 = {};
+      var attachments2  = [];
+      var imgBlob2 = Utilities.newBlob(
+        Utilities.base64Decode(data.image2.base64),
+        data.image2.content_type || "image/png",
+        data.image2.filename     || "komiks_ai_retro.png"
+      );
+      inlineImages2["obrazek2_cid"] = imgBlob2;
+      attachments2.push(imgBlob2);
+
+      if (data.prompt2_txt && data.prompt2_txt.base64) {
+        attachments2.push(Utilities.newBlob(
+          Utilities.base64Decode(data.prompt2_txt.base64),
+          data.prompt2_txt.content_type || "text/plain",
+          data.prompt2_txt.filename     || "3333.txt"
+        ));
+      }
+
+      var htmlBody2 =
+        "<p>Ta sama historia, styl retro-pop lata 60.:</p>" +
+        '<p><img src="cid:obrazek2_cid" alt="Komiks Retro" style="max-width:100%;border-radius:8px;"></p>';
+      try {
+        msg.reply("", {
+          htmlBody: htmlBody2, inlineImages: inlineImages2,
+          attachments: attachments2, name: "Komiks Retro – Autoresponder"
+        });
+        console.log("Wysłano obrazek 2 -> " + recipient);
+      } catch(e) {
+        MailApp.sendEmail({
+          to: recipient, subject: "RE: " + subject + " [retro]",
+          htmlBody: htmlBody2, inlineImages: inlineImages2,
+          attachments: attachments2, name: "Komiks Retro – Autoresponder"
+        });
+      }
+    } catch(e) { console.error("Błąd obrazka 2: " + e.message); }
+  }
+
+  var png1b64 = (data.image  && data.image.base64)  ? data.image.base64  : null;
+  var png2b64 = (data.image2 && data.image2.base64) ? data.image2.base64 : null;
+
+  if ((png1b64 || png2b64) && webhookUrl) {
+    var gifData = _callWebhookGif(png1b64, png2b64, webhookUrl);
+
+    if (gifData && gifData.gif1 && gifData.gif1.base64) {
+      try {
+        var gifBlob1 = Utilities.newBlob(
+          Utilities.base64Decode(gifData.gif1.base64),
+          gifData.gif1.content_type || "image/gif",
+          gifData.gif1.filename     || "komiks_ai.gif"
+        );
+        var htmlBodyGif1 = "<p>Komiks AI – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
+        try {
+          msg.reply("", {
+            htmlBody: htmlBodyGif1, attachments: [gifBlob1],
+            name: "Komiks AI GIF – Autoresponder"
+          });
+          console.log("Wysłano GIF 1 -> " + recipient);
+        } catch(e) {
+          MailApp.sendEmail({
+            to: recipient, subject: "RE: " + subject + " [komiks GIF]",
+            htmlBody: htmlBodyGif1, attachments: [gifBlob1],
+            name: "Komiks AI GIF – Autoresponder"
+          });
+        }
+      } catch(e) { console.error("Błąd GIF 1: " + e.message); }
+    }
+
+    if (gifData && gifData.gif2 && gifData.gif2.base64) {
+      try {
+        var gifBlob2 = Utilities.newBlob(
+          Utilities.base64Decode(gifData.gif2.base64),
+          gifData.gif2.content_type || "image/gif",
+          gifData.gif2.filename     || "komiks_ai_retro.gif"
+        );
+        var htmlBodyGif2 = "<p>Komiks Retro – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
+        try {
+          msg.reply("", {
+            htmlBody: htmlBodyGif2, attachments: [gifBlob2],
+            name: "Komiks Retro GIF – Autoresponder"
+          });
+          console.log("Wysłano GIF 2 -> " + recipient);
+        } catch(e) {
+          MailApp.sendEmail({
+            to: recipient, subject: "RE: " + subject + " [retro GIF]",
+            htmlBody: htmlBodyGif2, attachments: [gifBlob2],
+            name: "Komiks Retro GIF – Autoresponder"
+          });
+        }
+      } catch(e) { console.error("Błąd GIF 2: " + e.message); }
+    }
+  }
+}
+
+function executeNawiazanieMailSend(data, recipient, subject, msg) {
+  if (!data || !data.has_history || !data.reply_html) {
+    return;
+  }
+
+  var htmlBody = data.reply_html;
+  try {
+    msg.reply("", {
+      htmlBody: htmlBody,
+      name:     "Nawiązanie – Autoresponder"
+    });
+    console.log("Wysłano nawiązanie -> " + recipient);
+  } catch (e) {
+    MailApp.sendEmail({
+      to:       recipient,
+      subject:  "RE: " + subject + " [nawiązanie]",
+      htmlBody: htmlBody,
+      name:     "Nawiązanie – Autoresponder"
+    });
+  }
+}
+
+// ── Wywołanie backendu ────────────────────────────────────────────────────────
+function _callBackend(sender, senderName, subject, body, url,
+                      wantsScrabble, wantsAnaliza, wantsEmocje, wantsObrazek,
+                      wantsGeneratorPdf, wantsSmierc, smircData,
+                      attachments, previousBody, previousSubject,
+                      isBiz, isAllowed, isKnownSender, containsKeyword) {
+  var secret = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
+  var payload = {
+    sender:               sender,
+    sender_name:          senderName         || "",
+    subject:              subject,
+    body:                 body,
+    wants_scrabble:       wantsScrabble       ? true : false,
+    wants_analiza:        wantsAnaliza        ? true : false,
+    wants_emocje:         wantsEmocje         ? true : false,
+    wants_obrazek:        wantsObrazek        ? true : false,
+    wants_generator_pdf:  wantsGeneratorPdf   ? true : false,
+    wants_smierc:         wantsSmierc         ? true : false,
+    etap:                 smircData ? smircData.etap : 1,
+    data_smierci:         smircData ? smircData.data_smierci : "nieznanego dnia",
+    historia:             smircData ? smircData.historia : [],
+    wants_text_reply:     (isBiz || isAllowed || containsKeyword) ? true : false,
+    attachments:          attachments         || [],
+    previous_body:        previousBody        || null,
+    previous_subject:     previousSubject     || null
+  };
+
+  console.log("Webhook — sender: " + payload.sender);
+  console.log("Webhook — flagi: smierc=" + payload.wants_smierc + " etap=" + payload.etap);
+
+  var options = {
+    method:             "post",
+    contentType:        "application/json",
+    payload:            JSON.stringify(payload),
+    muteHttpExceptions: true,
+    headers:            secret ? { "X-Webhook-Secret": secret } : {}
+  };
+  try {
+    var resp = UrlFetchApp.fetch(url, options);
+    var code = resp.getResponseCode();
+    if (code === 200) {
+      console.log("Webhook — odpowiedź OK (200)");
+      return { json: JSON.parse(resp.getContentText()) };
+    } else {
+      console.error("Backend zwrócił kod " + code);
+    }
+  } catch (e) {
+    console.error("Błąd połączenia z backendem: " + e.message);
+  }
+  return null;
+}
+
+// ── GŁÓWNA FUNKCJA ────────────────────────────────────────────────────────────
+function __AAA_processEmails() {
+  var props = PropertiesService.getScriptProperties();
+  var webhookUrl = props.getProperty("WEBHOOK_URL");
+  if (!webhookUrl) {
+    console.error("Brak WEBHOOK_URL w Script Properties!");
+    return;
+  }
+
+  var BIZ_LIST                   = _getListFromProps("BIZ_LIST");
+  var ALLOWED_LIST               = _getListFromProps("ALLOWED_LIST");
+  var ALLOWED_LIST_GENERATOR_PDF = _getListFromProps("ALLOWED_LIST_GENERATOR_PDF");
+  var KEYWORDS                   = _getListFromProps("KEYWORDS");
+  var KEYWORDS1                  = _getListFromProps("KEYWORDS1");
+  var KEYWORDS2                  = _getListFromProps("KEYWORDS2");
+  var KEYWORDS3                  = _getListFromProps("KEYWORDS3");
+  var KEYWORDS4                  = _getListFromProps("KEYWORDS4");
+  var KEYWORDS_JOKER             = _getListFromProps("KEYWORDS_JOKER");
+  var KEYWORDS_OBRAZEK           = _getListFromProps("KEYWORDS_OBRAZEK");
+  var KEYWORDS_GENERATOR_PDF     = _getListFromProps("KEYWORDS_GENERATOR_PDF");
+  var KEYWORDS_SMIERC            = _getListFromProps("KEYWORDS_SMIERC");
+
+  var DATA_SMIERCI = props.getProperty("DATA_SMIERCI") || "nieznanego dnia";
+
+  var maskMode = false;
+
+  var knownSenders = _getKnownSenders();
+  console.log("Znani nadawcy z historii: " + knownSenders.length);
+
+  var threads = GmailApp.getInboxThreads(0, 10);
+  for (var i = 0; i < threads.length; i++) {
+    var thread = threads[i];
+    if (!thread.isUnread()) continue;
+
+    var messages   = thread.getMessages();
+    var msg        = messages[messages.length - 1];
+    var fromRaw    = msg.getFrom();
+    var fromEmail  = extractEmail(fromRaw).toLowerCase();
+    var senderName = "";
+    var nameMatch  = fromRaw.match(/^"?([^"<]+)"?\s*</);
+    if (nameMatch) senderName = nameMatch[1].trim();
+    var subject    = msg.getSubject();
+    var plainBody  = msg.getPlainBody();
+    var searchText = (plainBody + " " + subject).toLowerCase();
+
+    var isBiz         = BIZ_LIST.indexOf(fromEmail) !== -1;
+    var isAllowed     = ALLOWED_LIST.indexOf(fromEmail) !== -1;
+    var isKnownSender = knownSenders.indexOf(fromEmail) !== -1;
+
+    var isAllowedGeneratorPdf = ALLOWED_LIST_GENERATOR_PDF.indexOf(fromEmail) !== -1;
+    var containsKeywordGeneratorPdf = KEYWORDS_GENERATOR_PDF.some(function(k) {
+      return k && searchText.indexOf(k) !== -1;
+    });
+    var wantsGeneratorPdf = isAllowedGeneratorPdf || containsKeywordGeneratorPdf;
+
+    var containsKeywordSmierc = KEYWORDS_SMIERC.some(function(k) {
+      return k && searchText.indexOf(k) !== -1;
+    });
+    var wantsSmierc = false;
+    var smircData = null;
+
+    console.log("DEBUG: containsKeywordSmierc=" + containsKeywordSmierc);
+
+    // Jeśli osoba ma arkusz w SMIERC → automatycznie smierc
+    smircData = _getSmircData(fromEmail);
+    if (smircData) {
+      wantsSmierc = true;
+      console.log("SMIERC aktywowany automatycznie dla: " + fromEmail + " etap=" + smircData.etap);
+    }
+
+    var containsKeyword = (
+      KEYWORDS.some(function(k){  return k && searchText.indexOf(k) !== -1; }) ||
+      KEYWORDS1.some(function(k){ return k && searchText.indexOf(k) !== -1; })
+    );
+    var containsKeyword2 = KEYWORDS2.some(function(k){
+      return k && searchText.indexOf(k) !== -1;
+    });
+    var containsKeyword3 = KEYWORDS3.some(function(k){
+      return k && searchText.indexOf(k) !== -1;
+    });
+    var containsKeyword4 = KEYWORDS4.some(function(k){
+      return k && searchText.indexOf(k) !== -1;
+    });
+    var containsKeywordObrazek = KEYWORDS_OBRAZEK.some(function(k){
+      return k && searchText.indexOf(k) !== -1;
+    });
+
+    // ── JOKER: aktywuje WSZYSTKIE respondery ──────────────────────────────────
+    var containsJoker = KEYWORDS_JOKER.some(function(k){
+      return k && searchText.indexOf(k) !== -1;
+    });
+    
+    if (containsJoker) {
+      console.log("🃏 JOKER wykryty! Aktywacja wszystkich responderów dla: " + fromEmail);
+      
+      containsKeyword        = true;   // zwykly + biznes
+      containsKeyword2       = true;   // scrabble
+      containsKeyword3       = true;   // analiza
+      containsKeyword4       = true;   // emocje
+      containsKeywordObrazek = true;   // obrazek
+      wantsGeneratorPdf      = true;   // generator_pdf
+      
+      // SMIERC: utwórz arkusz jeśli nie istnieje
+      if (!smircData) {
+        var created = _createSmircSheetForEmail(fromEmail, DATA_SMIERCI);
+        if (created) {
+          // Odczytaj ponownie dane po utworzeniu arkusza
+          smircData = _getSmircData(fromEmail);
+          if (!smircData) {
+            // Fallback gdyby coś poszło nie tak
+            smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
+          }
+        } else {
+          // Jeśli nie udało się utworzyć arkusza, użyj domyślnych danych
+          smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
+        }
+      }
+      wantsSmierc = true;
+      
+      console.log("🃏 JOKER: SMIERC aktywowany dla " + fromEmail + " (etap=" + smircData.etap + ")");
+    }
+
+    if (!isBiz && !isAllowed && !isKnownSender && !containsKeyword &&
+        !containsKeyword2 && !containsKeyword3 &&
+        !containsKeyword4 && !containsKeywordObrazek && !wantsGeneratorPdf && !wantsSmierc) {
+      var label = GmailApp.getUserLabelByName("processed");
+      if (!label) label = GmailApp.createLabel("processed");
+      thread.addLabel(label);
+      thread.markRead();
+      continue;
+    }
+
+    var combinedKeywords = KEYWORDS
+      .concat(KEYWORDS1)
+      .concat(KEYWORDS2)
+      .concat(KEYWORDS3)
+      .concat(KEYWORDS4)
+      .concat(KEYWORDS_JOKER)
+      .concat(KEYWORDS_OBRAZEK)
+      .concat(KEYWORDS_SMIERC)
+      .filter(Boolean);
+    var sanitizedBody = removeKeywordsFromText(plainBody, combinedKeywords, maskMode);
+
+    if (containsKeywordGeneratorPdf) {
+      KEYWORDS_GENERATOR_PDF.forEach(function(k) {
+        sanitizedBody = removeGeneratorPdfKeyword(sanitizedBody, k);
+        subject       = removeGeneratorPdfKeyword(subject, k);
+      });
+    }
+
+    var previousData    = findLastMessageBySender(fromEmail);
+    var previousBody    = previousData ? previousData.body    : null;
+    var previousSubject = previousData ? previousData.subject : null;
+
+    var allAttachments = [];
+    if (containsKeyword3 || containsKeyword4) {
+      allAttachments = getAllAttachments(msg);
+      console.log("Znaleziono załączników: " + allAttachments.length);
+    }
+
+    if (!smircData && wantsSmierc === false) {
+      smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
+    }
+
+    var response = _callBackend(
+      fromEmail,
+      senderName,
+      subject,
+      sanitizedBody,
+      webhookUrl,
+      containsKeyword2,
+      containsKeyword3,
+      containsKeyword4,
+      containsKeywordObrazek,
+      wantsGeneratorPdf,
+      wantsSmierc,
+      smircData,
+      allAttachments,
+      previousBody,
+      previousSubject,
+      isBiz,
+      isAllowed,
+      isKnownSender,
+      containsKeyword
+    );
+
+    if (response && response.json) {
+      var json = response.json;
+
+      if (json.biznes && (isBiz || (!isAllowed && containsKeyword))) {
+        executeMailSend(json.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
+      }
+      if (json.zwykly && (isAllowed || (!isBiz && containsKeyword))) {
+        executeMailSend(json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+      }
+      if (containsKeyword2 && json.scrabble) {
+        executeScrabbleMailSend(json.scrabble, fromEmail, subject, msg);
+      }
+      if (containsKeyword3 && json.analiza) {
+        executeAnalizaMailSend(json.analiza, fromEmail, subject, msg);
+      }
+      if (containsKeyword4 && json.emocje) {
+        executeEmocjeMailSend(json.emocje, fromEmail, subject, msg);
+      }
+      if (containsKeywordObrazek && json.obrazek) {
+        executeObrazekMailSend(json.obrazek, fromEmail, subject, msg);
+      }
+      if (json.nawiazanie) {
+        executeNawiazanieMailSend(json.nawiazanie, fromEmail, subject, msg);
+      }
+      if (wantsGeneratorPdf && json.generator_pdf) {
+        executeGeneratorPdfMailSend(json.generator_pdf, fromEmail, subject, msg);
+      }
+      if (wantsSmierc && json.smierc) {
+        var newEtap = json.smierc.nowy_etap || smircData.etap;
+        executeSmircMailSend(json.smierc, fromEmail, subject, msg, newEtap);
+        _updateSmircData(fromEmail, newEtap);
+      }
+
+      saveToHistory(fromEmail, subject, sanitizedBody);
+      thread.markRead();
+
+    } else {
+      console.warn("Backend nie odpowiedział dla: " + fromEmail);
+    }
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function extractEmail(fromHeader) {
+  var m = fromHeader.match(/<([^>]+)>/);
+  if (m) return m[1];
+  return fromHeader.split(" ")[0];
+}
+
+function keepAlive() {
+  var url = PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
+  try {
+    UrlFetchApp.fetch(url.replace("/webhook", "/"), { muteHttpExceptions: true });
+  } catch(e) {}
+}

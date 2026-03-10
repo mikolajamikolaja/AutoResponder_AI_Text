@@ -1,0 +1,47 @@
+RESPONDER: biznes
+Czas wykonania: 0.00s
+Data: 2026-03-10 14:26:52
+==================================================
+Tekst wejściowy:
+Drogi Pawle,
+
+Piszę do Ciebie z kilku powodów jednocześnie, bo życie jest skomplikowane 
+i nie wiem od czego zacząć.
+
+Po pierwsze — mój kot Bonifacy zdechł wczoraj i płakałam całą noc. 
+Miał 17 lat i był grubszy niż mój były mąż. Teraz dom jest pusty jak 
+moja lodówka w piątek wieczór.
+
+Po drugie — w pracy mam koleżankę Grażynę która kradnie mi jogurty 
+z lodówki i donosi na mnie szefowi. Nienawidzę jej bardziej niż 
+rachunków za prąd.
+
+Po trzecie — mój syn Krzysiek ma 14 lat i cały czas gra w Minecraft 
+zamiast odrabiać lekcje. Mówię mu że będzie miał dwójki ale on tylko 
+wzrusza ramionami. Czasami chciałabym go sprzedać na Allegro.
+
+Po czwarte — sąsiad znowu mi śmierdzi przy płocie. Ma takie stare buty 
+ogrodowe i w nich pierze rzepy. Smród niesie się przez cały ogród i muszę 
+zamykać okna w lecie.
+
+I jeszcze jedno — chciałabym kupić nowy telewizor ale nie wiem który wybrać. 
+Mąż mówił kiedyś że Samsung jest dobry ale on też mówił że mnie kocha i wiesz 
+jak to się skończyło.
+
+Pozdrawiam,
+Halina
+==================================================
+ZWROCONE KLUCZE: reply_html, pdf, topic
+==================================================
+SZCZEGOLY ARTEFAKTOW:
+  OK  reply_html: (tekst, 285 znaków)
+
+TREŚĆ reply_html:
+<p><i>Przepraszam, wystąpił problem z generowaniem odpowiedzi biznesowej.</i></p>
+<p style="color:#0a8a0a; font-size:10px;">Odpowiedź wygenerowana automatycznie przez system Script + Render.<br>Projekt dostępny na GitHub: https://github.com/legionowopawel/AutoResponder_AI_Text.git</p>
+
+  OK  pdf: kontakt_godziny_pracy_notariusza_podstawowe_informacje.pdf  (~67 KB)
+  OK  topic: (tekst, 7 znaków)
+
+METADANE:
+  topic = UNKNOWN

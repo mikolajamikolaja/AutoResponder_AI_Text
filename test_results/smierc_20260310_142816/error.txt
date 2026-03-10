@@ -1,0 +1,9 @@
+BLAD: 'NoneType' object has no attribute 'get'
+
+Traceback:
+Traceback (most recent call last):
+  File "C:\python\httpsgithub.comlegionowopawel_AutoResponder_AI_Text\2_requ_kalibracja.py", line 477, in _run
+    result = test_fn(body, resp_dir, **kwargs)
+  File "C:\python\httpsgithub.comlegionowopawel_AutoResponder_AI_Text\2_requ_kalibracja.py", line 428, in _test_smierc
+    if debug_txt.get("base64"):
+AttributeError: 'NoneType' object has no attribute 'get'

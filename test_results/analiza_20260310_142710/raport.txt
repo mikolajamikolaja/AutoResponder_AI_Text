@@ -1,0 +1,45 @@
+RESPONDER: analiza
+Czas wykonania: 0.04s
+Data: 2026-03-10 14:27:10
+==================================================
+Tekst wejściowy:
+Drogi Pawle,
+
+Piszę do Ciebie z kilku powodów jednocześnie, bo życie jest skomplikowane 
+i nie wiem od czego zacząć.
+
+Po pierwsze — mój kot Bonifacy zdechł wczoraj i płakałam całą noc. 
+Miał 17 lat i był grubszy niż mój były mąż. Teraz dom jest pusty jak 
+moja lodówka w piątek wieczór.
+
+Po drugie — w pracy mam koleżankę Grażynę która kradnie mi jogurty 
+z lodówki i donosi na mnie szefowi. Nienawidzę jej bardziej niż 
+rachunków za prąd.
+
+Po trzecie — mój syn Krzysiek ma 14 lat i cały czas gra w Minecraft 
+zamiast odrabiać lekcje. Mówię mu że będzie miał dwójki ale on tylko 
+wzrusza ramionami. Czasami chciałabym go sprzedać na Allegro.
+
+Po czwarte — sąsiad znowu mi śmierdzi przy płocie. Ma takie stare buty 
+ogrodowe i w nich pierze rzepy. Smród niesie się przez cały ogród i muszę 
+zamykać okna w lecie.
+
+I jeszcze jedno — chciałabym kupić nowy telewizor ale nie wiem który wybrać. 
+Mąż mówił kiedyś że Samsung jest dobry ale on też mówił że mnie kocha i wiesz 
+jak to się skończyło.
+
+Pozdrawiam,
+Halina
+==================================================
+ZWROCONE KLUCZE: reply_html, docx_list
+==================================================
+SZCZEGOLY ARTEFAKTOW:
+  OK  reply_html: (tekst, 2706 znaków)
+
+TREŚĆ reply_html:
+<p>Drogi Pawle,<br><br>Piszę do Ciebie z kilku powodów jednocześnie, bo życie <span style="background-color:#ffff00;color:#000;">jest</span> skomplikowane <br>i nie wiem od czego zacząć.<br><br>Po pierwsze — <span style="background-color:#00ff00;color:#000;">mój</span> kot Bonifacy zdechł wczoraj i płakałam całą noc. <br>Miał 17 <span style="background-color:#00ffff;color:#000;">lat</span> i <span style="background-color:#ff00ff;color:#000;">był</span> grubszy <span style="background-color:#0000ff;color:#fff;">niż</span> <span style="background-color:#00ff00;color:#000;">mój</span> <span style="background-color:#ff00ff;color:#000;">były</span> mąż. Teraz dom <span style="background-color:#ffff00;color:#000;">jest</span> pusty jak <br>moja <span style="background-color:#ff0000;color:#fff;">lodówka</span> w piątek wieczór.<br><br>Po drugie — w pracy mam koleżankę Grażynę która kradnie mi jogurty <br>z <span style="background-color:#ff0000;color:#fff;">lodówki</span> i donosi na mnie szefowi. Nienawidzę jej bardziej <span style="background-color:#0000ff;color:#fff;">niż</span> <br>rachunków za prąd.<br><br>Po trzecie — <span style="background-color:#00ff00;color:#000;">mój</span> syn Krzysiek ma 14 <span style="background-color:#00ffff;color:#000;">lat</span> i <span style="background-color:#808000;color:#fff;">cały</span> <span style="background-color:#008080;color:#fff;">czas</span> gra w Minecraft <br>zamiast odrabiać lekcje. Mówię mu że będzie miał dwójki <span style="background-color:#800080;color:#fff;">ale</span> on tylko <br>wzrusza ramionami. <span style="background-color:#008080;color:#fff;">Czasami</span> <span style="background-color:#008000;color:#fff;">chciałabym</span> go sprzedać na Allegro.<br><br>Po czwarte — sąsiad znowu mi śmierdzi przy płocie. Ma takie stare buty <br>ogrodowe i w nich pierze rzepy. Smród niesie <span style="background-color:#000080;color:#fff;">się</span> przez <span style="background-color:#808000;color:#fff;">cały</span> ogród i muszę <br>zamykać okna w lecie.<br><br>I jeszcze jedno — <span style="background-color:#008000;color:#fff;">chciałabym</span> kupić nowy telewizor <span style="background-color:#800080;color:#fff;">ale</span> nie wiem który wybrać. <br>Mąż <span style="background-color:#800000;color:#fff;">mówił</span> kiedyś że Samsung jest dobry <span style="background-color:#800080;color:#fff;">ale</span> on też <span style="background-color:#800000;color:#fff;">mówił</span> że mnie kocha i wiesz <br>jak to <span style="background-color:#000080;color:#fff;">się</span> skończyło.<br><br>Pozdrawiam,<br>Halina</p><p><strong>Analiza powtórzeń wykonana na podstawie: treść maila. Wynik w załączniku DOCX.</strong></p>
+
+  OK  docx_list: lista (1 elementów)
+      [0] analiza_tresci_maila.docx  (~36 KB)
+
+METADANE:
