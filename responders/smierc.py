@@ -426,12 +426,30 @@ def build_smierc_section(
             f"<p>{wynik}</p>" if wynik
             else "<p>To autoresponder. Chwilowo brak zasięgu w tej strefie kosmicznej.</p>"
         )
+
+        # Obrazek: statyczny PNG (etapy 1-7) lub FLUX generowany (etapy 8+)
+        static_image = _get_etap_image(etap)
+        if static_image:
+            image     = static_image
+            debug_txt = None
+        elif etap >= 8:
+            current_app.logger.info("[pawel-flux] etap=%d START generowania FLUX", etap)
+            flux_prompt, flux_provider = _generate_flux_prompt(wynik or etap_tresc)
+            current_app.logger.info("[pawel-flux] prompt=%.120s provider=%s", flux_prompt, flux_provider)
+            image     = _generate_flux_image(flux_prompt)
+            debug_txt = _build_debug_txt(wynik or "", flux_prompt, flux_provider, etap)
+            current_app.logger.info("[pawel-flux] etap=%d image=%s debug_txt=%s",
+                                    etap, bool(image), bool(debug_txt))
+        else:
+            image     = None
+            debug_txt = None
+
         return {
             "reply_html": reply_html,
             "nowy_etap":  etap + 1,
-            "image":      _get_etap_image(etap),
+            "image":      image,
             "mp4":        _get_etap_mp4(etap),
-            "debug_txt":  None,
+            "debug_txt":  debug_txt,
         }
 
     # ── ETAP OSTATNI (max_etap = 50) — finałowe szlify przed końcem ─────────────
