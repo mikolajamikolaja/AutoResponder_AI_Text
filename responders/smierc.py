@@ -5,16 +5,21 @@ Pośmiertny autoresponder Pawła.
 Tryby:
   ETAP 1-6  — narracja pozagrobowa + obrazek PNG + filmik MP4
   ETAP 7    — reinkarnacja + obrazek PNG
-  ETAP 8+   — WYSŁANNIK: odpowiedź w stylu Księgi Urantii
-              + obrazek FLUX z rzeczownikami z wiadomości
+  ETAP 8+   — WYSŁANNIK: odpowiedź DeepSeek po polsku
+              + obrazek FLUX z promptem wygenerowanym przez Groq
               + załącznik _.txt z pełnym promptem wysłanym do FLUX
 
 Pliki promptów w katalogu prompts/:
-  requiem_PAWEL_system_1-6.txt       — system prompt Pawła (etapy 1-6)
-  requiem_PAWEL_system_7.txt         — system prompt Pawła (etap 7, reinkarnacja)
-  requiem_WYSLANNIK_system_8_.txt    — system prompt Wysłannika (etap 8+)
-  requiem_WYSLANNIK_IMAGE_STYLE.txt  — styl obrazka FLUX
-  requiem_WYSLANNIK_flux_prompt.txt  — szablon promptu FLUX (placeholdery: {translated}, {IMAGE_STYLE})
+  requiem_PAWEL_system_1-6.txt            — system prompt Pawła (etapy 1-6)
+  requiem_PAWEL_system_7.txt              — system prompt Pawła (etap 7, reinkarnacja)
+  requiem_WYSLANNIK_system_8_.txt         — system prompt Wysłannika (etap 8+) → DeepSeek
+  requiem_WYSLANNIK_flux_groq_system.txt  — system prompt dla Groq → generuje prompt FLUX
+  requiem_WYSLANNIK_IMAGE_STYLE.txt       — styl obrazka FLUX (fallback)
+
+Podział API:
+  DeepSeek → tekst emaila Wysłannika (call_deepseek / MODEL_TYLER)
+  Groq     → kreatywny prompt FLUX    (call_groq)
+  Fallback → jeśli jeden zawodzi, używa drugiego
 """
 
 import os
@@ -31,17 +36,21 @@ MEDIA_DIR   = os.path.join(BASE_DIR, "media")
 ETAPY_FILE  = os.path.join(PROMPTS_DIR, "pozagrobowe.txt")
 
 # ── Ścieżki plików promptów ───────────────────────────────────────────────────
-FILE_PAWEL_SYSTEM_1_6      = os.path.join(PROMPTS_DIR, "requiem_PAWEL_system_1-6.txt")
-FILE_PAWEL_SYSTEM_7        = os.path.join(PROMPTS_DIR, "requiem_PAWEL_system_7.txt")
-FILE_WYSLANNIK_SYSTEM_8_   = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_system_8_.txt")
-FILE_WYSLANNIK_IMAGE_STYLE = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_IMAGE_STYLE.txt")
-FILE_WYSLANNIK_FLUX_PROMPT = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_flux_prompt.txt")
+FILE_PAWEL_SYSTEM_1_6          = os.path.join(PROMPTS_DIR, "requiem_PAWEL_system_1-6.txt")
+FILE_PAWEL_SYSTEM_7            = os.path.join(PROMPTS_DIR, "requiem_PAWEL_system_7.txt")
+FILE_WYSLANNIK_SYSTEM_8_       = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_system_8_.txt")
+FILE_WYSLANNIK_FLUX_GROQ_SYS   = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_flux_groq_system.txt")
+FILE_WYSLANNIK_IMAGE_STYLE     = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_IMAGE_STYLE.txt")
 
 # ── Stałe FLUX ────────────────────────────────────────────────────────────────
 HF_API_URL  = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
 HF_STEPS    = 5
 HF_GUIDANCE = 5
 TIMEOUT_SEC = 55
+
+# ── Groq modele ───────────────────────────────────────────────────────────────
+GROQ_MODEL   = "llama-3.3-70b-versatile"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
 # ── Wczytaj plik tekstowy ─────────────────────────────────────────────────────
@@ -52,6 +61,105 @@ def _load_txt(path: str, fallback: str = "") -> str:
     except Exception as e:
         current_app.logger.warning("Błąd wczytywania pliku %s: %s", path, e)
         return fallback
+
+
+# ── Wywołaj Groq ──────────────────────────────────────────────────────────────
+def _call_groq(system: str, user: str) -> str | None:
+    """
+    Wywołuje Groq API. Klucz: API_KEY_GROQ w zmiennych środowiskowych.
+    Zwraca tekst odpowiedzi lub None przy błędzie.
+    """
+    api_key = os.getenv("API_KEY_GROQ", "").strip()
+    if not api_key:
+        current_app.logger.warning("[groq] Brak API_KEY_GROQ w zmiennych środowiskowych")
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type":  "application/json",
+    }
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ],
+        "max_tokens":  300,
+        "temperature": 0.95,
+    }
+    try:
+        resp = requests.post(GROQ_API_URL, headers=headers,
+                             json=payload, timeout=30)
+        if resp.status_code == 200:
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            current_app.logger.info("[groq] OK: %.150s", result)
+            return result
+        else:
+            current_app.logger.warning("[groq] HTTP %s: %s",
+                                       resp.status_code, resp.text[:150])
+            return None
+    except Exception as e:
+        current_app.logger.warning("[groq] Wyjątek: %s", str(e)[:100])
+        return None
+
+
+# ── Fallback: DeepSeek jako generator promptu FLUX ────────────────────────────
+def _call_deepseek_flux_fallback(system: str, user: str) -> str | None:
+    """
+    Używa DeepSeek jako fallback gdy Groq nie działa.
+    """
+    try:
+        result = call_deepseek(system, user, MODEL_TYLER)
+        if result:
+            current_app.logger.info("[deepseek-flux-fallback] OK: %.150s", result)
+        return result or None
+    except Exception as e:
+        current_app.logger.warning("[deepseek-flux-fallback] Wyjątek: %s", str(e)[:100])
+        return None
+
+
+# ── Generuj kreatywny prompt FLUX przez Groq (+ fallback DeepSeek) ─────────────
+def _generate_flux_prompt(wyslannik_text: str) -> str:
+    """
+    Groq dostaje tekst odpowiedzi Wysłannika i generuje kreatywny prompt FLUX.
+    Fallback: DeepSeek z tym samym systemem.
+    Fallback 2: statyczny styl z pliku IMAGE_STYLE.
+    """
+    system = _load_txt(
+        FILE_WYSLANNIK_FLUX_GROQ_SYS,
+        fallback=(
+            "You are a creative prompt engineer for FLUX image generator. "
+            "Based on the Polish heavenly messenger text, write a surreal, "
+            "otherworldly image prompt in English (max 80 words). "
+            "Invent bizarre celestial creatures inspired by the content. "
+            "NOT photorealistic, NOT earthly. "
+            "End with: divine surreal digital art, otherworldly paradise, vivid colors. "
+            "Return ONLY the prompt."
+        )
+    )
+    user = f"Generate a FLUX image prompt based on this heavenly messenger text:\n\n{wyslannik_text}"
+
+    # Próba 1: Groq
+    result = _call_groq(system, user)
+    if result:
+        current_app.logger.info("[flux-prompt] Wygenerowano przez Groq")
+        return result
+
+    # Próba 2: DeepSeek fallback
+    current_app.logger.warning("[flux-prompt] Groq zawiódł — próbuję DeepSeek")
+    result = _call_deepseek_flux_fallback(system, user)
+    if result:
+        current_app.logger.info("[flux-prompt] Wygenerowano przez DeepSeek (fallback)")
+        return result
+
+    # Próba 3: statyczny fallback z pliku
+    current_app.logger.warning("[flux-prompt] Oba API zawiodły — używam statycznego stylu")
+    image_style = _load_txt(
+        FILE_WYSLANNIK_IMAGE_STYLE,
+        fallback="surreal heavenly paradise, divine golden light, celestial beings, "
+                 "otherworldly atmosphere, vivid colors, digital art"
+    )
+    return image_style
 
 
 # ── Wczytaj etapy z pliku ─────────────────────────────────────────────────────
@@ -113,7 +221,7 @@ def _get_hf_tokens() -> list:
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
-# ── Generuj obrazek FLUX — zwraca dict|None ──────────────────────────────────
+# ── Generuj obrazek FLUX ──────────────────────────────────────────────────────
 def _generate_flux_image(prompt: str):
     tokens = _get_hf_tokens()
     if not tokens:
@@ -127,16 +235,16 @@ def _generate_flux_image(prompt: str):
             "guidance_scale":      HF_GUIDANCE,
         },
     }
-    current_app.logger.info("[wyslannik] FLUX prompt PEŁNY: %s", prompt)
+    current_app.logger.info("[wyslannik] FLUX prompt: %s", prompt[:200])
 
     for name, token in tokens:
         headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
         try:
-            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
+            resp = requests.post(HF_API_URL, headers=headers,
+                                 json=payload, timeout=TIMEOUT_SEC)
             if resp.status_code == 200:
                 current_app.logger.info(
-                    "[wyslannik] FLUX sukces token=%s PNG %d B", name, len(resp.content)
-                )
+                    "[wyslannik] FLUX sukces token=%s PNG %d B", name, len(resp.content))
                 return {
                     "base64":       base64.b64encode(resp.content).decode("ascii"),
                     "content_type": "image/png",
@@ -147,102 +255,29 @@ def _generate_flux_image(prompt: str):
             elif resp.status_code in (503, 529):
                 current_app.logger.warning("[wyslannik] token %s przeciążony", name)
             else:
-                current_app.logger.warning(
-                    "[wyslannik] token %s błąd %s: %s",
-                    name, resp.status_code, resp.text[:100]
-                )
+                current_app.logger.warning("[wyslannik] token %s błąd %s: %s",
+                                           name, resp.status_code, resp.text[:100])
         except requests.exceptions.Timeout:
             current_app.logger.warning("[wyslannik] token %s timeout", name)
         except Exception as e:
-            current_app.logger.warning("[wyslannik] token %s wyjątek: %s", name, str(e)[:50])
+            current_app.logger.warning("[wyslannik] token %s wyjątek: %s",
+                                       name, str(e)[:50])
 
-    current_app.logger.error("[wyslannik] Wszystkie tokeny zawiodły!")
+    current_app.logger.error("[wyslannik] Wszystkie tokeny HF zawiodły!")
     return None
 
 
-# ── Wyciągnij rzeczowniki z wiadomości ───────────────────────────────────────
-def _extract_nouns(body: str) -> list:
-    """
-    Prosi DeepSeek o wypisanie WSZYSTKICH rzeczowników z wiadomości —
-    nie tylko materialnych, żeby nie gubić słów jak 'koza', 'koń' itp.
-    """
-    system = (
-        "Wypisz wszystkie rzeczowniki z podanej wiadomości. "
-        "Odpowiedz TYLKO rzeczownikami oddzielonymi przecinkami, po polsku. "
-        "Nie dodawaj żadnych innych słów ani wyjaśnień. "
-        "Jeśli nie ma żadnych rzeczowników, odpowiedz: BRAK"
-    )
-    wynik = call_deepseek(system, body[:500], MODEL_TYLER)
-    current_app.logger.info("[wyslannik] DeepSeek rzeczowniki raw: %s", wynik)
-
-    if not wynik or "BRAK" in wynik.upper():
-        return []
-
-    nouns = [n.strip().lower() for n in wynik.split(",") if n.strip()]
-    nouns = [n for n in nouns if len(n.split()) <= 3]
-    current_app.logger.info("[wyslannik] Rzeczowniki po filtracji: %s", nouns)
-    return nouns[:7]
-
-
-# ── Przetłumacz rzeczowniki na angielski ─────────────────────────────────────
-def _translate_nouns(nouns: list) -> str:
-    if not nouns:
-        return ""
-    system = (
-        "Translate these Polish words to English. "
-        "Return ONLY the English words separated by commas, nothing else:"
-    )
-    translated = call_deepseek(system, ", ".join(nouns), MODEL_TYLER)
-    current_app.logger.info("[wyslannik] Tłumaczenie raw: %s", translated)
-
-    if not translated:
-        return ", ".join(nouns)
-
-    translated = re.sub(r'[^a-zA-Z,\s]', '', translated).strip().lower()
-    current_app.logger.info("[wyslannik] Tłumaczenie czyste: %s", translated)
-    return translated
-
-
-# ── Zbuduj prompt FLUX dla wysłannika ────────────────────────────────────────
-def _build_wyslannik_flux_prompt(nouns: list) -> str:
-    image_style = _load_txt(
-        FILE_WYSLANNIK_IMAGE_STYLE,
-        fallback="heavenly paradise scene, bright golden light, clouds, magical atmosphere, "
-                 "colorful, joyful, vibrant colors, digital art style, beautiful and uplifting"
-    )
-
-    if not nouns:
-        return f"paradise heaven scene, golden light, clouds, angels, {image_style}"
-
-    translated = _translate_nouns(nouns)
-    if not translated:
-        translated = ", ".join(nouns)
-
-    flux_template = _load_txt(
-        FILE_WYSLANNIK_FLUX_PROMPT,
-        fallback=(
-            "heavenly paradise made entirely of {translated}, "
-            "surreal paradise where {translated} float and multiply endlessly, "
-            "divine golden light, overwhelming abundance of {translated}, "
-            "joyful absurd heavenly scene, {IMAGE_STYLE}"
-        )
-    )
-
-    prompt = flux_template.replace("{translated}", translated).replace("{IMAGE_STYLE}", image_style)
-    current_app.logger.info("[wyslannik] FLUX prompt zbudowany: %s", prompt)
-    return prompt, translated
-
-
-# ── Zbuduj załącznik _.txt z debugiem promptu ────────────────────────────────
-def _build_debug_txt(nouns: list, translated: str, flux_prompt: str, etap: int) -> dict:
+# ── Zbuduj załącznik _.txt ────────────────────────────────────────────────────
+def _build_debug_txt(wyslannik_text: str, flux_prompt: str,
+                     flux_provider: str, etap: int) -> dict:
     content = (
         f"=== REQUIEM RESPONDER — DEBUG FLUX ===\n"
         f"Etap: {etap}\n\n"
-        f"--- Rzeczowniki wyciągnięte z wiadomości ---\n"
-        f"{', '.join(nouns) if nouns else '(brak)'}\n\n"
-        f"--- Tłumaczenie na angielski ---\n"
-        f"{translated if translated else '(brak)'}\n\n"
-        f"--- Pełny prompt wysłany do FLUX ---\n"
+        f"--- Odpowiedź Wysłannika (źródło promptu FLUX) ---\n"
+        f"{wyslannik_text}\n\n"
+        f"--- Provider który wygenerował prompt FLUX ---\n"
+        f"{flux_provider}\n\n"
+        f"--- Proponowany tekst wysłany do FLUX.1-schnell ---\n"
         f"{flux_prompt}\n\n"
         f"--- Parametry FLUX ---\n"
         f"Model: FLUX.1-schnell\n"
@@ -257,7 +292,7 @@ def _build_debug_txt(nouns: list, translated: str, flux_prompt: str, etap: int) 
     }
 
 
-# ── Formatuj historię dla DeepSeeka ──────────────────────────────────────────
+# ── Formatuj historię ─────────────────────────────────────────────────────────
 def _format_historia(historia: list) -> str:
     if not historia:
         return "(brak poprzednich wiadomości)"
@@ -292,17 +327,24 @@ def build_smierc_section(
     # ── WYSŁANNIK (etap 8+) ───────────────────────────────────────────────────
     if etap > max_etap:
         historia_txt = _format_historia(historia)
-        system = _load_txt(
+
+        # 1. Tekst emaila — DeepSeek (fallback: Groq)
+        system_wyslannik = _load_txt(
             FILE_WYSLANNIK_SYSTEM_8_,
             fallback=(
                 "Jesteś wysłannikiem z wyższych sfer duchowych piszącym po polsku. "
-                "Przebijasz każdą rzecz wymienioną przez nadawcę — nie liczbami, lecz przymiotnikami. "
-                "Ton: dostojny, ciepły, lekko absurdalny. Odpowiedź maksymalnie 4 zdania. "
+                "Przebijasz każdą rzecz wymienioną przez nadawcę — tylko przymiotnikami, "
+                "nigdy liczbami. Ton: dostojny, poetycki, absurdalny. Max 4 zdania. "
                 "Podpisz się: — Wysłannik z wyższych sfer"
             )
         )
         user_msg    = f"Osoba pyta: {body}\n\nHistoria:\n{historia_txt}"
-        wynik_tekst = call_deepseek(system, user_msg, MODEL_TYLER)
+        wynik_tekst = call_deepseek(system_wyslannik, user_msg, MODEL_TYLER)
+
+        # Fallback na Groq jeśli DeepSeek zawiódł
+        if not wynik_tekst:
+            current_app.logger.warning("[wyslannik] DeepSeek zawiódł — próbuję Groq")
+            wynik_tekst = _call_groq(system_wyslannik, user_msg)
 
         reply_html = (
             f"<p>{wynik_tekst}</p><p><i>— Wysłannik z wyższych sfer</i></p>"
@@ -311,15 +353,17 @@ def build_smierc_section(
                  "<br><i>— Wysłannik z wyższych sfer</i></p>"
         )
 
-        # Wyciągnij rzeczowniki → zbuduj prompt (tłumaczenie wewnątrz) → generuj
-        nouns                  = _extract_nouns(body)
-        flux_prompt, translated = _build_wyslannik_flux_prompt(nouns)
-        image                  = _generate_flux_image(flux_prompt)
-        debug_txt              = _build_debug_txt(nouns, translated, flux_prompt, etap)
+        # 2. Prompt FLUX — Groq (fallback: DeepSeek, potem statyczny)
+        flux_prompt   = _generate_flux_prompt(wynik_tekst or body)
+        flux_provider = "Groq→FLUX" if _call_groq.__doc__ else "fallback"
+
+        # 3. Generuj obrazek
+        image     = _generate_flux_image(flux_prompt)
+        debug_txt = _build_debug_txt(wynik_tekst or "", flux_prompt, "Groq (fallback: DeepSeek)", etap)
 
         current_app.logger.info(
-            "[wyslannik] etap=%d | rzeczowniki=%s | image=%s",
-            etap, nouns, bool(image)
+            "[wyslannik] etap=%d | flux_prompt=%.100s | image=%s",
+            etap, flux_prompt, bool(image)
         )
         return {
             "reply_html": reply_html,
@@ -338,9 +382,9 @@ def build_smierc_section(
             fallback=(
                 "Jesteś Pawłem — zmarłym mężczyzną piszącym z zaświatów. "
                 "Piszesz po polsku. Ton: spokojny, lekko absurdalny, z humorem. "
-                "Odpowiedź maksymalnie 5 zdań. Na końcu podpisz się: '— Autoresponder Pawła-zza-światów' "
+                "Odpowiedź maksymalnie 5 zdań. Podpisz się: '— Autoresponder Pawła-zza-światów'. "
                 "Koniecznie wspomnij że umarłeś na suchoty dnia {data_smierci_str}. "
-                "Opisz swój aktualny etap rozwijając podany punkt. Nie wspominaj Księgi Urantii."
+                "Opisz swój aktualny etap. Nie wspominaj Księgi Urantii."
             )
         )
         system     = system_tmpl.replace("{data_smierci_str}", data_smierci_str)
