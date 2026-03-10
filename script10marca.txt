@@ -12,8 +12,6 @@
  */
 
 // ── Normalizacja tekstu: usuwa diakrytyki, sprowadza do lowercase ─────────────
-// Używaj tej funkcji WSZĘDZIE gdzie porównujesz tekst z keywordami.
-// Rozwiązuje problem z polskimi znakami (ż, ź, ą, ę, ó itp.) w Script Properties.
 function _normalize(text) {
   if (!text) return "";
   return text
@@ -22,7 +20,6 @@ function _normalize(text) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-// Sprawdza czy haystack zawiera którykolwiek z keywordów (z normalizacją)
 function _containsAny(haystack, keywords) {
   if (!haystack || !keywords || !keywords.length) return false;
   var normalizedHaystack = _normalize(haystack);
@@ -32,11 +29,9 @@ function _containsAny(haystack, keywords) {
   });
 }
 
-// ── Helpers: Script Properties ───────────────────────────────────────────────
 function _getListFromProps(name) {
   var props = PropertiesService.getScriptProperties();
   var raw = props.getProperty(name) || "";
-  // trim() każdego elementu — usuwa spacje i niewidoczne znaki z początku/końca
   return raw.split(",").map(function(s){ return s.trim().toLowerCase(); }).filter(Boolean);
 }
 
@@ -158,7 +153,7 @@ function _getKnownSenders() {
   }
 }
 
-// ── Moduł SMIERC: czytanie z arkusza gdzie zakładki to emaile ────────────────
+// ── Moduł SMIERC ─────────────────────────────────────────────────────────────
 function _isResponseToSmircMessage(msg, senderEmail) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
@@ -241,8 +236,10 @@ function _getSmircData(senderEmail) {
     var etap = parseInt(row[0]) || 1;
     
     var data_smierci = sheet.getRange(2, 2).getValue().toString().trim();
-    if (!data_smierci) {
-      data_smierci = "nieznanego dnia";
+    if (!data_smierci || data_smierci === "nieznanego dnia") {
+      data_smierci = _getDataSmierci();
+      sheet.getRange(2, 2).setValue(data_smierci);
+      console.log("Uzupelniono B2 data: " + data_smierci);
     }
     
     console.log("Smierc data dla " + senderEmail + ": etap=" + etap + " data=" + data_smierci);
@@ -258,16 +255,15 @@ function _getSmircData(senderEmail) {
   }
 }
 
-function _updateSmircData(senderEmail, newEtap) {
+function _updateSmircData(senderEmail, newEtap, bodyText, replyHtml, msgId) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
     if (!sheetId) return;
-    
+
     var ss = SpreadsheetApp.openById(sheetId);
     var sheet = null;
-    
     var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
-    
+
     var sheets = ss.getSheets();
     for (var i = 0; i < sheets.length; i++) {
       if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
@@ -275,23 +271,54 @@ function _updateSmircData(senderEmail, newEtap) {
         break;
       }
     }
-    
+
     if (!sheet) {
-      console.log("Nie można zaktualizować - brak arkusza: " + senderEmail + " (szukałem: " + sheetNameForEmail + ")");
+      console.log("Nie można zaktualizować - brak arkusza: " + senderEmail);
       return;
     }
-    
-    var lastRow = sheet.getLastRow();
-    if (lastRow >= 2) {
-      sheet.getRange(lastRow, 1).setValue(newEtap);
-      console.log("Smierc etap zaktualizowany: " + senderEmail + " → etap " + newEtap);
+
+    var targetRow = newEtap + 1;
+
+    var safetyLimit = 0;
+    while (sheet.getLastRow() < targetRow && safetyLimit < 10) {
+      safetyLimit++;
+      sheet.appendRow(["", "", "", "", ""]);
     }
+
+    var bodyShort  = (bodyText  || "").substring(0, 2000);
+    var replyShort = (replyHtml || "").substring(0, 2000);
+    var msgIdStr   = (msgId     || "").toString().trim();
+
+    sheet.getRange(targetRow, 1, 1, 5).setValues([[
+      newEtap,
+      "",
+      bodyShort,
+      replyShort,
+      msgIdStr
+    ]]);
+
+    if (targetRow !== 2) {
+      var dataSmierci = sheet.getRange(2, 2).getValue().toString().trim();
+      if (dataSmierci) {
+        sheet.getRange(targetRow, 2).setValue(dataSmierci);
+      }
+    }
+
+    console.log("Smierc zapisano: " + senderEmail + " etap=" + newEtap + " wiersz=" + targetRow + " msgId=" + msgIdStr);
   } catch(e) {
     console.error("Błąd _updateSmircData: " + e.message);
   }
 }
 
-// ── Moduł SMIERC: tworzenie nowego arkusza dla osoby ─────────────────────────
+function _getDataSmierci() {
+  var d = new Date();
+  d.setDate(d.getDate() - 7);
+  var dd = String(d.getDate()).padStart(2, "0");
+  var mm = String(d.getMonth() + 1).padStart(2, "0");
+  var yyyy = d.getFullYear();
+  return dd + "." + mm + "." + yyyy;
+}
+
 function _createSmircSheetForEmail(senderEmail, dataSmierciFallback) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
@@ -303,38 +330,48 @@ function _createSmircSheetForEmail(senderEmail, dataSmierciFallback) {
     var ss = SpreadsheetApp.openById(sheetId);
     var sheetNameForEmail = senderEmail.replace("@", "_").replace(/\./g, "_");
     
-    // Sprawdź czy arkusz już istnieje
     var sheets = ss.getSheets();
     for (var i = 0; i < sheets.length; i++) {
       if (sheets[i].getName().toLowerCase().trim() === sheetNameForEmail.toLowerCase().trim()) {
         console.log("Arkusz już istnieje dla: " + senderEmail);
+        _ensureSmircDate(sheets[i]);
         return true;
       }
     }
     
-    // Utwórz nowy arkusz
+    var dataSmierci = (dataSmierciFallback && dataSmierciFallback !== "nieznanego dnia")
+      ? dataSmierciFallback
+      : _getDataSmierci();
+
     var newSheet = ss.insertSheet(sheetNameForEmail);
     
-    // Nagłówki
     newSheet.getRange(1, 1, 1, 5).setValues([[
       "nr_etapu", "data_smierci", "mail_od_osoby", "odpowiedz_pawla", "last_msg_id"
     ]]);
     
-    // Pierwszy wiersz z danymi
     newSheet.getRange(2, 1, 1, 5).setValues([[
-      1,
-      dataSmierciFallback || "nieznanego dnia",
-      "",
-      "",
-      ""
+      1, dataSmierci, "", "", ""
     ]]);
     
-    console.log("Utworzono nowy arkusz SMIERC dla: " + senderEmail);
+    console.log("Utworzono nowy arkusz SMIERC dla: " + senderEmail + " data=" + dataSmierci);
     return true;
     
   } catch(e) {
     console.error("Błąd tworzenia arkusza SMIERC: " + e.message);
     return false;
+  }
+}
+
+function _ensureSmircDate(sheet) {
+  try {
+    var b2 = sheet.getRange(2, 2).getValue().toString().trim();
+    if (!b2 || b2 === "nieznanego dnia") {
+      var dataSmierci = _getDataSmierci();
+      sheet.getRange(2, 2).setValue(dataSmierci);
+      console.log("Uzupełniono datę śmierci w B2: " + dataSmierci + " arkusz=" + sheet.getName());
+    }
+  } catch(e) {
+    console.error("Błąd _ensureSmircDate: " + e.message);
   }
 }
 
@@ -353,10 +390,8 @@ function _threadHasLabel(thread, labelName) {
   }
 }
 
-// ── Sprawdzanie czy to nowa wiadomość czy odpowiedź ──────────────────────────
 function _isNewMessage(subject) {
   var subjectLower = (subject || "").toLowerCase().trim();
-  // Sprawdź czy subject zaczyna się od RE:, Re:, FWD:, Fwd: itp.
   return !(
     subjectLower.startsWith("re:") ||
     subjectLower.startsWith("fwd:") ||
@@ -366,7 +401,6 @@ function _isNewMessage(subject) {
   );
 }
 
-// ── Pobierz załączniki ───────────────────────────────────────────────────────
 function getAllAttachments(msg) {
   var attachments = msg.getAttachments();
   if (!attachments || !attachments.length) return [];
@@ -404,7 +438,7 @@ function getAllAttachments(msg) {
   return result;
 }
 
-// ── Wysyłka: standardowa ─────────────────────────────────────────────────────
+// ── Wysyłka ───────────────────────────────────────────────────────────────────
 function executeMailSend(data, recipient, subject, msg, senderName) {
   var inlineImages = {};
   var attachments  = [];
@@ -968,7 +1002,7 @@ function __AAA_processEmails() {
   var knownSenders = _getKnownSenders();
   console.log("Znani nadawcy z historii: " + knownSenders.length);
 
-  var threads = GmailApp.getInboxThreads(0, 10);
+  var threads = GmailApp.getInboxThreads(0, 1);
   for (var i = 0; i < threads.length; i++) {
     var thread = threads[i];
     if (!thread.isUnread()) continue;
@@ -983,33 +1017,27 @@ function __AAA_processEmails() {
     var subject    = msg.getSubject();
     var plainBody  = msg.getPlainBody();
 
-    // ── searchText: temat + treść, używamy do szukania keywordów ────────────
-    // WAŻNE: _containsAny() normalizuje polskie znaki po obu stronach,
-    // więc nawet jeśli keyword w Script Properties ma błędne kodowanie,
-    // porównanie po normalizacji NFD zadziała poprawnie.
     var searchText = plainBody + " " + subject;
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // KLUCZOWA ZMIANA: Sprawdzamy czy to nowa wiadomość czy odpowiedź
-    // ═══════════════════════════════════════════════════════════════════════════
     var isNewMsg = _isNewMessage(subject);
     console.log("DEBUG: isNewMessage=" + isNewMsg + " subject=" + subject);
     
-    // Jeśli to odpowiedź (RE:, FWD: itp.), ignoruj słowa kluczowe
+    // ── ODPOWIEDŹ (RE:/FWD:) ─────────────────────────────────────────────────
     if (!isNewMsg) {
       console.log("To odpowiedź (RE:/FWD:), ignoruję słowa kluczowe dla: " + fromEmail);
       
-      // Sprawdź czy osoba jest w SMIERC
       var smircDataForReply = _getSmircData(fromEmail);
       if (smircDataForReply) {
-        // Osoba w SMIERC - wyślij tylko odpowiedź SMIERC
         console.log("Odpowiedź od osoby w SMIERC: " + fromEmail + " etap=" + smircDataForReply.etap);
         
+        // ▼▼▼ ZMIANA: markRead PRZED wywołaniem backendu ▼▼▼
+        thread.markRead();
+
         var previousData = findLastMessageBySender(fromEmail);
         var response = _callBackend(
           fromEmail, senderName, subject, plainBody, webhookUrl,
-          false, false, false, false, false,  // wszystkie respondery wyłączone
-          true, smircDataForReply,            // tylko SMIERC
+          false, false, false, false, false,
+          true, smircDataForReply,
           [], previousData ? previousData.body : null, previousData ? previousData.subject : null,
           false, false, false, false
         );
@@ -1017,25 +1045,22 @@ function __AAA_processEmails() {
         if (response && response.json && response.json.smierc) {
           var newEtap = response.json.smierc.nowy_etap || smircDataForReply.etap;
           executeSmircMailSend(response.json.smierc, fromEmail, subject, msg, newEtap);
-          _updateSmircData(fromEmail, newEtap);
+          _updateSmircData(fromEmail, newEtap, plainBody, response.json.smierc.reply_html, msg.getId());
         }
         
         saveToHistory(fromEmail, subject, plainBody);
-        thread.markRead();
+
       } else {
-        // Nie ma w SMIERC - tylko oznacz jako przeczytane
         var label = GmailApp.getUserLabelByName("processed");
         if (!label) label = GmailApp.createLabel("processed");
         thread.addLabel(label);
         thread.markRead();
       }
       
-      continue; // Przejdź do następnej wiadomości
+      continue;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // NOWA WIADOMOŚĆ - przetwarzanie normalne
-    // ═══════════════════════════════════════════════════════════════════════════
+    // ── NOWA WIADOMOŚĆ ────────────────────────────────────────────────────────
 
     var isBiz         = BIZ_LIST.indexOf(fromEmail) !== -1;
     var isAllowed     = ALLOWED_LIST.indexOf(fromEmail) !== -1;
@@ -1045,7 +1070,6 @@ function __AAA_processEmails() {
     var containsKeywordGeneratorPdf = _containsAny(searchText, KEYWORDS_GENERATOR_PDF);
     var wantsGeneratorPdf           = isAllowedGeneratorPdf || containsKeywordGeneratorPdf;
 
-    // SMIERC — szukamy z normalizacją polskich znaków
     var containsKeywordSmierc = _containsAny(searchText, KEYWORDS_SMIERC);
     var wantsSmierc = false;
     var smircData   = null;
@@ -1055,16 +1079,14 @@ function __AAA_processEmails() {
     console.log("DEBUG: KEYWORDS_SMIERC znormalizowane=" +
                 KEYWORDS_SMIERC.map(function(k){ return _normalize(k); }).join("|"));
 
-    // Sprawdź czy osoba ma arkusz w SMIERC
     smircData = _getSmircData(fromEmail);
 
-    // ── JOKER sprawdzamy NAJPIERW — ma priorytet nad wszystkim ───────────────
+    // ── JOKER ────────────────────────────────────────────────────────────────
     var containsJoker = _containsAny(searchText, KEYWORDS_JOKER);
 
     if (containsJoker) {
       console.log("🃏 JOKER wykryty w NOWEJ wiadomości! Aktywacja dla: " + fromEmail);
 
-      // SMIERC: utwórz arkusz jeśli nie istnieje
       if (!smircData) {
         var createdJoker = _createSmircSheetForEmail(fromEmail, DATA_SMIERCI);
         if (createdJoker) {
@@ -1078,11 +1100,14 @@ function __AAA_processEmails() {
       }
       wantsSmierc = true;
 
+      // ▼▼▼ ZMIANA: markRead PRZED wywołaniem backendu ▼▼▼
+      thread.markRead();
+
       var previousDataJoker = findLastMessageBySender(fromEmail);
       var responseJoker = _callBackend(
         fromEmail, senderName, subject, plainBody, webhookUrl,
-        true, true, true, true, true,   // wszystkie respondery włączone
-        true, smircData,                // + SMIERC
+        true, true, true, true, true,
+        true, smircData,
         getAllAttachments(msg),
         previousDataJoker ? previousDataJoker.body    : null,
         previousDataJoker ? previousDataJoker.subject : null,
@@ -1102,30 +1127,28 @@ function __AAA_processEmails() {
         if (jj.smierc) {
           var newEtapJoker = jj.smierc.nowy_etap || smircData.etap;
           executeSmircMailSend(jj.smierc, fromEmail, subject, msg, newEtapJoker);
-          _updateSmircData(fromEmail, newEtapJoker);
+          _updateSmircData(fromEmail, newEtapJoker, plainBody, jj.smierc.reply_html, msg.getId());
         }
         console.log("🃏 JOKER: wszystkie respondery obsłużone");
       }
 
       saveToHistory(fromEmail, subject, plainBody);
-      thread.markRead();
       continue;
     }
 
-    // SMIERC aktywuje się gdy:
-    // 1. Osoba ma arkusz (kontynuacja) - ale bez innych responderów!
-    // 2. Osoba użyła KEYWORDS_SMIERC (nowa) - wtedy tworzymy arkusz
+    // ── SMIERC kontynuacja ────────────────────────────────────────────────────
     if (smircData) {
-      // Osoba już jest w SMIERC - tylko SMIERC, nic więcej
       wantsSmierc = true;
       console.log("SMIERC kontynuacja dla: " + fromEmail + " etap=" + smircData.etap);
-      
-      // Wyślij TYLKO odpowiedź SMIERC, zignoruj inne keywordy
+
+      // ▼▼▼ ZMIANA: markRead PRZED wywołaniem backendu ▼▼▼
+      thread.markRead();
+
       var previousData2 = findLastMessageBySender(fromEmail);
       var response2 = _callBackend(
         fromEmail, senderName, subject, plainBody, webhookUrl,
-        false, false, false, false, false,  // wszystkie respondery wyłączone
-        true, smircData,                    // tylko SMIERC
+        false, false, false, false, false,
+        true, smircData,
         [], previousData2 ? previousData2.body : null, previousData2 ? previousData2.subject : null,
         false, false, false, false
       );
@@ -1133,15 +1156,14 @@ function __AAA_processEmails() {
       if (response2 && response2.json && response2.json.smierc) {
         var newEtap2 = response2.json.smierc.nowy_etap || smircData.etap;
         executeSmircMailSend(response2.json.smierc, fromEmail, subject, msg, newEtap2);
-        _updateSmircData(fromEmail, newEtap2);
+        _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
       }
       
       saveToHistory(fromEmail, subject, plainBody);
-      thread.markRead();
-      continue; // Koniec - nie przetwarzaj innych responderów
+      continue;
     }
     
-    // Osoba użyła KEYWORDS_SMIERC - utwórz arkusz
+    // ── SMIERC start (nowy keyword) ───────────────────────────────────────────
     if (containsKeywordSmierc) {
       var created = _createSmircSheetForEmail(fromEmail, DATA_SMIERCI);
       if (created) {
@@ -1151,7 +1173,6 @@ function __AAA_processEmails() {
       }
     }
 
-    // Wszystkie pozostałe keywordy — też z normalizacją
     var containsKeyword  = _containsAny(searchText, KEYWORDS) ||
                            _containsAny(searchText, KEYWORDS1);
     var containsKeyword2 = _containsAny(searchText, KEYWORDS2);
@@ -1200,6 +1221,9 @@ function __AAA_processEmails() {
     if (!smircData && wantsSmierc === false) {
       smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
     }
+
+    // ▼▼▼ ZMIANA: markRead PRZED wywołaniem backendu ▼▼▼
+    thread.markRead();
 
     var response = _callBackend(
       fromEmail,
@@ -1253,11 +1277,10 @@ function __AAA_processEmails() {
       if (wantsSmierc && json.smierc) {
         var newEtap = json.smierc.nowy_etap || smircData.etap;
         executeSmircMailSend(json.smierc, fromEmail, subject, msg, newEtap);
-        _updateSmircData(fromEmail, newEtap);
+        _updateSmircData(fromEmail, newEtap, sanitizedBody, json.smierc.reply_html, msg.getId());
       }
 
       saveToHistory(fromEmail, subject, sanitizedBody);
-      thread.markRead();
 
     } else {
       console.warn("Backend nie odpowiedział dla: " + fromEmail);
