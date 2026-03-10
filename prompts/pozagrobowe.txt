@@ -8,13 +8,13 @@
 8. Remonty - wyrównywanie poziomów chmur
 9. Remonty - malowanie nieba na właściwy odcień błękitu
 10. Remonty - naprawianie dziur w ozonie
-11. Remonty - układanie tęcz po burzy
-12. Remonty - konserwacja skrzydeł aniołów
-13. Remonty - odgrzybianie rajskiego sadu
-14. Remonty - wymiana żyletek w kosach Śmierci
+11. Remonty - układanie tęcz po burzy i remontowanie podasza
+12. Remonty - remont poddasza i konserwacja skrzydeł aniołów
+13. Remonty - remont poddasza i ocieplenie i odgrzybianie rajskiego sadu
+14. Remonty - remont okien, mycie okien i wymiana żyletek w kosach Śmierci
 15. Remonty - szpachlowanie Bramy Niebieskiej
-16. Remonty - czyszczenie filtrów w fontannach życia
-17. Remonty - naprawa zegara słonecznego w Raju
+16. Remonty - tynkowanie ścian , czyszczenie filtrów w fontannach życia
+17. Remonty - naprawa gniazdek elektrycznych naprawa zegara słonecznego w Raju
 18. Remonty - uszczelnianie przecieków między wymiarami
 19. Remonty - malowanie pasy na drodze do nieba
 20. Remonty - betonowanie mgławicy Oriona
