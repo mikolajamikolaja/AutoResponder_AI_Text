@@ -20,6 +20,8 @@ Pliki promptów w katalogu prompts/:
   requiem_WYSLANNIK_system_8_.txt         — system prompt Wysłannika (etap 51+) → DeepSeek
   requiem_WYSLANNIK_flux_groq_system.txt  — system prompt dla Groq → generuje prompt FLUX
   requiem_WYSLANNIK_IMAGE_STYLE.txt       — styl obrazka FLUX (fallback)
+  flux_forbidden.txt                      — słowa zabronione dla FLUX (do mutacji)
+  flux_mutations.txt                      — sufiksy losowane przy mutacji
 
 Podział API:
   DeepSeek → tekst emaila Wysłannika (call_deepseek / MODEL_TYLER)
@@ -29,6 +31,7 @@ Podział API:
 
 import os
 import re
+import random
 import base64
 import requests
 from flask import current_app
@@ -48,6 +51,8 @@ FILE_PAWEL_SYSTEM_20_50        = os.path.join(PROMPTS_DIR, "requiem_PAWEL_system
 FILE_WYSLANNIK_SYSTEM_8_       = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_system_8_.txt")
 FILE_WYSLANNIK_FLUX_GROQ_SYS   = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_flux_groq_system.txt")
 FILE_WYSLANNIK_IMAGE_STYLE     = os.path.join(PROMPTS_DIR, "requiem_WYSLANNIK_IMAGE_STYLE.txt")
+FILE_FLUX_FORBIDDEN            = os.path.join(PROMPTS_DIR, "flux_forbidden.txt")
+FILE_FLUX_MUTATIONS            = os.path.join(PROMPTS_DIR, "flux_mutations.txt")
 
 # ── Stałe FLUX ────────────────────────────────────────────────────────────────
 HF_API_URL  = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
@@ -125,13 +130,73 @@ def _call_deepseek_flux_fallback(system: str, user: str) -> str | None:
         return None
 
 
+# ── Wczytaj listę słów z pliku ────────────────────────────────────────────────
+def _load_word_list(path: str) -> list:
+    """
+    Wczytuje plik z listą słów — jedna linia = jedno słowo.
+    Linie zaczynające się od # są ignorowane.
+    """
+    words = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    words.append(line.lower())
+    except Exception as e:
+        current_app.logger.warning("Błąd wczytywania listy słów %s: %s", path, e)
+    return words
+
+
+# ── Mutuj zabronione słowa w prompcie FLUX ────────────────────────────────────
+def _mutate_flux_prompt(prompt: str) -> tuple:
+    """
+    Skanuje prompt FLUX i zamienia każde zabronione słowo na:
+        słowo-of-randomowy-sufiks
+    Działa też wewnątrz złożeń (apple-tree → apple-tree-of-frozen-frequencies).
+    Aktywna tylko od etapu 8+, wywoływana z _generate_flux_prompt.
+    Zwraca (zmutowany_prompt, lista_zmian).
+    lista_zmian = lista stringów "słowo → słowo-sufiks"
+    """
+    forbidden = _load_word_list(FILE_FLUX_FORBIDDEN)
+    suffixes  = _load_word_list(FILE_FLUX_MUTATIONS)
+
+    if not forbidden or not suffixes:
+        current_app.logger.warning(
+            "[mutate] Brak flux_forbidden.txt lub flux_mutations.txt — pomijam mutację"
+        )
+        return prompt, []
+
+    result  = prompt
+    changes = []
+
+    for word in forbidden:
+        # Szukaj słowa jako samodzielnej jednostki (nie poprzedzonej ani zakończonej literą)
+        pattern = re.compile(
+            rf'(?<![a-zA-Z]){re.escape(word)}(?![a-zA-Z])',
+            re.IGNORECASE
+        )
+        if pattern.search(result):
+            sufiks = random.choice(suffixes)
+            result = pattern.sub(
+                lambda m, s=sufiks: m.group(0) + "-" + s,
+                result
+            )
+            changes.append(f"{word} → {word}-{sufiks}")
+            current_app.logger.info("[mutate] %s → %s-%s", word, word, sufiks)
+
+    current_app.logger.info("[mutate] Łącznie zmutowano słów: %d", len(changes))
+    return result, changes
+
+
 # ── Generuj kreatywny prompt FLUX przez Groq (+ fallback DeepSeek) ─────────────
 def _generate_flux_prompt(wyslannik_text: str) -> tuple:
     """
     Groq dostaje tekst odpowiedzi Wysłannika i generuje kreatywny prompt FLUX.
     Fallback: DeepSeek z tym samym systemem.
     Fallback 2: statyczny styl z pliku IMAGE_STYLE.
-    Zwraca (prompt, provider_name).
+    Po wygenerowaniu prompt przechodzi przez _mutate_flux_prompt.
+    Zwraca (prompt_po_mutacji, lista_zmian, provider_name).
     """
     system = _load_txt(
         FILE_WYSLANNIK_FLUX_GROQ_SYS,
@@ -151,14 +216,16 @@ def _generate_flux_prompt(wyslannik_text: str) -> tuple:
     result = _call_groq(system, user)
     if result:
         current_app.logger.info("[flux-prompt] Wygenerowano przez Groq")
-        return result, "Groq"
+        mutated, changes = _mutate_flux_prompt(result)
+        return mutated, changes, "Groq"
 
     # Próba 2: DeepSeek fallback
     current_app.logger.warning("[flux-prompt] Groq zawiódł — próbuję DeepSeek")
     result = _call_deepseek_flux_fallback(system, user)
     if result:
         current_app.logger.info("[flux-prompt] Wygenerowano przez DeepSeek (fallback)")
-        return result, "DeepSeek (fallback po Groq)"
+        mutated, changes = _mutate_flux_prompt(result)
+        return mutated, changes, "DeepSeek (fallback po Groq)"
 
     # Próba 3: statyczny fallback z pliku
     current_app.logger.warning("[flux-prompt] Oba API zawiodły — używam statycznego stylu")
@@ -167,7 +234,7 @@ def _generate_flux_prompt(wyslannik_text: str) -> tuple:
         fallback="surreal heavenly paradise, divine golden light, celestial beings, "
                  "otherworldly atmosphere, vivid colors, digital art"
     )
-    return image_style, "statyczny fallback (oba API zawiodły)"
+    return image_style, [], "statyczny fallback (oba API zawiodły)"
 
 
 # ── Wczytaj etapy z pliku ─────────────────────────────────────────────────────
@@ -277,7 +344,9 @@ def _generate_flux_image(prompt: str):
 
 # ── Zbuduj załącznik _.txt ────────────────────────────────────────────────────
 def _build_debug_txt(wyslannik_text: str, flux_prompt: str,
-                     flux_provider: str, etap: int) -> dict:
+                     flux_provider: str, etap: int,
+                     mutation_changes: list = None) -> dict:
+    changes_str = "\n".join(mutation_changes) if mutation_changes else "(brak mutacji)"
     content = (
         f"Etap: {etap}\n\n"
         f"{flux_prompt}\n\n\n"
@@ -286,6 +355,8 @@ def _build_debug_txt(wyslannik_text: str, flux_prompt: str,
         f"{wyslannik_text}\n\n"
         f"--- Provider który wygenerował prompt FLUX ---\n"
         f"{flux_provider}\n\n"
+        f"--- Zmutowane słowa ---\n"
+        f"{changes_str}\n\n"
         f"--- Parametry FLUX ---\n"
         f"Model: FLUX.1-schnell\n"
         f"num_inference_steps: {HF_STEPS}\n"
@@ -360,12 +431,14 @@ def build_smierc_section(
                  "<br><i>— Wysłannik z wyższych sfer</i></p>"
         )
 
-        # 2. Prompt FLUX — Groq (fallback: DeepSeek, potem statyczny)
-        flux_prompt, flux_provider = _generate_flux_prompt(wynik_tekst or body)
+        # 2. Prompt FLUX — Groq (fallback: DeepSeek, potem statyczny) + mutacja
+        flux_prompt, flux_changes, flux_provider = _generate_flux_prompt(wynik_tekst or body)
 
         # 3. Generuj obrazek
         image     = _generate_flux_image(flux_prompt)
-        debug_txt = _build_debug_txt(wynik_tekst or "", flux_prompt, flux_provider, etap)
+        debug_txt = _build_debug_txt(
+            wynik_tekst or "", flux_prompt, flux_provider, etap, flux_changes
+        )
 
         current_app.logger.info(
             "[wyslannik] etap=%d | flux_prompt=%.100s | image=%s",
@@ -379,7 +452,7 @@ def build_smierc_section(
             "debug_txt":  debug_txt,
         }
 
-    # ── ETAP 1-6 ──────────────────────────────────────────────────────────────
+    # ── ETAP 1-50 ─────────────────────────────────────────────────────────────
     if etap < max_etap:
         etap_tresc   = etapy.get(etap, "Podróż trwa")
         historia_txt = _format_historia(historia)
@@ -433,10 +506,12 @@ def build_smierc_section(
             debug_txt = None
         elif etap >= 8:
             current_app.logger.info("[pawel-flux] etap=%d START generowania FLUX", etap)
-            flux_prompt, flux_provider = _generate_flux_prompt(wynik or etap_tresc)
+            flux_prompt, flux_changes, flux_provider = _generate_flux_prompt(wynik or etap_tresc)
             current_app.logger.info("[pawel-flux] prompt=%.120s provider=%s", flux_prompt, flux_provider)
             image     = _generate_flux_image(flux_prompt)
-            debug_txt = _build_debug_txt(wynik or "", flux_prompt, flux_provider, etap)
+            debug_txt = _build_debug_txt(
+                wynik or "", flux_prompt, flux_provider, etap, flux_changes
+            )
             current_app.logger.info("[pawel-flux] etap=%d image=%s debug_txt=%s",
                                     etap, bool(image), bool(debug_txt))
         else:
