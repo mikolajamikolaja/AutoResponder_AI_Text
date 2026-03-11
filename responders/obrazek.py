@@ -30,8 +30,8 @@ from core.ai_client import call_deepseek, MODEL_TYLER
 HF_API_URLS = [
     "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
 ]
-HF_STEPS    = 1
-HF_GUIDANCE = 1    # zakres 0-5 dla FLUX.1-schnell
+HF_STEPS    = 5
+HF_GUIDANCE = 5    # zakres 0-5 dla FLUX.1-schnell
 TIMEOUT_SEC = 55   # nieco poniżej 60s aby nie kolidować z timeoutem Render
 
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
