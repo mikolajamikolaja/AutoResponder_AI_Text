@@ -42,7 +42,7 @@ def _load_config_csv():
     
     return etapy_data, style_data
 
-def build_smierc_section(data, sender_email, **kwargs):
+def build_smierc_section(sender_email, data=None, **kwargs):
     """
     Główna funkcja. 
     **kwargs jest KLUCZOWE - pozwala przyjąć 'body', który wysyła app.py i nie wywalać błędu.
