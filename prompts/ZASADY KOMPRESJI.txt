@@ -1,0 +1,6 @@
+# Obrazek FLUX:
+#   0 lub brak -> nic nie generuj
+#   1          -> PNG bez kompresji
+#   2          -> JPG 90%
+#   3-5        -> JPG 60%
+#   6+         -> JPG 50%
