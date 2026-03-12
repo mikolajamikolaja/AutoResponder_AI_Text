@@ -120,6 +120,9 @@ def _resolve_system_prompt(styl_plik: str, system_prompt_inline: str) -> str:
     if system_prompt_inline:
         return system_prompt_inline
     return DEFAULT_SYSTEM_PROMPT
+
+
+def _parse_int(val) -> int | None:
     try:
         return int(float(str(val).strip()))
     except (ValueError, TypeError):
@@ -265,30 +268,6 @@ def _compress_images_ai(images: list, n_obrazkow: int) -> list:
             "filename":     fname,
         })
     return result
-    """
-    Parsuje string z listą plików oddzielonych przecinkami.
-    Szuka każdego pliku w base_dir.
-    Zwraca listę {base64, content_type, filename}.
-    """
-    results = []
-    if not file_list_str:
-        return results
-    for fname in file_list_str.split(","):
-        fname = fname.strip()
-        if not fname:
-            continue
-        path = os.path.join(base_dir, fname)
-        b64  = _file_to_base64(path)
-        if b64:
-            results.append({
-                "base64":       b64,
-                "content_type": _guess_content_type(fname),
-                "filename":     fname,
-            })
-            current_app.logger.info("[media] OK: %s", fname)
-        else:
-            current_app.logger.warning("[media] Brak pliku: %s", path)
-    return results
 
 
 def _load_file_list(file_list_str: str, base_dir: str) -> list:
@@ -619,13 +598,6 @@ def _oblicz_dni(data_smierci_str: str) -> str:
             continue
     current_app.logger.warning("[dni] Nie udało się sparsować daty: %s", s)
     return "?"
-    if not historia:
-        return "(brak poprzednich wiadomości)"
-    lines = []
-    for h in historia[-3:]:
-        lines.append(f"Osoba: {h.get('od', '')[:300]}")
-        lines.append(f"Odpowiedź: {h.get('odpowiedz', '')[:300]}")
-    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
