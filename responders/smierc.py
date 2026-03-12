@@ -529,6 +529,16 @@ def _build_debug_txt(source_text: str, flux_info: list, etap: int) -> dict:
     }
 
 
+def _format_historia(historia: list) -> str:
+    if not historia:
+        return "(brak poprzednich wiadomości)"
+    lines = []
+    for h in historia[-3:]:
+        lines.append(f"Osoba: {h.get('od', '')[:300]}")
+        lines.append(f"Odpowiedź: {h.get('odpowiedz', '')[:300]}")
+    return "\n".join(lines)
+
+
 def _oblicz_dni(data_smierci_str: str) -> str:
     """
     Oblicza ile dni minęło od daty śmierci do dziś.
