@@ -499,14 +499,18 @@ def _generate_n_flux_images(n: int, source_text: str, styl_flux: str,
 
     current_app.logger.info("[flux-n] etap=%d generuję %d obrazków równolegle", etap, n)
 
+    # Pobierz app PRZED wejściem do wątków — current_app nie działa poza kontekstem Flask
+    app = current_app._get_current_object()
+
     # Każde zadanie: wygeneruj prompt + obrazek
     def _single_task(idx: int):
-        prompt, changes, provider = _generate_flux_prompt(source_text, styl_flux)
-        image = _generate_flux_image(prompt)
-        if image:
-            image["filename"] = f"niebo_ai_{idx+1}.png"
-        debug_line = f"[{idx+1}/{n}] provider={provider} prompt={prompt[:120]}"
-        return image, debug_line, changes
+        with app.app_context():
+            prompt, changes, provider = _generate_flux_prompt(source_text, styl_flux)
+            image = _generate_flux_image(prompt)
+            if image:
+                image["filename"] = f"niebo_ai_{idx+1}.png"
+            debug_line = f"[{idx+1}/{n}] provider={provider} prompt={prompt[:120]}"
+            return image, debug_line, changes
 
     images      = []
     debug_lines = []
@@ -520,7 +524,7 @@ def _generate_n_flux_images(n: int, source_text: str, styl_flux: str,
                 if image:
                     images.append((futures[future], image))  # (idx, image)
             except Exception as e:
-                current_app.logger.warning("[flux-n] wyjątek: %s", e)
+                app.logger.warning("[flux-n] wyjątek: %s", e)
 
     # Sortuj po indeksie żeby kolejność była deterministyczna
     images = [img for _, img in sorted(images, key=lambda x: x[0])]
