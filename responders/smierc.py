@@ -32,6 +32,7 @@ import re
 import random
 import base64
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
@@ -57,7 +58,8 @@ TIMEOUT_SEC = 55
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# ── Domyślny system prompt gdy CSV nie ma wpisu ───────────────────────────────
+# ── Limit obrazków AI (zabezpieczenie przed za dużą liczbą) ──────────────────
+MAX_AI_IMAGES = 10
 DEFAULT_SYSTEM_PROMPT = (
     "Piszesz tajemniczą wiadomość z innego wymiaru. "
     "Ton: poetycki, absurdalny, ciepły. Maksymalnie 5 zdań. "
@@ -147,12 +149,19 @@ def _load_xlsx() -> dict:
             etap_num = _parse_int(row_dict.get("etap"))
             if etap_num is None:
                 continue
+            # Szukaj obrazki_ai tolerując spacje w nazwie nagłówka
+            obrazki_ai_val = (
+                row_dict.get("obrazki_ai")
+                or row_dict.get("obrazki_ai ")
+                or "0"
+            )
             etapy[etap_num] = {
                 "opis":          row_dict.get("opis",          ""),
                 "obraz":         row_dict.get("obraz",         ""),
                 "video":         row_dict.get("video",         ""),
+                "obrazki_ai":    _parse_int(obrazki_ai_val) or 0,
                 "system_prompt": row_dict.get("system_prompt", ""),
-                "styl_flux":     style_map.get(etap_num, ""),  # z zakładki style
+                "styl_flux":     style_map.get(etap_num, ""),
             }
 
         wb.close()
@@ -191,7 +200,52 @@ def _guess_content_type(filename: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
-def _load_file_list(file_list_str: str, base_dir: str) -> list:
+def _compress_to_jpg(png_base64: str, quality: int) -> str:
+    """
+    Konwertuje PNG (base64) → JPG (base64) z podaną jakością.
+    Zwraca base64 JPG lub oryginalny PNG base64 gdy konwersja się nie uda.
+    """
+    try:
+        from PIL import Image
+        import io
+        png_bytes = base64.b64decode(png_base64)
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as e:
+        current_app.logger.warning("[compress] Błąd kompresji JPG: %s", e)
+        return png_base64  # fallback: zwróć oryginał
+
+
+def _jpg_quality(n_obrazkow: int) -> int:
+    """Zwraca jakość JPG zależnie od liczby obrazków AI."""
+    if n_obrazkow == 1: return 90
+    if n_obrazkow == 2: return 80
+    if n_obrazkow == 3: return 85
+    if n_obrazkow == 4: return 80
+    return 50  # 5 i więcej
+
+
+def _compress_images_ai(images: list, n_obrazkow: int) -> list:
+    """
+    Kompresuje listę obrazków AI (PNG→JPG) gdy n_obrazkow >= 1.
+    Zwraca listę ze zaktualizowanymi base64, content_type i filename.
+    """
+    if not images:
+        return images
+    quality = _jpg_quality(n_obrazkow)
+    current_app.logger.info("[compress] %d obrazków → JPG quality=%d", len(images), quality)
+    result = []
+    for img in images:
+        compressed_b64 = _compress_to_jpg(img["base64"], quality)
+        fname = img["filename"].rsplit(".", 1)[0] + ".jpg"
+        result.append({
+            "base64":       compressed_b64,
+            "content_type": "image/jpeg",
+            "filename":     fname,
+        })
+    return result
     """
     Parsuje string z listą plików oddzielonych przecinkami.
     Szuka każdego pliku w base_dir.
@@ -330,13 +384,16 @@ def _generate_flux_prompt(source_text: str, styl_flux: str = "") -> tuple:
             current_app.logger.warning("[flux-prompt] DeepSeek wyjątek: %s", e)
             result = None
 
-    # 3. Fallback — tekst nadawcy + styl z CSV
+    # 3. Fallback — tekst nadawcy (bez stylu żeby nie dodawać śmieci)
     if not result:
         current_app.logger.warning("[flux-prompt] Oba API zawiodły — fallback na tekst nadawcy")
-        result   = source_text[:300]  # przytnij żeby nie przekroczyć limitu FLUX
+        result   = source_text[:300]
         provider = "fallback: tekst nadawcy"
+        # Przy fallbacku NIE doklejamy stylu — lepszy czysty prompt niż śmieciowy
+        mutated, changes = _mutate_flux_prompt(result)
+        return mutated, changes, provider
 
-    # Doklejamy styl (z pliku lub wprost z CSV)
+    # Doklejamy styl tylko gdy prompt wygenerowany przez AI
     if styl_flux:
         result = f"{result}, {styl_flux}"
 
@@ -402,22 +459,63 @@ def _generate_flux_image(prompt: str):
     return None
 
 
+def _generate_n_flux_images(n: int, source_text: str, styl_flux: str,
+                            etap: int) -> tuple:
+    """
+    Generuje N obrazków FLUX równolegle.
+    Każdy obrazek ma INNY prompt — Groq/DeepSeek wywoływany N razy.
+    Zwraca (lista_obrazków, lista_debug_info).
+    lista_obrazków = [{base64, content_type, filename}, ...]  — tylko te które się udały
+    lista_debug_info = lista stringów z promptami (do _.txt)
+    """
+    n = max(0, min(n, MAX_AI_IMAGES))
+    if n == 0:
+        return [], []
+
+    current_app.logger.info("[flux-n] etap=%d generuję %d obrazków równolegle", etap, n)
+
+    # Każde zadanie: wygeneruj prompt + obrazek
+    def _single_task(idx: int):
+        prompt, changes, provider = _generate_flux_prompt(source_text, styl_flux)
+        image = _generate_flux_image(prompt)
+        if image:
+            image["filename"] = f"niebo_ai_{idx+1}.png"
+        debug_line = f"[{idx+1}/{n}] provider={provider} prompt={prompt[:120]}"
+        return image, debug_line, changes
+
+    images      = []
+    debug_lines = []
+
+    with ThreadPoolExecutor(max_workers=n) as executor:
+        futures = {executor.submit(_single_task, i): i for i in range(n)}
+        for future in as_completed(futures):
+            try:
+                image, debug_line, _ = future.result()
+                debug_lines.append(debug_line)
+                if image:
+                    images.append((futures[future], image))  # (idx, image)
+            except Exception as e:
+                current_app.logger.warning("[flux-n] wyjątek: %s", e)
+
+    # Sortuj po indeksie żeby kolejność była deterministyczna
+    images = [img for _, img in sorted(images, key=lambda x: x[0])]
+    current_app.logger.info("[flux-n] etap=%d udanych=%d/%d", etap, len(images), n)
+    return images, debug_lines
+
+
 # ── Debug TXT ─────────────────────────────────────────────────────────────────
 
-def _build_debug_txt(source_text: str, flux_prompt: str, flux_provider: str,
-                     etap: int, mutation_changes: list = None) -> dict:
-    changes_str = "\n".join(mutation_changes) if mutation_changes else "(brak mutacji)"
+def _build_debug_txt(source_text: str, flux_info: list, etap: int) -> dict:
+    """
+    flux_info = lista stringów opisujących każdy wygenerowany prompt.
+    """
+    prompts_str = "\n".join(flux_info) if flux_info else "(brak)"
     content = (
         f"Etap: {etap}\n\n"
-        f"--- Prompt wysłany do FLUX ---\n"
-        f"{flux_prompt}\n\n\n"
-        f"=== DEBUG ===\n\n"
-        f"--- Źródło promptu ---\n"
-        f"{source_text}\n\n"
-        f"--- Provider ---\n"
-        f"{flux_provider}\n\n"
-        f"--- Zmutowane słowa ---\n"
-        f"{changes_str}\n\n"
+        f"=== PROMPTY WYSŁANE DO FLUX ===\n"
+        f"{prompts_str}\n\n"
+        f"=== DEBUG ===\n"
+        f"Źródło: {source_text[:300]}\n\n"
         f"--- Parametry FLUX ---\n"
         f"Model: FLUX.1-schnell\n"
         f"num_inference_steps: {HF_STEPS}\n"
@@ -472,7 +570,9 @@ def _run_wyslannik(body: str, historia: list, etap: int) -> dict:
     )
     image     = _generate_flux_image(flux_prompt)
     debug_txt = _build_debug_txt(
-        wynik_tekst or "", flux_prompt, flux_provider, etap, flux_changes
+        wynik_tekst or "",
+        [f"[1/1] provider={flux_provider} prompt={flux_prompt[:120]}"],
+        etap
     )
 
     if not image:
@@ -522,11 +622,12 @@ def build_smierc_section(
         current_app.logger.info("[smierc] etap=%d > max=%d → Wysłannik", etap, max_etap)
         return _run_wyslannik(body, historia, etap)
 
-    # ── ETAP Z CSV ────────────────────────────────────────────════════════════
+    # ── ETAP Z XLSX ───────────────────────────────────────────────────────────
     row           = etapy[etap]
     opis          = row["opis"]
     obraz_lista   = row["obraz"]
     video_lista   = row["video"]
+    obrazki_ai    = min(int(row.get("obrazki_ai", 0) or 0), MAX_AI_IMAGES)
     system_prompt = row["system_prompt"] or DEFAULT_SYSTEM_PROMPT
     styl_flux     = _resolve_styl_flux(row["styl_flux"])
     historia_txt  = _format_historia(historia)
@@ -550,45 +651,41 @@ def build_smierc_section(
         else "<p>Chwilowo brak zasięgu w tej strefie kosmicznej.</p>"
     )
 
-    # ── Obrazy ────────────────────────────────────────────────────────────────
-    images    = []
+    # ── Obrazy statyczne ──────────────────────────────────────────────────────
+    images = _load_images(obraz_lista) if obraz_lista else []
+    if images:
+        current_app.logger.info("[smierc] etap=%d obrazy statyczne: %d", etap, len(images))
+
+    # ── Obrazki AI (FLUX) — generowane równolegle, każdy inny prompt ──────────
+    images_ai = []
     debug_txt = None
 
-    if obraz_lista:
-        # Statyczne pliki z dysku — FLUX nie jest wywoływany
-        images = _load_images(obraz_lista)
-        current_app.logger.info("[smierc] etap=%d obrazy statyczne: %d plików",
-                                etap, len(images))
+    if obrazki_ai > 0:
+        current_app.logger.info("[smierc] etap=%d obrazki_ai=%d START", etap, obrazki_ai)
+        images_ai, debug_lines = _generate_n_flux_images(
+            obrazki_ai, wynik or opis, styl_flux, etap
+        )
+        # Kompresuj PNG → JPG
+        images_ai = _compress_images_ai(images_ai, obrazki_ai)
+        debug_txt = _build_debug_txt(wynik or "", debug_lines, etap)
+        current_app.logger.info("[smierc] etap=%d obrazki_ai=%d/%d udanych",
+                                etap, len(images_ai), obrazki_ai)
     else:
-        # Generuj FLUX
-        current_app.logger.info("[smierc] etap=%d → generuję FLUX (styl: %s)",
-                                etap, styl_flux or "(brak)")
-        flux_prompt, flux_changes, flux_provider = _generate_flux_prompt(
-            wynik or opis, styl_flux
-        )
-        image     = _generate_flux_image(flux_prompt)
-        debug_txt = _build_debug_txt(
-            wynik or "", flux_prompt, flux_provider, etap, flux_changes
-        )
-        if image:
-            images = [image]
-        else:
-            current_app.logger.warning(
-                "[smierc] etap=%d FLUX zawiódł — tylko tekst + _.txt", etap
-            )
+        current_app.logger.info("[smierc] etap=%d obrazki_ai=0 — pomijam FLUX", etap)
 
     # ── Video ─────────────────────────────────────────────────────────────────
     videos = _load_videos(video_lista) if video_lista else []
 
     current_app.logger.info(
-        "[smierc] etap=%d reply=%s images=%d videos=%d debug_txt=%s",
-        etap, bool(wynik), len(images), len(videos), bool(debug_txt)
+        "[smierc] etap=%d reply=%s images=%d images_ai=%d videos=%d",
+        etap, bool(wynik), len(images), len(images_ai), len(videos)
     )
 
     return {
         "reply_html": reply_html,
         "nowy_etap":  etap + 1,
         "images":     images,
+        "images_ai":  images_ai,
         "videos":     videos,
         "debug_txt":  debug_txt,
     }
