@@ -155,9 +155,8 @@ def _get_etap_image(etap: int, filename: str = ""):
     return None
 
 
-# Mapowanie rozszerzeń na content-type (wideo, dokumenty, obrazy, inne)
-_ATTACHMENT_MIME = {
-    # wideo
+# Mapowanie rozszerzeń plików wideo na content-type
+_VIDEO_MIME = {
     ".mp4":  "video/mp4",
     ".webm": "video/webm",
     ".avi":  "video/x-msvideo",
@@ -167,47 +166,23 @@ _ATTACHMENT_MIME = {
     ".3gp":  "video/3gpp",
     ".flv":  "video/x-flv",
     ".wmv":  "video/x-ms-wmv",
-    # dokumenty
-    ".pdf":  "application/pdf",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".doc":  "application/msword",
-    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    ".txt":  "text/plain",
-    ".csv":  "text/csv",
-    # obrazy
-    ".jpg":  "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png":  "image/png",
-    ".gif":  "image/gif",
-    ".webp": "image/webp",
-    # audio
-    ".mp3":  "audio/mpeg",
-    ".ogg":  "audio/ogg",
-    ".wav":  "audio/wav",
 }
 
-def _get_attachment_mime(filename: str) -> str:
+def _get_video_mime(filename: str) -> str:
     ext = os.path.splitext(filename.lower())[1]
-    return _ATTACHMENT_MIME.get(ext, "application/octet-stream")
+    return _VIDEO_MIME.get(ext, "video/mp4")
 
 
 def _get_etap_video(etap: int, filename: str = ""):
-    """
-    Wczytuje plik z kolumny 'video' dla etapu.
-    Obsługuje dowolny format — wideo, PDF, dokumenty, audio, obrazy.
-    Szuka pliku w media/mp4/niebo/ (nazwa katalogu historyczna, ale przyjmuje dowolny plik).
-    """
-    if not filename.strip():
-        return None  # brak wpisu w kolumnie video — nic nie dołączaj
-    name = filename.strip()
+    """Wczytuje plik wideo dla etapu. Obsługuje dowolny format."""
+    name = filename.strip() if filename.strip() else f"{etap}.mp4"
     path = os.path.join(MEDIA_DIR, "mp4", "niebo", name)
     b64  = _file_to_base64(path)
     if b64:
-        mime = _get_attachment_mime(name)
-        current_app.logger.info("Załącznik video etapu %d OK (%s, %s)", etap, name, mime)
+        mime = _get_video_mime(name)
+        current_app.logger.info("Wideo etapu %d OK (%s, %s)", etap, name, mime)
         return {"base64": b64, "content_type": mime, "filename": name}
-    current_app.logger.warning("Brak pliku video etapu %d: %s", etap, path)
+    current_app.logger.warning("Brak wideo etapu %d: %s", etap, path)
     return None
 
 
