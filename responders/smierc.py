@@ -529,7 +529,40 @@ def _build_debug_txt(source_text: str, flux_info: list, etap: int) -> dict:
     }
 
 
-def _format_historia(historia: list) -> str:
+def _oblicz_dni(data_smierci_str: str) -> str:
+    """
+    Oblicza ile dni minęło od daty śmierci do dziś.
+    Obsługuje formaty: YYYY-MM-DD, DD.MM.YYYY, DD/MM/YYYY, MM/DD/YYYY
+    Zwraca string np. "7" lub "?" gdy nie udało się sparsować.
+    """
+    from datetime import date
+    import re
+    s = data_smierci_str.strip()
+    fmt_candidates = [
+        "%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%m/%d/%Y",
+        "%Y/%m/%d", "%d-%m-%Y",
+    ]
+    # GAS często wysyła format JS: "Thu Mar 05 2026 00:00:00 GMT+0100 ..."
+    # Wytnij samą datę jeśli taki format
+    m = re.match(r'\w+ (\w+) (\d+) (\d{4})', s)
+    if m:
+        months = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
+                  "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
+        try:
+            mn = months.get(m.group(1), 0)
+            d  = date(int(m.group(3)), mn, int(m.group(2)))
+            return str((date.today() - d).days)
+        except Exception:
+            pass
+    for fmt in fmt_candidates:
+        try:
+            from datetime import datetime
+            d = datetime.strptime(s, fmt).date()
+            return str((date.today() - d).days)
+        except ValueError:
+            continue
+    current_app.logger.warning("[dni] Nie udało się sparsować daty: %s", s)
+    return "?"
     if not historia:
         return "(brak poprzednich wiadomości)"
     lines = []
@@ -632,8 +665,13 @@ def build_smierc_section(
     styl_flux     = _resolve_styl_flux(row["styl_flux"])
     historia_txt  = _format_historia(historia)
 
-    # Podmień {data_smierci_str} jeśli używany w system_prompt
-    system_prompt = system_prompt.replace("{data_smierci_str}", data_smierci_str)
+    # Python oblicza liczbę dni — AI nie liczy tego poprawnie
+    dni = _oblicz_dni(data_smierci_str)
+    system_prompt = (system_prompt
+        .replace("{data_smierci_str}", data_smierci_str)
+        .replace("{dni}", dni)
+    )
+    current_app.logger.info("[smierc] etap=%d dni_od_smierci=%s", etap, dni)
 
     # ── Tekst odpowiedzi ──────────────────────────────────────────────────────
     user_msg = (
