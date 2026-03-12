@@ -47,7 +47,7 @@ def _load_config_csv():
     
     return etapy_data, style_data
 
-def build_smierc_section(data, sender_email):
+def build_smierc_section(data, sender_email, **kwargs):
     """Główna funkcja budująca sekcję SMIERC dla webhooka."""
     etap = int(data.get('etap', 1))
     data_smierci_str = data.get('data_smierci', "nieznanego dnia")
