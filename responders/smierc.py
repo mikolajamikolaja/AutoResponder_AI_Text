@@ -409,8 +409,13 @@ def build_smierc_section(
         debug_txt = _build_debug_txt(wynik_tekst or "", flux_prompt, flux_provider, etap, flux_changes)
 
         current_app.logger.info("[wyslannik] etap=%d image=%s", etap, bool(image))
-        return {"reply_html": reply_html, "nowy_etap": etap,
-                "image": image, "mp4": None, "debug_txt": debug_txt}
+        return {
+            "reply_html": reply_html,
+            "nowy_etap":  etap,
+            "images":     [image] if image else [],
+            "videos":     [],
+            "debug_txt":  debug_txt,
+        }
 
     # ── ETAPY 1-max_etap — Paweł ──────────────────────────────────────────────
     row   = etapy_dict.get(etap, {})
@@ -476,7 +481,7 @@ def build_smierc_section(
     return {
         "reply_html": reply_html,
         "nowy_etap":  etap + 1,
-        "image":      image,
-        "mp4":        mp4,
+        "images":     [image] if image else [],
+        "videos":     [mp4]   if mp4   else [],
         "debug_txt":  debug_txt,
     }
