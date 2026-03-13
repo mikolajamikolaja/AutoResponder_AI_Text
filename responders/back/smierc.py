@@ -363,12 +363,31 @@ def _get_hf_tokens() -> list:
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
-def _generate_flux_image(prompt: str):
-    """Generuje jeden obrazek FLUX z losowym seed. Zwraca dict lub None."""
+def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = True):
+    """
+    Generuje jeden obrazek FLUX z losowym seed.
+    
+    Args:
+        prompt: Tekst promptu FLUX
+        etap: Numer etapu (dla logowania)
+        return_token_info: Jeśli True, zwraca info o próbach tokenów
+    
+    Returns:
+        - Sukces: dict z base64, content_type, filename
+        - Porazka: dict z "token_attempts" (jeśli return_token_info=True)
+        - Porazka: None (jeśli return_token_info=False)
+    """
     tokens = _get_hf_tokens()
     if not tokens:
         current_app.logger.error("[flux] Brak tokenow HF!")
         return None
+    
+    current_app.logger.info(
+        "[flux] Dostepne tokeny HF: %d sztuk", len(tokens)
+    )
+    
+    token_attempts = []  # Śledź wszystkie próby
+    
     payload = {
         "inputs": prompt,
         "parameters": {
@@ -378,49 +397,148 @@ def _generate_flux_image(prompt: str):
         }
     }
     current_app.logger.info("[flux] prompt: %s", prompt[:200])
+    
     for name, token in tokens:
+        attempt = {
+            "token_name": name,
+            "status": "unknown",
+            "http_code": None,
+            "remaining_requests": None,
+            "error": None
+        }
+        
         headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
         try:
+            current_app.logger.info("[flux-attempt] Probuje token: %s", name)
             resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
+            
+            # Wyciągnij info z headera Hugging Face
+            remaining = resp.headers.get("X-Remaining-Requests")
+            if remaining:
+                attempt["remaining_requests"] = int(remaining)
+            
+            attempt["http_code"] = resp.status_code
+            
             if resp.status_code == 200:
-                current_app.logger.info("[flux] sukces token=%s PNG %d B", name, len(resp.content))
-                return {
+                attempt["status"] = "SUCCESS"
+                current_app.logger.info(
+                    "[flux] ✓ Token %s: sukces (PNG %d B, pozostalo: %s zadan)",
+                    name, len(resp.content), remaining or "?"
+                )
+                
+                result = {
                     "base64":       base64.b64encode(resp.content).decode("ascii"),
                     "content_type": "image/png",
                     "filename":     "niebo.png",
                 }
+                
+                # Dodaj info o tokenach jeśli jest tego wiele (dla debug)
+                if return_token_info and len(token_attempts) > 0:
+                    result["token_info"] = token_attempts
+                
+                return result
+                
             elif resp.status_code in (401, 403):
-                current_app.logger.warning("[flux] token %s niewazny", name)
+                attempt["status"] = "INVALID_TOKEN"
+                attempt["error"] = f"Nieautoryzowany ({resp.status_code})"
+                current_app.logger.warning(
+                    "[flux] ✗ Token %s: invalid/expired (HTTP %d)",
+                    name, resp.status_code
+                )
+                
             elif resp.status_code in (503, 529):
-                current_app.logger.warning("[flux] token %s przeciazony", name)
+                attempt["status"] = "OVERLOADED"
+                attempt["error"] = f"Przeciazony ({resp.status_code})"
+                current_app.logger.warning(
+                    "[flux] ⚠ Token %s: serwer przeciazony (HTTP %d)",
+                    name, resp.status_code
+                )
+                
+            elif resp.status_code >= 500:
+                attempt["status"] = f"SERVER_ERROR"
+                attempt["error"] = f"HTTP {resp.status_code}"
+                current_app.logger.warning(
+                    "[flux] ✗ Token %s: blad serwera %d: %s",
+                    name, resp.status_code, resp.text[:100]
+                )
+                
             else:
-                current_app.logger.warning("[flux] token %s blad %s: %s",
-                                           name, resp.status_code, resp.text[:100])
+                attempt["status"] = f"HTTP_{resp.status_code}"
+                attempt["error"] = resp.text[:100] if resp.text else "Unknown error"
+                current_app.logger.warning(
+                    "[flux] ✗ Token %s: blad %d: %s",
+                    name, resp.status_code, resp.text[:100]
+                )
+                
         except requests.exceptions.Timeout:
-            current_app.logger.warning("[flux] token %s timeout", name)
+            attempt["status"] = "TIMEOUT"
+            attempt["error"] = f"Timeout ({TIMEOUT_SEC}s)"
+            current_app.logger.warning("[flux] ⏱ Token %s: timeout (%ds)", name, TIMEOUT_SEC)
+            
+        except requests.exceptions.ConnectionError as e:
+            attempt["status"] = "CONNECTION_ERROR"
+            attempt["error"] = str(e)[:50]
+            current_app.logger.warning("[flux] 🔌 Token %s: connection error: %s", name, str(e)[:50])
+            
         except Exception as e:
-            current_app.logger.warning("[flux] token %s wyjatek: %s", name, str(e)[:50])
-    current_app.logger.error("[flux] Wszystkie tokeny HF zawiodly!")
+            attempt["status"] = "EXCEPTION"
+            attempt["error"] = str(e)[:50]
+            current_app.logger.warning("[flux] ❌ Token %s: exception: %s", name, str(e)[:50])
+        
+        token_attempts.append(attempt)
+    
+    current_app.logger.error(
+        "[flux] ✗ Wszystkie tokeny HF zawiodly! (%d tokenow sprobowanych)",
+        len(token_attempts)
+    )
+    
+    # Zwróć info o tokenach nawet przy porażce
+    if return_token_info:
+        return {"token_attempts": token_attempts}
+    
     return None
 
 
 def _generate_multiple_flux_images(prompt: str, ilosc: int, kompresja_jpg: int, etap: int) -> list:
     """
     Generuje do `ilosc` obrazkow FLUX z losowym seed dla kazdego.
-    Jezeli tokeny sie wyczerpja — zwraca tyle ile udalo sie wygenerowac.
+    Zwraca listę obrazków (każdy może mieć token_info z pierwszej próby).
     """
     wyniki = []
+    first_attempt = None  # Śledź info z pierwszego obrazka
+    
     for i in range(ilosc):
         current_app.logger.info("[pawel-flux] etap=%d obrazek %d/%d", etap, i + 1, ilosc)
-        raw = _generate_flux_image(prompt)
+        
+        # Dla pierwszego obrazka, zbierz info o tokenach
+        return_token_info = (i == 0)
+        raw = _generate_flux_image(prompt, etap=etap, return_token_info=return_token_info)
+        
         if raw is None:
             current_app.logger.warning(
                 "[pawel-flux] etap=%d obrazek %d/%d nieudany — przerywam", etap, i + 1, ilosc
             )
             break
-        compressed = _compress_flux_image(raw, kompresja_jpg)
+        
+        # Wyciągnij token_info z pierwszego wyniku
+        if i == 0 and isinstance(raw, dict) and "token_attempts" in raw:
+            first_attempt = raw.get("token_attempts")
+            # Sprawdź czy jest też base64 (sukces)
+            if "base64" in raw:
+                compressed = _compress_flux_image(raw, kompresja_jpg)
+            else:
+                # Porażka — pomiń ten obrazek
+                continue
+        else:
+            compressed = _compress_flux_image(raw, kompresja_jpg)
+        
         ext = ".jpg" if kompresja_jpg > 0 else ".png"
         compressed["filename"] = f"niebo_{etap}_{i + 1}{ext}"
+        
+        # Dodaj token_info do pierwszego obrazka dla debug
+        if i == 0 and first_attempt:
+            compressed["token_info"] = first_attempt
+        
         wyniki.append(compressed)
 
     current_app.logger.info(
@@ -433,23 +551,68 @@ def _build_debug_txt(source_text: str, flux_prompt: str,
                      flux_provider: str, etap: int,
                      ilosc_zamowiona: int = 1,
                      ilosc_wygenerowana: int = 1,
-                     mutation_changes: list = None) -> dict:
+                     mutation_changes: list = None,
+                     token_info: list = None) -> dict:
+    """
+    Generuje debug TXT z informacjami o FLUX i próbach tokenów.
+    
+    Args:
+        token_info: Lista slownikow z info o próbach tokenów HF:
+                    [{"token_name": "HF_TOKEN", "status": "SUCCESS", 
+                      "remaining_requests": 100, ...}, ...]
+    """
+    
     changes_str = "\n".join(mutation_changes) if mutation_changes else "(brak mutacji)"
+    
+    # Formatuj info o tokenach
+    tokens_str = ""
+    if token_info:
+        tokens_str = "\n=== TOKENY HUGGING FACE ===\n"
+        tokens_str += f"Razem prob: {len(token_info)}\n\n"
+        
+        for attempt in token_info:
+            token_name = attempt.get("token_name", "?")
+            status = attempt.get("status", "unknown")
+            http_code = attempt.get("http_code")
+            remaining = attempt.get("remaining_requests")
+            error = attempt.get("error")
+            
+            tokens_str += f"• {token_name}:\n"
+            tokens_str += f"  Status: {status}\n"
+            
+            if http_code:
+                tokens_str += f"  HTTP: {http_code}\n"
+            
+            if remaining is not None:
+                tokens_str += f"  Pozostalo zadan: {remaining}\n"
+            
+            if error:
+                tokens_str += f"  Blad: {error}\n"
+            
+            tokens_str += "\n"
+    else:
+        tokens_str = "\n--- Tokeny HF ---\nBrak danych (generacja nie byla wysylana)\n\n"
+    
     content = (
-        f"Etap: {etap}\n\n"
-        f"{flux_prompt}\n\n\n"
         f"=== REQUIEM RESPONDER — DEBUG FLUX ===\n\n"
-        f"--- Obrazki zamowione/wygenerowane ---\n{ilosc_wygenerowana}/{ilosc_zamowiona}\n\n"
-        f"--- Zrodlo promptu FLUX ---\n{source_text}\n\n"
-        f"--- Provider ---\n{flux_provider}\n\n"
-        f"--- Zmutowane slowa ---\n{changes_str}\n\n"
-        f"--- Parametry FLUX ---\n"
+        f"Etap: {etap}\n"
+        f"Timestamp: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"=== PROMPT FLUX ===\n{flux_prompt}\n\n"
+        f"=== OBRAZKI ===\n"
+        f"Zamowione: {ilosc_zamowiona}\n"
+        f"Wygenerowane: {ilosc_wygenerowana}\n\n"
+        f"=== ZRODLO PROMPTU ===\n{source_text[:1000]}\n\n"
+        f"=== GENERACJA ===\n"
+        f"Provider: {flux_provider}\n"
         f"Model: FLUX.1-schnell\n"
-        f"num_inference_steps: {HF_STEPS}\n"
-        f"guidance_scale: {HF_GUIDANCE}\n"
-        f"seed: losowy per obrazek\n"
-        f"API URL: {HF_API_URL}\n"
+        f"Kroki: {HF_STEPS}\n"
+        f"Guidance: {HF_GUIDANCE}\n"
+        f"Seed: losowy per obrazek\n"
+        f"API: {HF_API_URL}\n\n"
+        f"=== MUTACJE ===\n{changes_str}\n"
+        f"{tokens_str}"
     )
+    
     return {
         "base64":       base64.b64encode(content.encode("utf-8")).decode("ascii"),
         "content_type": "text/plain",
@@ -519,15 +682,28 @@ def build_smierc_section(
         flux_prompt, flux_changes, flux_provider = _generate_flux_prompt(
             wynik_tekst or body, groq_system_override=groq_system
         )
-        image     = _generate_flux_image(flux_prompt)
+        image_result = _generate_flux_image(flux_prompt, etap=etap, return_token_info=True)
+        
+        # Wyciągnij obrazek i token_info
+        image = None
+        token_info = None
+        if image_result:
+            if "base64" in image_result:
+                image = image_result
+                token_info = image_result.get("token_info")
+            elif "token_attempts" in image_result:
+                token_info = image_result.get("token_attempts")
+        
         debug_txt = _build_debug_txt(
             wynik_tekst or "", flux_prompt, flux_provider, etap,
             ilosc_zamowiona=1,
             ilosc_wygenerowana=1 if image else 0,
             mutation_changes=flux_changes,
+            token_info=token_info,
         )
 
-        current_app.logger.info("[wyslannik] etap=%d image=%s", etap, bool(image))
+        current_app.logger.info("[wyslannik] etap=%d image=%s tokens=%s", 
+                               etap, bool(image), bool(token_info))
         return {
             "reply_html": reply_html,
             "nowy_etap":  etap,
@@ -572,6 +748,7 @@ def build_smierc_section(
     # Obrazki FLUX — N roznych wariacji dzieki losowemu seed
     flux_images = []
     debug_txt   = None
+    token_info  = None
     if ilosc_obrazkow_ai > 0:
         current_app.logger.info(
             "[pawel-flux] etap=%d ilosc=%d kompresja=%d%% — generuje FLUX",
@@ -588,11 +765,17 @@ def build_smierc_section(
         flux_images = _generate_multiple_flux_images(
             flux_prompt, ilosc_obrazkow_ai, kompresja_jpg, etap
         )
+        
+        # Wyciągnij token_info z pierwszego obrazka
+        if flux_images and isinstance(flux_images[0], dict):
+            token_info = flux_images[0].get("token_info")
+        
         debug_txt = _build_debug_txt(
             wynik or "", flux_prompt, flux_provider, etap,
             ilosc_zamowiona=ilosc_obrazkow_ai,
             ilosc_wygenerowana=len(flux_images),
             mutation_changes=flux_changes,
+            token_info=token_info,
         )
 
     # Lista obrazkow: statyczny PNG pierwszy, potem FLUX
@@ -601,8 +784,9 @@ def build_smierc_section(
     mp4 = _get_etap_video(etap, video_filename)
 
     current_app.logger.info(
-        "[smierc] Etap %d: images=%d (flux=%d/%d) mp4=%s debug_txt=%s",
-        etap, len(images), len(flux_images), ilosc_obrazkow_ai, bool(mp4), bool(debug_txt)
+        "[smierc] Etap %d: images=%d (flux=%d/%d) mp4=%s debug_txt=%s tokens=%s",
+        etap, len(images), len(flux_images), ilosc_obrazkow_ai, bool(mp4), bool(debug_txt),
+        bool(token_info)
     )
     return {
         "reply_html": reply_html,

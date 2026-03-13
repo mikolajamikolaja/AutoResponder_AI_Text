@@ -665,7 +665,7 @@ def build_smierc_section(
                 "Podpisz sie: — Wyslannik z wyzszych sfer"
             ))
         )
-        user_msg    = f"Osoba pyta: {body}\n\nHistoria:\n{historia_txt}"
+        user_msg    = f"Osoba pyta: {body}\n\nHistoria:\n{historia_txt}\n\nData śmierci Pawła: {data_smierci_str}"
         wynik_tekst = call_deepseek(system_wyslannik, user_msg, MODEL_TYLER)
         if not wynik_tekst:
             current_app.logger.warning("[wyslannik] DeepSeek zawiodl — probuje Groq")
@@ -679,8 +679,9 @@ def build_smierc_section(
 
         styl_file   = s_row.get("styl", "")
         groq_system = _load_style_file(styl_file)
+        source_with_date = f"{wynik_tekst or body}\n\n[Pawel umarl dnia: {data_smierci_str}]"
         flux_prompt, flux_changes, flux_provider = _generate_flux_prompt(
-            wynik_tekst or body, groq_system_override=groq_system
+            source_with_date, groq_system_override=groq_system
         )
         image_result = _generate_flux_image(flux_prompt, etap=etap, return_token_info=True)
         
@@ -735,8 +736,14 @@ def build_smierc_section(
         system_prompt_tmpl = _load_style_file(system_file) or DEFAULT_SYSTEM_PROMPT
 
     system   = system_prompt_tmpl.replace("{data_smierci_str}", data_smierci_str)
-    user_msg = f"Etap w zaswiatach: {opis}\nWiadomosc: {body}\nHistoria:\n{historia_txt}"
+    user_msg = f"Etap w zaswiatach: {opis}\nWiadomosc: {body}\nHistoria:\n{historia_txt}\n\nData śmierci: {data_smierci_str}"
     wynik    = call_deepseek(system, user_msg, MODEL_TYLER)
+    
+    # Fallback do Groq jeśli DeepSeek zawiedzie
+    if not wynik:
+        current_app.logger.warning("[smierc-etapy] DeepSeek zawiodl — probuje Groq")
+        wynik = _call_groq(system, user_msg)
+    
     reply_html = (
         f"<p>{wynik}</p>" if wynik
         else "<p>To autoresponder. Chwilowo brak zasiegu w tej strefie kosmicznej.</p>"
@@ -756,8 +763,9 @@ def build_smierc_section(
         )
         styl_file    = s_row.get("styl", "")
         styl_content = _load_style_file(styl_file)
+        source_with_date = f"{styl_content or wynik or opis}\n\n[Pawel umarl dnia: {data_smierci_str}]"
         flux_prompt, flux_changes, flux_provider = _generate_flux_prompt(
-            styl_content or wynik or opis
+            source_with_date
         )
         current_app.logger.info(
             "[pawel-flux] prompt=%.120s provider=%s", flux_prompt, flux_provider
