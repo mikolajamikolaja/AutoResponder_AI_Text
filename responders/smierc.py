@@ -405,46 +405,149 @@ def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> t
     return mutated_prompt, changes, provider
 
 
+def _get_hf_tokens() -> list:
+    """Pobiera listę dostępnych tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKEN20)."""
+    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(21)]
+    return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
+
+
 def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = False) -> dict | None:
-    """Generuje jeden obrazek FLUX. Zwraca {base64, content_type, filename} lub None."""
-    api_key = os.getenv("API_KEY_HUGGINGFACE", "").strip()
-    if not api_key:
-        current_app.logger.warning("[hf] Brak API_KEY_HUGGINGFACE")
+    """
+    Generuje jeden obrazek FLUX z losowym seed.
+    Próbuje każdy token HF po kolei (HF_TOKEN, HF_TOKEN1...HF_TOKEN20).
+    Nikdy nie używa 2 tokeny równocześnie — jeden token = jeden request.
+    
+    Args:
+        prompt: Tekst promptu FLUX
+        etap: Numer etapu (dla logowania)
+        return_token_info: Jeśli True, zwraca info o próbach tokenów
+    
+    Returns:
+        - Sukces: dict z base64, content_type, filename
+        - Porażka: dict z "token_attempts" (jeśli return_token_info=True)
+        - Porażka: None (jeśli return_token_info=False)
+    """
+    tokens = _get_hf_tokens()
+    if not tokens:
+        current_app.logger.error("[flux] Brak tokenow HF!")
         return None
     
+    current_app.logger.info(
+        "[flux] Dostepne tokeny HF: %d sztuk", len(tokens)
+    )
+    
+    token_attempts = []  # Śledź wszystkie próby
+    
     seed = random.randint(0, 2**32 - 1)
-    headers = {"Authorization": f"Bearer {api_key}"}
     payload = {
         "inputs": prompt,
         "parameters": {
             "num_inference_steps": HF_STEPS,
-            "guidance_scale": HF_GUIDANCE,
-            "seed": seed,
+            "guidance_scale":      HF_GUIDANCE,
+            "seed":                seed,
         }
     }
+    current_app.logger.info("[flux] prompt: %s seed: %d", prompt[:200], seed)
     
-    try:
-        resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
-        if resp.status_code == 200:
-            img_bytes = resp.content
-            b64 = base64.b64encode(img_bytes).decode("ascii")
-            result = {
-                "base64": b64,
-                "content_type": "image/png",
-                "filename": f"zaswiety_etap{etap}_seed{seed}.png"
-            }
-            if return_token_info:
-                result["token_info"] = {"seed": seed, "status": "success"}
-            current_app.logger.info("[hf] Obrazek OK: seed=%d", seed)
-            return result
-        else:
-            current_app.logger.warning("[hf] HTTP %s: %s", resp.status_code, resp.text[:100])
-            if return_token_info:
-                return {"token_attempts": [{"seed": seed, "status": f"http_{resp.status_code}"}]}
-    except Exception as e:
-        current_app.logger.warning("[hf] Wyjatek: %s", str(e)[:100])
-        if return_token_info:
-            return {"token_attempts": [{"seed": seed, "status": f"error_{str(e)[:20]}"}]}
+    # Próbuj każdy token po kolei
+    for name, token in tokens:
+        attempt = {
+            "token_name": name,
+            "status": "unknown",
+            "http_code": None,
+            "remaining_requests": None,
+            "error": None
+        }
+        
+        headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
+        try:
+            current_app.logger.info("[flux-attempt] Probuje token: %s", name)
+            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
+            
+            # Wyciągnij info z headera Hugging Face
+            remaining = resp.headers.get("X-Remaining-Requests")
+            if remaining:
+                attempt["remaining_requests"] = int(remaining)
+            
+            attempt["http_code"] = resp.status_code
+            
+            if resp.status_code == 200:
+                attempt["status"] = "SUCCESS"
+                current_app.logger.info(
+                    "[flux] ✓ Token %s: sukces (PNG %d B, pozostalo: %s zadan)",
+                    name, len(resp.content), remaining or "?"
+                )
+                
+                result = {
+                    "base64":       base64.b64encode(resp.content).decode("ascii"),
+                    "content_type": "image/png",
+                    "filename":     f"niebo_etap{etap}_seed{seed}.png",
+                }
+                
+                # Dodaj info o tokenach jeśli jest tego wiele (dla debug)
+                if return_token_info and len(token_attempts) > 0:
+                    result["token_info"] = token_attempts
+                
+                return result
+                
+            elif resp.status_code in (401, 403):
+                attempt["status"] = "INVALID_TOKEN"
+                attempt["error"] = f"Nieautoryzowany ({resp.status_code})"
+                current_app.logger.warning(
+                    "[flux] ✗ Token %s: invalid/expired (HTTP %d)",
+                    name, resp.status_code
+                )
+                
+            elif resp.status_code in (503, 529):
+                attempt["status"] = "OVERLOADED"
+                attempt["error"] = f"Przeciazony ({resp.status_code})"
+                current_app.logger.warning(
+                    "[flux] ⚠ Token %s: serwer przeciazony (HTTP %d)",
+                    name, resp.status_code
+                )
+                
+            elif resp.status_code >= 500:
+                attempt["status"] = "SERVER_ERROR"
+                attempt["error"] = f"HTTP {resp.status_code}"
+                current_app.logger.warning(
+                    "[flux] ✗ Token %s: blad serwera %d: %s",
+                    name, resp.status_code, resp.text[:100]
+                )
+                
+            else:
+                attempt["status"] = f"HTTP_{resp.status_code}"
+                attempt["error"] = resp.text[:100] if resp.text else "Unknown error"
+                current_app.logger.warning(
+                    "[flux] ✗ Token %s: blad %d: %s",
+                    name, resp.status_code, resp.text[:100]
+                )
+                
+        except requests.exceptions.Timeout:
+            attempt["status"] = "TIMEOUT"
+            attempt["error"] = f"Timeout ({TIMEOUT_SEC}s)"
+            current_app.logger.warning("[flux] ⏱ Token %s: timeout (%ds)", name, TIMEOUT_SEC)
+            
+        except requests.exceptions.ConnectionError as e:
+            attempt["status"] = "CONNECTION_ERROR"
+            attempt["error"] = str(e)[:50]
+            current_app.logger.warning("[flux] 🔌 Token %s: connection error: %s", name, str(e)[:50])
+            
+        except Exception as e:
+            attempt["status"] = "EXCEPTION"
+            attempt["error"] = str(e)[:50]
+            current_app.logger.warning("[flux] ❌ Token %s: exception: %s", name, str(e)[:50])
+        
+        token_attempts.append(attempt)
+    
+    current_app.logger.error(
+        "[flux] ✗ Wszystkie tokeny HF zawiodly! (%d tokenow sprobowanych)",
+        len(token_attempts)
+    )
+    
+    # Zwróć info o tokenach nawet przy porażce
+    if return_token_info:
+        return {"token_attempts": token_attempts}
+    
     return None
 
 
