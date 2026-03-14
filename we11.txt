@@ -556,6 +556,35 @@ function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
     });
   }
 }
+// ZNAJDŹ:
+
+
+// ZAMIEŃ NA:
+function _saveJpgsToDrive(images) {
+  try {
+    var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
+    if (!folderId) {
+      console.warn("[Drive] Brak DRIVE_FOLDER_ID w Script Properties");
+      return;
+    }
+    var folder = DriveApp.getFolderById(folderId);
+    if (!images || !images.length) return;
+    images.forEach(function(imgObj) {
+      if (!imgObj || !imgObj.base64) return;
+      var name = imgObj.filename || "niebo.jpg";
+      if (!name.toLowerCase().endsWith(".jpg") && !name.toLowerCase().endsWith(".jpeg")) return;
+      var blob = Utilities.newBlob(
+        Utilities.base64Decode(imgObj.base64),
+        "image/jpeg",
+        name
+      );
+      folder.createFile(blob);
+      console.log("[Drive] Zapisano: " + name);
+    });
+  } catch(e) {
+    console.error("[Drive] Błąd zapisu: " + e.message);
+  }
+}
 
 function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
   if (!data) {
@@ -631,6 +660,7 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
       name:         "Autoresponder zza swiatowy"
     });
     console.log("Wyslano smierc (etap " + newEtap + ") do " + recipient + ". Zalacznikow: " + attachments.length + " inline: " + Object.keys(inlineImages).length);
+    _saveJpgsToDrive(data.images);
   } catch(e) {
     console.error("reply() fail: " + e.message + " — probuje sendEmail()");
     try {
