@@ -97,7 +97,7 @@ def build_zwykly_section(body: str) -> dict:
             'Tekst: {{USER_TEXT}}'
         )
     )
-    prompt_for_model = prompt_template.replace("{{USER_TEXT}}", body[:3000])
+    prompt_for_model = prompt_template.replace("{{USER_TEXT}}", body[:6000])
 
     res_raw = call_deepseek(prompt_for_model, "", MODEL_TYLER)
 
