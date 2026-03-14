@@ -117,9 +117,6 @@ def webhook():
     # (false gdy email jest TYLKO dla generator_pdf bez innych flag/list)
     wants_text_reply = bool(data.get("wants_text_reply", True))
     
-    # ✅ NOWA LOGIKA: Jeśli wants_smierc=True, nie generuj zwykły/biznes
-    if wants_smierc:
-        wants_text_reply = False
 
     wave1 = {}
     if wants_text_reply:
