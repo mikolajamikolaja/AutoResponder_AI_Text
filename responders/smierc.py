@@ -770,10 +770,10 @@ def build_smierc_section(
             etap, ilosc_obrazkow_ai, kompresja_jpg
         )
         styl_file    = s_row.get("styl", "")
-        styl_content = _load_style_file(styl_file)
-        source_with_date = f"{styl_content or wynik or opis}\n\n[Pawel umarl dnia: {data_smierci_str}]"
+        groq_system = _load_style_file(styl_file)
+        source_with_date = f"{wynik or opis}\n\n[Pawel umarl dnia: {data_smierci_str}]"
         flux_prompt, flux_changes, flux_provider = _generate_flux_prompt(
-            source_with_date
+            source_with_date, groq_system_override=groq_system
         )
         current_app.logger.info(
             "[pawel-flux] prompt=%.120s provider=%s", flux_prompt, flux_provider
