@@ -54,8 +54,8 @@ FILE_FLUX_FORBIDDEN          = os.path.join(PROMPTS_DIR, "flux_forbidden.txt")
 FILE_FLUX_MUTATIONS          = os.path.join(PROMPTS_DIR, "flux_mutations.txt")
 
 HF_API_URL  = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-HF_STEPS    = 5
-HF_GUIDANCE = 5
+HF_STEPS    = 1
+HF_GUIDANCE = 1
 TIMEOUT_SEC = 55
 
 GROQ_MODEL   = "llama-3.3-70b-versatile"
