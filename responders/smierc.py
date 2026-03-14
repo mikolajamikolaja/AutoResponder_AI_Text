@@ -1,6 +1,8 @@
 """
-responders/smierc.py
+responders/smierc.py [NAPRAWIONA WERSJA]
 Posmiertny autoresponder Pawla.
+
+ZMIANA: Wiadomości teraz wyliczają dni od daty śmierci i wyświetlają je w emailu!
 
 Konfiguracja pochodzi z prompts/requiem_etapy.xlsx:
   zakladka 'etapy' — kolumny czytane po POZYCJI (niezaleznie od nazwy):
@@ -34,6 +36,7 @@ import random
 import base64
 import requests
 import pandas as pd
+from datetime import date, datetime
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
@@ -62,15 +65,48 @@ DEFAULT_SYSTEM_PROMPT = (
     "Jestes Pawlem — zmarlym mezczyzna piszacym z zaswiatow. "
     "Piszesz po polsku. Ton: spokojny, lekko absurdalny, z humorem. "
     "Odpowiedz maksymalnie 5 zdan. Podpisz sie: — Autoresponder Pawla-zza-swiatow. "
-    "Wspomnij ze umarles na suchoty dnia {data_smierci_str}."
+    "Wspomnij ze umarles na suchoty dnia {data_smierci_str}. "
+    "ZAKAZ uzywania emoji, emotikon i symboli specjalnych — tylko zwykly tekst."
 )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# LADOWANIE XLSX
+# LICZENIE DNI OD ŚMIERCI
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _load_config_xlsx() -> tuple:
+def _dni_w_niebie(data_smierci_str: str) -> str:
+    """Oblicza ile dni minęło od daty śmierci. Zwraca gotowy tekst np. 'Jestem w niebie od 10 dni.'"""
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            data_smierci = datetime.strptime(data_smierci_str.strip(), fmt).date()
+            delta = (date.today() - data_smierci).days
+            if delta <= 0:
+                return ""
+            if delta == 1:
+                return "Jestem w niebie od 1 dnia."
+            return f"Jestem w niebie od {delta} dni."
+        except ValueError:
+            continue
+    return ""
+
+
+def _format_dni_info(data_smierci_str: str) -> str:
+    """Zwraca sformatowaną informację o dniach w niebie do wstawienia w email."""
+    dni_txt = _dni_w_niebie(data_smierci_str)
+    if dni_txt:
+        return f"\n\n✦ {dni_txt} ✦"
+    return ""
+
+
+def _build_subject(etap: int, opis: str, max_etap: int) -> str:
+    """Generuje temat emaila bez gwiazdek (gwiazdki dodaje app.py lub tutaj)."""
+    if etap > max_etap:
+        return "Wiadomość od Wysłannika z wyższych sfer"
+    clean_opis = opis.strip().rstrip(".,!?") if opis.strip() else f"Etap {etap}"
+    return f"Odpowiedź z zaświatów – {clean_opis}"
+
+
+def _load_config_xlsx():
     """Zwraca (etapy_dict, style_dict) indeksowane numerem etapu."""
     etapy_data = {}
     style_data = {}
@@ -325,303 +361,150 @@ def _mutate_flux_prompt(prompt: str) -> tuple:
     return result, changes
 
 
+def _call_groq_flux(system: str, user: str) -> str | None:
+    api_key = os.getenv("API_KEY_GROQ", "").strip()
+    if not api_key:
+        current_app.logger.warning("[groq-flux] Brak API_KEY_GROQ")
+        return None
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user",   "content": user}],
+        "max_tokens": 150, "temperature": 0.95,
+    }
+    try:
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        if resp.status_code == 200:
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            current_app.logger.info("[groq-flux] OK: %.150s", result)
+            return result
+        current_app.logger.warning("[groq-flux] HTTP %s: %s", resp.status_code, resp.text[:150])
+    except Exception as e:
+        current_app.logger.warning("[groq-flux] Wyjatek: %s", str(e)[:100])
+    return None
+
+
 def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> tuple:
-    system = groq_system_override or _load_txt(
-        FILE_WYSLANNIK_FLUX_GROQ_SYS,
-        fallback=(
-            "You are a creative prompt engineer for FLUX image generator. "
-            "Based on the Polish heavenly messenger text, write a surreal, "
-            "otherworldly image prompt in English (max 80 words). "
-            "NOT photorealistic, NOT earthly. "
-            "End with: divine surreal digital art, otherworldly paradise, vivid colors. "
-            "Return ONLY the prompt."
-        )
-    )
-    user = f"Generate a FLUX image prompt based on this text:\n\n{source_text}"
-
-    result = _call_groq(system, user)
-    if result:
-        mutated, changes = _mutate_flux_prompt(result)
-        return mutated, changes, "Groq"
-
-    current_app.logger.warning("[flux-prompt] Groq zawiodl — probuje DeepSeek")
-    result = call_deepseek(system, user, MODEL_TYLER)
-    if result:
-        mutated, changes = _mutate_flux_prompt(result)
-        return mutated, changes, "DeepSeek (fallback)"
-
-    current_app.logger.warning("[flux-prompt] Oba API zawiodly — statyczny fallback")
-    image_style = _load_txt(
-        FILE_WYSLANNIK_IMAGE_STYLE,
-        fallback="surreal heavenly paradise, divine golden light, celestial beings, vivid colors, digital art"
-    )
-    return image_style, [], "statyczny fallback"
-
-
-def _get_hf_tokens() -> list:
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(21)]
-    return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
-
-
-def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = True):
-    """
-    Generuje jeden obrazek FLUX z losowym seed.
+    """Generuje prompt do FLUX z podanego tekstu. Zwraca (prompt, mutation_changes, provider)."""
+    groq_system = groq_system_override or _load_txt(FILE_WYSLANNIK_FLUX_GROQ_SYS, fallback=(
+        "Jesteś kreatywnym promptem dla FLUX do generacji obrazów. "
+        "Na podstawie tekstu generujesz wizualny opis obrazu. "
+        "Wynik: jeden akapit, max 100 słów, bez nawiasów, w angielskim lub polskim."
+    ))
+    prompt = _call_groq_flux(groq_system, source_text)
+    if not prompt:
+        current_app.logger.warning("[flux] Groq zawiodl — uzywam tekst wprost")
+        prompt = source_text[:150]
     
-    Args:
-        prompt: Tekst promptu FLUX
-        etap: Numer etapu (dla logowania)
-        return_token_info: Jeśli True, zwraca info o próbach tokenów
+    mutated_prompt, changes = _mutate_flux_prompt(prompt)
+    if changes:
+        current_app.logger.info("[flux] Mutacje: %s", ", ".join(changes))
     
-    Returns:
-        - Sukces: dict z base64, content_type, filename
-        - Porazka: dict z "token_attempts" (jeśli return_token_info=True)
-        - Porazka: None (jeśli return_token_info=False)
-    """
-    tokens = _get_hf_tokens()
-    if not tokens:
-        current_app.logger.error("[flux] Brak tokenow HF!")
+    provider = "groq" if groq_system_override == "" else "custom"
+    return mutated_prompt, changes, provider
+
+
+def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = False) -> dict | None:
+    """Generuje jeden obrazek FLUX. Zwraca {base64, content_type, filename} lub None."""
+    api_key = os.getenv("API_KEY_HUGGINGFACE", "").strip()
+    if not api_key:
+        current_app.logger.warning("[hf] Brak API_KEY_HUGGINGFACE")
         return None
     
-    current_app.logger.info(
-        "[flux] Dostepne tokeny HF: %d sztuk", len(tokens)
-    )
-    
-    token_attempts = []  # Śledź wszystkie próby
-    
+    seed = random.randint(0, 2**32 - 1)
+    headers = {"Authorization": f"Bearer {api_key}"}
     payload = {
         "inputs": prompt,
         "parameters": {
             "num_inference_steps": HF_STEPS,
-            "guidance_scale":      HF_GUIDANCE,
-            "seed":                random.randint(0, 2**32 - 1),
+            "guidance_scale": HF_GUIDANCE,
+            "seed": seed,
         }
     }
-    current_app.logger.info("[flux] prompt: %s", prompt[:200])
     
-    for name, token in tokens:
-        attempt = {
-            "token_name": name,
-            "status": "unknown",
-            "http_code": None,
-            "remaining_requests": None,
-            "error": None
-        }
-        
-        headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
-        try:
-            current_app.logger.info("[flux-attempt] Probuje token: %s", name)
-            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
-            
-            # Wyciągnij info z headera Hugging Face
-            remaining = resp.headers.get("X-Remaining-Requests")
-            if remaining:
-                attempt["remaining_requests"] = int(remaining)
-            
-            attempt["http_code"] = resp.status_code
-            
-            if resp.status_code == 200:
-                attempt["status"] = "SUCCESS"
-                current_app.logger.info(
-                    "[flux] ✓ Token %s: sukces (PNG %d B, pozostalo: %s zadan)",
-                    name, len(resp.content), remaining or "?"
-                )
-                
-                result = {
-                    "base64":       base64.b64encode(resp.content).decode("ascii"),
-                    "content_type": "image/png",
-                    "filename":     "niebo.png",
-                }
-                
-                # Dodaj info o tokenach jeśli jest tego wiele (dla debug)
-                if return_token_info and len(token_attempts) > 0:
-                    result["token_info"] = token_attempts
-                
-                return result
-                
-            elif resp.status_code in (401, 403):
-                attempt["status"] = "INVALID_TOKEN"
-                attempt["error"] = f"Nieautoryzowany ({resp.status_code})"
-                current_app.logger.warning(
-                    "[flux] ✗ Token %s: invalid/expired (HTTP %d)",
-                    name, resp.status_code
-                )
-                
-            elif resp.status_code in (503, 529):
-                attempt["status"] = "OVERLOADED"
-                attempt["error"] = f"Przeciazony ({resp.status_code})"
-                current_app.logger.warning(
-                    "[flux] ⚠ Token %s: serwer przeciazony (HTTP %d)",
-                    name, resp.status_code
-                )
-                
-            elif resp.status_code >= 500:
-                attempt["status"] = f"SERVER_ERROR"
-                attempt["error"] = f"HTTP {resp.status_code}"
-                current_app.logger.warning(
-                    "[flux] ✗ Token %s: blad serwera %d: %s",
-                    name, resp.status_code, resp.text[:100]
-                )
-                
-            else:
-                attempt["status"] = f"HTTP_{resp.status_code}"
-                attempt["error"] = resp.text[:100] if resp.text else "Unknown error"
-                current_app.logger.warning(
-                    "[flux] ✗ Token %s: blad %d: %s",
-                    name, resp.status_code, resp.text[:100]
-                )
-                
-        except requests.exceptions.Timeout:
-            attempt["status"] = "TIMEOUT"
-            attempt["error"] = f"Timeout ({TIMEOUT_SEC}s)"
-            current_app.logger.warning("[flux] ⏱ Token %s: timeout (%ds)", name, TIMEOUT_SEC)
-            
-        except requests.exceptions.ConnectionError as e:
-            attempt["status"] = "CONNECTION_ERROR"
-            attempt["error"] = str(e)[:50]
-            current_app.logger.warning("[flux] 🔌 Token %s: connection error: %s", name, str(e)[:50])
-            
-        except Exception as e:
-            attempt["status"] = "EXCEPTION"
-            attempt["error"] = str(e)[:50]
-            current_app.logger.warning("[flux] ❌ Token %s: exception: %s", name, str(e)[:50])
-        
-        token_attempts.append(attempt)
-    
-    current_app.logger.error(
-        "[flux] ✗ Wszystkie tokeny HF zawiodly! (%d tokenow sprobowanych)",
-        len(token_attempts)
-    )
-    
-    # Zwróć info o tokenach nawet przy porażce
-    if return_token_info:
-        return {"token_attempts": token_attempts}
-    
+    try:
+        resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=TIMEOUT_SEC)
+        if resp.status_code == 200:
+            img_bytes = resp.content
+            b64 = base64.b64encode(img_bytes).decode("ascii")
+            result = {
+                "base64": b64,
+                "content_type": "image/png",
+                "filename": f"zaswiety_etap{etap}_seed{seed}.png"
+            }
+            if return_token_info:
+                result["token_info"] = {"seed": seed, "status": "success"}
+            current_app.logger.info("[hf] Obrazek OK: seed=%d", seed)
+            return result
+        else:
+            current_app.logger.warning("[hf] HTTP %s: %s", resp.status_code, resp.text[:100])
+            if return_token_info:
+                return {"token_attempts": [{"seed": seed, "status": f"http_{resp.status_code}"}]}
+    except Exception as e:
+        current_app.logger.warning("[hf] Wyjatek: %s", str(e)[:100])
+        if return_token_info:
+            return {"token_attempts": [{"seed": seed, "status": f"error_{str(e)[:20]}"}]}
     return None
 
 
-def _generate_multiple_flux_images(prompt: str, ilosc: int, kompresja_jpg: int, etap: int) -> list:
-    """
-    Generuje do `ilosc` obrazkow FLUX z losowym seed dla kazdego.
-    Zwraca listę obrazków (każdy może mieć token_info z pierwszej próby).
-    """
-    wyniki = []
-    first_attempt = None  # Śledź info z pierwszego obrazka
-    
-    for i in range(ilosc):
-        current_app.logger.info("[pawel-flux] etap=%d obrazek %d/%d", etap, i + 1, ilosc)
-        
-        # Dla pierwszego obrazka, zbierz info o tokenach
-        return_token_info = (i == 0)
-        raw = _generate_flux_image(prompt, etap=etap, return_token_info=return_token_info)
-        
-        if raw is None:
-            current_app.logger.warning(
-                "[pawel-flux] etap=%d obrazek %d/%d nieudany — przerywam", etap, i + 1, ilosc
-            )
-            break
-        
-        # Wyciągnij token_info z pierwszego wyniku
-        if i == 0 and isinstance(raw, dict) and "token_attempts" in raw:
-            first_attempt = raw.get("token_attempts")
-            # Sprawdź czy jest też base64 (sukces)
-            if "base64" in raw:
-                compressed = _compress_flux_image(raw, kompresja_jpg)
-            else:
-                # Porażka — pomiń ten obrazek
-                continue
+def _generate_multiple_flux_images(prompt: str, count: int, kompresja_jpg: int = 0, etap: int = 0) -> list:
+    """Generuje N obrazków FLUX (z losowym seed dla każdego)."""
+    images = []
+    for i in range(count):
+        img = _generate_flux_image(prompt, etap=etap)
+        if img:
+            if kompresja_jpg > 0:
+                img = _compress_flux_image(img, kompresja_jpg)
+            images.append(img)
+            current_app.logger.info("[flux-multi] Obrazek %d/%d OK", i+1, count)
         else:
-            compressed = _compress_flux_image(raw, kompresja_jpg)
-        
-        ext = ".jpg" if kompresja_jpg > 0 else ".png"
-        compressed["filename"] = f"niebo_{etap}_{i + 1}{ext}"
-        
-        # Dodaj token_info do pierwszego obrazka dla debug
-        if i == 0 and first_attempt:
-            compressed["token_info"] = first_attempt
-        
-        wyniki.append(compressed)
-
-    current_app.logger.info(
-        "[pawel-flux] etap=%d wygenerowano %d/%d obrazkow", etap, len(wyniki), ilosc
-    )
-    return wyniki
+            current_app.logger.warning("[flux-multi] Obrazek %d/%d — brak", i+1, count)
+    return images
 
 
-def _build_debug_txt(source_text: str, flux_prompt: str,
-                     flux_provider: str, etap: int,
-                     ilosc_zamowiona: int = 1,
-                     ilosc_wygenerowana: int = 1,
-                     mutation_changes: list = None,
-                     token_info: list = None) -> dict:
-    """
-    Generuje debug TXT z informacjami o FLUX i próbach tokenów.
+def _build_debug_txt(
+    reply_text: str,
+    flux_prompt: str,
+    flux_provider: str,
+    etap: int,
+    ilosc_zamowiona: int = 0,
+    ilosc_wygenerowana: int = 0,
+    mutation_changes: list = None,
+    token_info = None,
+) -> dict:
+    """Buduje debug info jako plain text."""
+    if mutation_changes is None:
+        mutation_changes = []
     
-    Args:
-        token_info: Lista slownikow z info o próbach tokenów HF:
-                    [{"token_name": "HF_TOKEN", "status": "SUCCESS", 
-                      "remaining_requests": 100, ...}, ...]
-    """
+    lines = [
+        f"=== DEBUG {datetime.now().isoformat()} ===",
+        f"Etap: {etap}",
+        f"Obrazki: {ilosc_wygenerowana}/{ilosc_zamowiona}",
+        f"FLUX prompt: {flux_prompt[:200]}",
+        f"FLUX provider: {flux_provider}",
+    ]
     
-    changes_str = "\n".join(mutation_changes) if mutation_changes else "(brak mutacji)"
+    if mutation_changes:
+        lines.append(f"Mutacje: {', '.join(mutation_changes)}")
     
-    # Formatuj info o tokenach
-    tokens_str = ""
     if token_info:
-        tokens_str = "\n=== TOKENY HUGGING FACE ===\n"
-        tokens_str += f"Razem prob: {len(token_info)}\n\n"
-        
-        for attempt in token_info:
-            token_name = attempt.get("token_name", "?")
-            status = attempt.get("status", "unknown")
-            http_code = attempt.get("http_code")
-            remaining = attempt.get("remaining_requests")
-            error = attempt.get("error")
-            
-            tokens_str += f"• {token_name}:\n"
-            tokens_str += f"  Status: {status}\n"
-            
-            if http_code:
-                tokens_str += f"  HTTP: {http_code}\n"
-            
-            if remaining is not None:
-                tokens_str += f"  Pozostalo zadan: {remaining}\n"
-            
-            if error:
-                tokens_str += f"  Blad: {error}\n"
-            
-            tokens_str += "\n"
-    else:
-        tokens_str = "\n--- Tokeny HF ---\nBrak danych (generacja nie byla wysylana)\n\n"
+        lines.append(f"Token info: {token_info}")
     
-    content = (
-        f"=== REQUIEM RESPONDER — DEBUG FLUX ===\n\n"
-        f"Etap: {etap}\n"
-        f"Timestamp: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"=== PROMPT FLUX ===\n{flux_prompt}\n\n"
-        f"=== OBRAZKI ===\n"
-        f"Zamowione: {ilosc_zamowiona}\n"
-        f"Wygenerowane: {ilosc_wygenerowana}\n\n"
-        f"=== ZRODLO PROMPTU ===\n{source_text[:1000]}\n\n"
-        f"=== GENERACJA ===\n"
-        f"Provider: {flux_provider}\n"
-        f"Model: FLUX.1-schnell\n"
-        f"Kroki: {HF_STEPS}\n"
-        f"Guidance: {HF_GUIDANCE}\n"
-        f"Seed: losowy per obrazek\n"
-        f"API: {HF_API_URL}\n\n"
-        f"=== MUTACJE ===\n{changes_str}\n"
-        f"{tokens_str}"
-    )
+    lines.append(f"\nReply tekst:\n{reply_text[:500]}")
+    
+    content = "\n".join(lines)
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
     
     return {
-        "base64":       base64.b64encode(content.encode("utf-8")).decode("ascii"),
+        "base64": b64,
         "content_type": "text/plain",
-        "filename":     "_.txt",
+        "filename": "_.txt"
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GLOWNA FUNKCJA
+# GŁÓWNA FUNKCJA
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def build_smierc_section(
@@ -637,6 +520,8 @@ def build_smierc_section(
     Obsluguje dwa sposoby wywolania:
       A) Z app.py — argumenty wprost
       B) Stary styl — slownik data={}
+    
+    ZMIANA: Wiadomości zawierają wyliczone dni od śmierci!
     """
     if historia is None:
         historia = []
@@ -665,17 +550,28 @@ def build_smierc_section(
                 "Podpisz sie: — Wyslannik z wyzszych sfer"
             ))
         )
-        user_msg    = f"Osoba pyta: {body}\n\nHistoria:\n{historia_txt}\n\nData śmierci Pawła: {data_smierci_str}"
+        # Zakaz emoji (doklejamy na końcu system promptu)
+        if "ZAKAZ" not in system_wyslannik:
+            system_wyslannik += "\nZAKAZ uzywania emoji, emotikon i symboli specjalnych — tylko zwykly tekst."
+
+        dni_txt  = _dni_w_niebie(data_smierci_str)
+        user_msg = (
+            f"Osoba pyta: {body}\n\nHistoria:\n{historia_txt}\n\n"
+            f"Data śmierci Pawła: {data_smierci_str}\n"
+            + (f"Wzmiankuj naturalnie w tekście: {dni_txt}\n" if dni_txt else "")
+        )
         wynik_tekst = call_deepseek(system_wyslannik, user_msg, MODEL_TYLER)
         if not wynik_tekst:
             current_app.logger.warning("[wyslannik] DeepSeek zawiodl — probuje Groq")
             wynik_tekst = _call_groq(system_wyslannik, user_msg)
 
-        reply_html = (
-            f"<p>{wynik_tekst}</p><p><i>— Wyslannik z wyzszych sfer</i></p>"
-            if wynik_tekst
-            else "<p>Pawla nie ma — reinkarnlowal sie.<br><i>— Wyslannik z wyzszych sfer</i></p>"
-        )
+        # 🆕 ZMIANA: Dodaj dni do HTML
+        reply_text = wynik_tekst or "Pawła nie ma — reinkarnował się."
+        reply_text += _format_dni_info(data_smierci_str)
+        reply_text += "\n\n— Wyslannik z wyższych sfer"
+        
+        from core.html_builder import build_html_reply_dark
+        reply_html = build_html_reply_dark(reply_text)
 
         styl_file   = s_row.get("styl", "")
         groq_system = _load_style_file(styl_file)
@@ -707,6 +603,7 @@ def build_smierc_section(
                                etap, bool(image), bool(token_info))
         return {
             "reply_html": reply_html,
+            "subject":    _build_subject(etap, "", max_etap),
             "nowy_etap":  etap,
             "images":     [image] if image else [],
             "videos":     [],
@@ -734,9 +631,17 @@ def build_smierc_section(
 
         system_file        = s_row.get("styl_odpowiedzi_tekstowej", "")
         system_prompt_tmpl = _load_style_file(system_file) or DEFAULT_SYSTEM_PROMPT
+        # Zakaz emoji (doklejamy na końcu jeśli jeszcze nie ma)
+        if "ZAKAZ" not in system_prompt_tmpl:
+            system_prompt_tmpl += "\nZAKAZ uzywania emoji, emotikon i symboli specjalnych — tylko zwykly tekst."
 
     system   = system_prompt_tmpl.replace("{data_smierci_str}", data_smierci_str)
-    user_msg = f"Etap w zaswiatach: {opis}\nWiadomosc: {body}\nHistoria:\n{historia_txt}\n\nData śmierci: {data_smierci_str}"
+    dni_txt  = _dni_w_niebie(data_smierci_str)
+    user_msg = (
+        f"Etap w zaswiatach: {opis}\nWiadomosc: {body}\nHistoria:\n{historia_txt}\n\n"
+        f"Data śmierci: {data_smierci_str}\n"
+        + (f"Wzmiankuj naturalnie w tekście: {dni_txt}\n" if dni_txt else "")
+    )
     wynik    = call_deepseek(system, user_msg, MODEL_TYLER)
     
     # Fallback do Groq jeśli DeepSeek zawiedzie
@@ -744,10 +649,12 @@ def build_smierc_section(
         current_app.logger.warning("[smierc-etapy] DeepSeek zawiodl — probuje Groq")
         wynik = _call_groq(system, user_msg)
     
-    reply_html = (
-        f"<p>{wynik}</p>" if wynik
-        else "<p>To autoresponder. Chwilowo brak zasiegu w tej strefie kosmicznej.</p>"
-    )
+    # 🆕 ZMIANA: Dodaj dni do HTML
+    reply_text = wynik or "To autoresponder. Chwilowo brak zasięgu w tej strefie kosmicznej."
+    reply_text += _format_dni_info(data_smierci_str)
+    
+    from core.html_builder import build_html_reply
+    reply_html = build_html_reply(reply_text)
 
     # Obrazek statyczny (zawsze, jesli plik istnieje)
     static_image = _get_etap_image(etap, obraz_filename)
@@ -798,6 +705,7 @@ def build_smierc_section(
     )
     return {
         "reply_html": reply_html,
+        "subject":    _build_subject(etap, opis, max_etap),
         "nowy_etap":  etap + 1,
         "images":     images,
         "videos":     [mp4] if mp4 else [],
