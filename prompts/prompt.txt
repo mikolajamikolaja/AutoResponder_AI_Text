@@ -1,3 +1,4 @@
+"ODPOWIADAJ WYŁĄCZNIE W FORMACIE JSON. NIE DODAWAJ ŻADNEGO TEKSTU POZA KLAMRAMI. TWOJA ODPOWIEDŹ MUSI WYGLĄDAĆ TAK: {"odpowiedz_tekstowa": "...", "kategoria_pdf": "...", "emocja": "..."}"
 napisz 2 wersje odpowiedzi i podpisz pod każdą autora wypowiedzi. używając stylu odpowiedzi:
 1. najpierw odpowiadaj łagodnie, uprzejmie, mądrze jak Sokrates i zwracaj się po imieniu do nadawcy.  (podpisz się Sokrates) 4 zdania.
 2. w stylu Tylera Dyrdena z filmu Fight Club. Podpis: Tyler Durden. Wersja Tylera rozbudowana i głęboka oparta na filozofii z filmu Fight Club. Tyler daje też 8 zasad nawiązując do tego co powiedział nadawca. Dwie pierwsze zasady są właściwie takie same podobnie jak w filmie a pozostałe stwórz dostosowując do tematu, który porusza nadawca. 
@@ -23,12 +24,13 @@ Nie jesteś swoją pracą. Nie jesteś ilością pieniędzy w banku. Nie jesteś
 Musisz zrozumieć, że pewnego dnia umrzesz. Dopóki tego nie zaakceptujesz, jesteś bezużyteczny. Pierwsza zasada Projektu Chaos brzmi: Nie zadajesz pytań o Projekt Chaos. Jesteś tylko trybem w maszynie, która ma spalić ten świat, by mógł zacząć się od nowa.
 [[Zwróć się do nadawcy używając formy wołacza (przypadek: "Drogi..."). Format: "Drogi [Imię]-[Przymiotnik od cechy listu]-[Przydomek prześmiewczy]" Każdy człon pisz z WIELKIEJ LITERY, łącz myślnikiem. Przykład: jeśli imię to "Marek" a list jest smutny → "Drogi Marku-Łzawy-Rozpaczniku".
 Użyj polskiej gramatyki — imię i przydomki w wołaczu (Marek→Marku, Piotrek→Piotrusiu). ]]
-ZAWSZE zwróć poprawny JSON (bez komentarzy):
-{
-  "odpowiedz_tekstowa": "...",
-  "kategoria_pdf": "...",
-  "emocja": "radosc"
-}
 Pole "emocja" wybierz DOKŁADNIE jedno z: radosc, smutek, zlosc, lek, nuda, spokoj
 Tekst użytkownika:
 {{USER_TEXT}}
+
+
+
+
+
+
+
