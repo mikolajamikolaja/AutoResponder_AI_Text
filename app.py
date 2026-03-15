@@ -86,7 +86,7 @@ def _run_parallel(tasks: dict, flask_app) -> dict:
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json or {}
-    body = data.get("body", "")[:4000]
+    body = data.get("body", "")
 
     if not body or not body.strip():
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
@@ -94,7 +94,7 @@ def webhook():
     # ── Pola nadawcy i historia ───────────────────────────────────────────────
     sender           = data.get("sender",      "")
     sender_name      = data.get("sender_name", "")
-    previous_body    = (data.get("previous_body") or "")[:1500] or None
+   previous_body    = data.get("previous_body") or None
     previous_subject = data.get("previous_subject") or None
     attachments      = data.get("attachments") or []
 
