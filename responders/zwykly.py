@@ -578,14 +578,15 @@ def _generate_triptych(
     style_config = _load_style_config()
     if not style_config:
         current_app.logger.warning("[zwykly-img] Brak STYLE_CONFIG — pomijam generowanie tryptyku")
-        return []
+        return [], []
 
     panels_config = style_config.get("triptych", {}).get("panels", [])
     if not panels_config:
         current_app.logger.warning("[zwykly-img] Brak konfiguracji paneli w STYLE_CONFIG")
-        return []
+        return [], []
 
-    images = []
+    images        = []
+    panel_prompts = []
     for panel in panels_config:
         idx = panel.get("index", len(images) + 1)
 
@@ -598,6 +599,7 @@ def _generate_triptych(
             prompt_data=prompt_data,
             body=body
         )
+        panel_prompts.append(flux_prompt)
 
         # Generuj obrazek
         image = _generate_flux_image(flux_prompt, panel_index=idx)
@@ -613,17 +615,64 @@ def _generate_triptych(
                 "Zwracam %d wygenerowanych paneli.",
                 idx, len(panels_config), len(images)
             )
-            # Jeśli brak tokenów → przerywamy, nie próbujemy kolejnych paneli
             break
 
     current_app.logger.info("[zwykly-img] Tryptyk: wygenerowano %d/%d paneli",
                             len(images), len(panels_config))
-    return images
+    return images, panel_prompts
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GŁÓWNA FUNKCJA
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_debug_txt(
+    body: str,
+    provider: str,
+    emotion_key: str,
+    res_raw: str,
+    res_text: str,
+    triptych_images: list,
+    panel_prompts: list,
+) -> dict:
+    """
+    Buduje plik debug_txt (base64 TXT) do zapisu na Google Drive.
+    Zawiera: timestamp, provider, emocja, email nadawcy (fragment),
+             surowa odpowiedź modelu, tekstowa odpowiedź, prompty paneli.
+    Zwraca dict zgodny z _saveTylerDebugTxt() w GAS:
+      {"base64": ..., "content_type": "text/plain", "filename": "..."}
+    """
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    lines = [
+        f"=== ZWYKLY DEBUG {ts} ===",
+        f"provider:   {provider}",
+        f"emocja:     {emotion_key}",
+        f"panele:     {len(triptych_images)}",
+        "",
+        "--- BODY (pierwsze 500 znaków) ---",
+        (body or "")[:500],
+        "",
+        "--- RAW MODEL OUTPUT ---",
+        (res_raw or "(brak)")[:3000],
+        "",
+        "--- ODPOWIEDZ TEKSTOWA ---",
+        (res_text or "(brak)")[:2000],
+        "",
+        "--- PROMPTY PANELI ---",
+    ]
+    for i, p in enumerate(panel_prompts, 1):
+        lines.append(f"Panel {i}: {p[:300]}")
+    lines.append("")
+    lines.append("=== KONIEC ===")
+
+    content = "\n".join(lines)
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    return {
+        "base64":       b64,
+        "content_type": "text/plain",
+        "filename":     f"zwykly_debug_{ts}.txt",
+    }
+
 
 def build_zwykly_section(body: str) -> dict:
     """
@@ -673,14 +722,25 @@ def build_zwykly_section(body: str) -> dict:
     reply_html = build_html_reply(res_text)
 
     # ── 6. Tryptyk FLUX ───────────────────────────────────────────────────────
-    triptych_images = _generate_triptych(res_text, prompt_data, body)
+    triptych_images, panel_prompts = _generate_triptych(res_text, prompt_data, body)
 
     current_app.logger.info(
         "[zwykly] OK provider=%s emotion=%s png=%s pdf=%s triptych=%d paneli",
         provider, emotion_key, bool(png_b64), bool(pdf_b64), len(triptych_images)
     )
 
-    # ── 7. Zwróć wszystko ─────────────────────────────────────────────────────
+    # ── 7. Debug TXT do Google Drive ─────────────────────────────────────────
+    debug_txt = _build_debug_txt(
+        body=body,
+        provider=provider,
+        emotion_key=emotion_key,
+        res_raw=res_raw or "",
+        res_text=res_text,
+        triptych_images=triptych_images,
+        panel_prompts=panel_prompts,
+    )
+
+    # ── 8. Zwróć wszystko ─────────────────────────────────────────────────────
     return {
         "reply_html": reply_html,
         "emoticon": {
@@ -694,6 +754,7 @@ def build_zwykly_section(body: str) -> dict:
         },
         "detected_emotion":   emotion_key,
         "provider":           provider,
-        "triptych":           triptych_images,      # JPG — do emaila (inline + załącznik)
-        "triptych_for_drive": triptych_images,      # Ten sam JPG — GAS zapisuje na Drive
+        "triptych":           triptych_images,
+        "triptych_for_drive": triptych_images,
+        "debug_txt":          debug_txt,
     }
