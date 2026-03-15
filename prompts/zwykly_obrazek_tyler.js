@@ -1,45 +1,40 @@
 // <STYLE_CONFIG>
 {
-  "actor": "Brad Pitt",
-  "character": "Tyler Durden",
-  "film": "Fight Club (1999)",
-  "director": "David Fincher",
+  "model_target": "FLUX.1 [schnell]",
+  "optimization_strategy": "High-impact descriptive natural language. Focus on physical textures and direct spatial instructions. Minimalist but heavy on atmospheric 'grit'.",
+  
+  "character_profile": "Brad Pitt as Tyler Durden from 1999. Realistic sweaty skin, messy spiky hair, wearing a distressed red leather jacket or shirtless with visible soap-burn scars. Gritty, intense, unrefined movie-still look.",
 
-  "base_style": "cinematic film still, 35mm grain, high contrast chiaroscuro lighting, desaturated palette with occasional warm amber highlights, Fight Club movie aesthetic, David Fincher visual style, neo-noir underground atmosphere, gritty urban decay, soap factory warehouse setting, IMAX film frame",
+  "fincher_lighting_engine": "Cinematic chiaroscuro. Sickly green and amber underexposed tones. Heavy 35mm film grain. Deep shadows, industrial grime, flickering fluorescent light effect. 1990s film stock aesthetic.",
 
-  "triptych": {
-    "description": "Three separate vertical panels in comic-book / film storyboard layout, each 512x768px. Same visual style across all panels. Each panel has a hand-drawn speech bubble (bold white outline, off-white fill) in the upper portion where Tyler speaks.",
-    "panel_width": 512,
-    "panel_height": 768,
+  "triptych_spatial_logic": {
+    "instruction": "A wide horizontal 3:1 aspect ratio image divided into 3 equal side-by-side vertical panels by thin black lines. Each panel must show a distinct camera angle.",
     "panels": [
       {
-        "index": 1,
-        "name": "zasada",
-        "layout": "Brad Pitt as Tyler Durden stands in aggressive pose in a dimly lit basement, bare-chested with soap burns, pointing finger at viewer, speech bubble with one of the 8 Fight Club rules adapted to the letter-writer's situation",
-        "content_source": "jedna z ośmiu zasad Tylera — losowa — dostosowana do spraw nadawcy",
-        "mood": "confrontational, raw energy, underground fight club basement"
+        "panel_1": "Medium shot. Tyler Durden in a dark basement. He is pointing his finger at the camera. Intimidating gaze. Industrial background.",
+        "text_rendering": "A speech bubble with hand-drawn ink style containing the words: '[TEXT_1]'. Text must be sharp and legible."
       },
       {
-        "index": 2,
-        "name": "manifest",
-        "layout": "Brad Pitt as Tyler Durden stands on rubble of a collapsed consumer society, surrounded by burning IKEA furniture and credit cards, speech bubble with one of the 5 manifestos adapted to the letter-writer",
-        "content_source": "jeden z pięciu manifestów Tylera — losowy — dostosowany do spraw nadawcy",
-        "mood": "nihilistic, prophetic, anarchic liberation"
+        "panel_2": "Extreme close-up of Tyler's face. Focus on eyes and chipped tooth. Heavy sweat and skin pores visible. Dramatic shadows.",
+        "text_rendering": "A speech bubble floating near his mouth with the words: '[TEXT_2]' written in bold distressed font."
       },
       {
-        "index": 3,
-        "name": "chaos",
-        "layout": "Brad Pitt as Tyler Durden stands next to a dumpster throwing away objects that represent the concerns mentioned in the letter, speech bubble commenting on what he is throwing away",
-        "content_source": "rzeczy i tematy poruszane przez nadawcę — Tyler je wyrzuca do śmietnika",
-        "mood": "liberating, darkly humorous, cathartic destruction"
+        "panel_3": "Low angle wide shot. Tyler standing victoriously over a pile of [USER_OBJECTS]. Dark urban alleyway, steam rising from pipes.",
+        "text_rendering": "Text '[TEXT_3]' rendered as bold graffiti on the wall behind him."
       }
     ]
   },
 
-  "speech_bubble_style": "hand-drawn comic speech bubble, thick black outline 3px, off-white fill #F5F0E8, bold black text inside, slightly tilted for dynamic feel, tail pointing toward Tyler's mouth",
+  "schnell_technical_parameters": {
+    "aspect_ratio": "3:1",
+    "steps_optimized": "4-8 steps",
+    "guidance_scale": "3.5",
+    "style_tags": "Raw photo, gritty realism, 35mm movie still, high contrast, industrial decay, realistic textures."
+  },
 
-  "negative_prompt": "anime, cartoon, illustration, painting, watercolor, 3d render, CGI, extra fingers, deformed hands, blurry, low quality, ugly, modern smartphone, logos",
-
-  "quality_tags": "masterpiece, best quality, photorealistic, cinematic composition, professional cinematography, shallow depth of field, movie still"
+  "safety_and_content_filter": {
+    "forbidden_words": ["walka", "walczą", "faceci", "klub"],
+    "replacement_logic": "Always map to sender's context (e.g., 'Project Excel', 'The Laundry War', 'Cleaning Sessions')."
+  }
 }
 // </STYLE_CONFIG>
