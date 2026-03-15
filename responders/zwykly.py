@@ -53,8 +53,8 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL   = "llama-3.3-70b-versatile"
 
 HF_API_URL   = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-HF_STEPS     = 1
-HF_GUIDANCE  = 1
+HF_STEPS     = 3
+HF_GUIDANCE  = 3
 HF_TIMEOUT   = 55
 TYLER_JPG_QUALITY = 95   # Kompresja JPG dla paneli tryptyku (95% = minimalna strata)
 
