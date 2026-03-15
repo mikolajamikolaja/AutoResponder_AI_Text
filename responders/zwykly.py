@@ -436,15 +436,18 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     if not panel2:
         panel2 = "Nie jesteś swoją pracą."
 
-    # Panel 3 — linia z "Okrzyk" lub ostatnie zdanie Tylera
+    # Panel 3 — okrzyk końcowy (szuka "Okrzyk" najpierw, potem ostatnie zdanie)
     panel3 = None
     for line in lines:
-        low = line.lower()
-        if "okrzyk" in low or "jesteś " in low:
-            panel3 = re.sub(r'^okrzyk[^:]*:\s*', '', line, flags=re.IGNORECASE)[:120]
+        if "okrzyk" in line.lower():
+            panel3 = re.sub(r'^okrzyk[^:]*:\s*', '', line, flags=re.IGNORECASE).strip()[:120]
             break
     if not panel3 and lines:
-        panel3 = lines[-1][:120]
+        # Ostatnie niepuste zdanie z sekcji Tylera (nie nagłówek, nie podpis)
+        for line in reversed(lines):
+            if line and not line.startswith("---") and not line.startswith("###") and len(line) > 15:
+                panel3 = line[:120]
+                break
     if not panel3:
         panel3 = "To wszystko? Na śmietnik."
 
