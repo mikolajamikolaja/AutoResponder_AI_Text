@@ -3,7 +3,7 @@
   "model_target": "FLUX.1 [schnell]",
   "optimization_strategy": "High-impact descriptive natural language. Focus on physical textures and direct spatial instructions. Minimalist but heavy on atmospheric 'grit'.",
   
-  "character_profile": "Brad Pitt as Tyler Durden from 1999. Realistic sweaty skin, messy spiky hair, wearing a distressed red leather jacket or shirtless with visible soap-burn scars. Gritty, intense, unrefined movie-still look.",
+  "character_profile": "Brad Pitt as Tyler Durden from 1999. Gritty, intense, unrefined movie-still look.",
 
   "fincher_lighting_engine": "Cinematic chiaroscuro. Sickly green and amber underexposed tones. Heavy 35mm film grain. Deep shadows, industrial grime, flickering fluorescent light effect. 1990s film stock aesthetic.",
 

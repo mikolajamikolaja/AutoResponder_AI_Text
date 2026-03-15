@@ -132,61 +132,100 @@ def _fallback_prompt_dict() -> dict:
 def _render_prompt(data: dict, body: str) -> str:
     """
     Buduje pełny string promptu z danych prompt.json.
-    Zwraca gotowy tekst do wysłania do modelu.
+    Obsługuje zarówno stary format (instrukcje/zasady_tylera/manifesty)
+    jak i nowy (tyler_zasady_OBOWIAZKOWE / tyler_manifesty_OBOWIAZKOWE).
     """
     lines = []
 
-    # Instrukcja systemu
+    # ── System ───────────────────────────────────────────────────────────────
     lines.append(data.get("system", ""))
     lines.append("")
 
-    # Schemat wyjściowy
+    # ── Schemat wyjściowy ─────────────────────────────────────────────────────
     schema = data.get("output_schema", {})
     if schema:
         lines.append("### SCHEMAT JSON DO WYPEŁNIENIA:")
         lines.append(json.dumps(schema, ensure_ascii=False, indent=2))
         lines.append("")
 
-    # Tekst użytkownika
-    placeholder = data.get("user_text_placeholder", "{{USER_TEXT}}")
-    lines.append(f"Tekst użytkownika:\n{body}")
+    # ── Tekst użytkownika ─────────────────────────────────────────────────────
+    lines.append("### WIADOMOŚĆ OD NADAWCY (na jej podstawie generuj WSZYSTKO):")
+    lines.append(body)
     lines.append("")
 
-    # Zasady odpowiedzi
-    inst = data.get("instrukcje", {})
-    if inst:
-        lines.append("### ZASADY ODPOWIEDZI:")
-        if inst.get("sokrates"):
-            lines.append(f"1. SOKRATES: {inst['sokrates']}")
-        if inst.get("tyler"):
-            lines.append(f"2. TYLER DURDEN: {inst['tyler']}")
+    # ── Sokrates ──────────────────────────────────────────────────────────────
+    sokrates = (
+        data.get("sokrates_instrukcja")
+        or data.get("instrukcje_person", {}).get("sokrates")
+        or data.get("instrukcje", {}).get("sokrates")
+    )
+    if sokrates:
+        lines.append("### SOKRATES — INSTRUKCJA:")
+        lines.append(sokrates)
         lines.append("")
 
-    # Zasady Tylera (lista)
-    zasady = data.get("zasady_tylera", [])
-    nota = inst.get("zasady_nota", "")
-    if zasady:
-        lines.append("### ELEMENTY DLA TYLERA (Wpleć w wypowiedź):")
-        if nota:
-            lines.append(nota)
-        for zasada in zasady:
-            lines.append(f"- {zasada}")
+    # ── Tyler — odmowa rekrutacji ─────────────────────────────────────────────
+    odmowa = (
+        data.get("tyler_odmowa_rekrutacji")
+        or data.get("instrukcje_person", {}).get("tyler", {}).get("zasada_rekrutacji")
+    )
+    if odmowa:
+        lines.append("### TYLER — ODMOWA REKRUTACJI (OBOWIĄZKOWE):")
+        lines.append(odmowa)
         lines.append("")
 
-    # Manifesty
-    manifesty = data.get("manifesty", [])
-    if manifesty:
-        lines.append("### MANIFESTY TYLERA (Dostosuj i wygłoś każdy):")
-        for i, m in enumerate(manifesty, 1):
-            lines.append(f"{i}. O {m.get('temat', '???')}: {m.get('tresc', '')}")
+    # ── Tyler — zasady (nowy format) ──────────────────────────────────────────
+    zasady_obj = data.get("tyler_zasady_OBOWIAZKOWE", {})
+    if zasady_obj:
+        lines.append("### TYLER — 8 PUNKTÓW/DOGMATÓW (OBOWIĄZKOWE, KONKRETNE):")
+        lines.append(zasady_obj.get("opis", ""))
+        lines.append(f"FORMAT: {zasady_obj.get('format', '')}")
+        lines.append(f"PRZYKŁAD ZŁY:   {zasady_obj.get('przyklad_zly', '')}")
+        lines.append(f"PRZYKŁAD DOBRY: {zasady_obj.get('przyklad_dobry', '')}")
         lines.append("")
+    else:
+        # stary format
+        zasady = data.get("zasady_tylera", [])
+        inst   = data.get("instrukcje", {})
+        nota   = inst.get("zasady_nota", "")
+        if zasady:
+            lines.append("### ELEMENTY DLA TYLERA (Wpleć w wypowiedź):")
+            if nota:
+                lines.append(nota)
+            for z in zasady:
+                lines.append(f"- {z}")
+            lines.append("")
 
-    # Formatowanie adresata
+    # ── Tyler — manifesty (nowy format) ───────────────────────────────────────
+    manifesty_obj = data.get("tyler_manifesty_OBOWIAZKOWE", {})
+    if manifesty_obj:
+        lines.append("### TYLER — 8 MANIFESTÓW (OBOWIĄZKOWE, KONKRETNE):")
+        lines.append(manifesty_obj.get("opis", ""))
+        for t in manifesty_obj.get("tematy", []):
+            lines.append(f"- {t}")
+        lines.append("")
+    else:
+        # stary format
+        manifesty = data.get("manifesty", [])
+        if manifesty:
+            lines.append("### MANIFESTY TYLERA (Dostosuj i wygłoś każdy):")
+            for i, m in enumerate(manifesty, 1):
+                lines.append(f"{i}. O {m.get('temat', '???')}: {m.get('tresc', '')}")
+            lines.append("")
+
+    # ── Formatowanie adresata ─────────────────────────────────────────────────
     fmt = data.get("formatowanie_adresata", "")
     if fmt:
         lines.append("### FORMATOWANIE ADRESATA:")
         lines.append(fmt)
         lines.append("")
+
+    # ── Końcowe przypomnienie ─────────────────────────────────────────────────
+    lines.append("### PRZYPOMNIENIE PRZED GENEROWANIEM:")
+    lines.append("Każde zdanie Tylera MUSI nawiązywać do konkretnych słów z wiadomości nadawcy.")
+    lines.append("ZAKAZ ogólnych rad, coachingu, pozytywnego myślenia.")
+    lines.append("Zwróć WYŁĄCZNIE poprawny JSON bez żadnego tekstu poza klamrami.")
+    lines.append("")
 
     return "\n".join(lines)
 
@@ -340,6 +379,78 @@ def _load_style_config() -> dict:
 # GENEROWANIE PROMPTÓW DLA TRYPTYKU (Groq → DeepSeek fallback)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _extract_tyler_sentences(response_text: str) -> dict:
+    """
+    Wyciąga gotowe zdania z odpowiedzi Tylera do użycia w dymkach tryptyku.
+    Zwraca dict:
+      panel1 — pierwsze zdanie z sekcji zasad (1. / dogmat)
+      panel2 — pierwsze zdanie z sekcji manifestów (CAPS: ...)
+      panel3 — okrzyk końcowy lub ostatnie zdanie Tylera
+    Fallbacki są po polsku.
+    """
+    if not response_text:
+        return {
+            "panel1": "Nie mówi się o tym.",
+            "panel2": "Nie jesteś swoją pracą.",
+            "panel3": "To wszystko? Na śmietnik.",
+        }
+
+    # Wytnij sekcję Tylera
+    tyler_section = response_text
+    if "### TYLER DURDEN" in response_text:
+        tyler_section = response_text.split("### TYLER DURDEN", 1)[1]
+
+    lines = [l.strip() for l in tyler_section.splitlines() if l.strip()]
+
+    # Panel 1 — pierwsza zasada w stylu Fight Club ("Pierwsza zasada Projektu X: ...")
+    panel1 = None
+    ordinal_re = re.compile(
+        r'^(pierwsza|druga|trzecia|czwarta|pi[aą]ta|sz[oó]sta|si[oó]dma|[oó]sma)\s+zasada',
+        re.IGNORECASE
+    )
+    for line in lines:
+        if ordinal_re.match(line):
+            panel1 = line[:120]
+            break
+    # fallback: linia z cyfrą (stary format)
+    if not panel1:
+        for line in lines:
+            if re.match(r'^[1-8][.)]', line):
+                panel1 = re.sub(r'^[1-8][.)]\s*', '', line)[:120]
+                break
+    if not panel1:
+        panel1 = "Pierwsza zasada: nie mówi się o tym."
+
+    # Panel 2 — pierwsza linia z CAPS tematem manifestu (np. "KONSUMPCJONIZM:")
+    panel2 = None
+    for line in lines:
+        if re.match(r'^[A-ZŻŹĆĄŚĘÓŁŃ]{4,}[\s:]', line):
+            panel2 = line[:140]
+            break
+    if not panel2:
+        # fallback: szukaj linii z myślnikiem (manifest bez CAPS)
+        for line in lines:
+            if line.startswith("- ") and len(line) > 15:
+                panel2 = line[2:][:140]
+                break
+    if not panel2:
+        panel2 = "Nie jesteś swoją pracą."
+
+    # Panel 3 — linia z "Okrzyk" lub ostatnie zdanie Tylera
+    panel3 = None
+    for line in lines:
+        low = line.lower()
+        if "okrzyk" in low or "jesteś " in low:
+            panel3 = re.sub(r'^okrzyk[^:]*:\s*', '', line, flags=re.IGNORECASE)[:120]
+            break
+    if not panel3 and lines:
+        panel3 = lines[-1][:120]
+    if not panel3:
+        panel3 = "To wszystko? Na śmietnik."
+
+    return {"panel1": panel1, "panel2": panel2, "panel3": panel3}
+
+
 def _generate_panel_prompt(
     panel_index: int,
     panel_config: dict,
@@ -364,34 +475,21 @@ def _generate_panel_prompt(
     bubble_style = style_config.get("speech_bubble_style", "hand-drawn speech bubble")
     layout      = panel_config.get("layout", "")
 
-    zasady   = prompt_data.get("zasady_tylera", [])
-    manifesty = prompt_data.get("manifesty", [])
+    # ── Wyciągnij gotowe zdania z odpowiedzi Tylera ─────────────────────────
+    tyler_sentences = _extract_tyler_sentences(response_text)
 
-    # Wybierz treść chmurki
+    # ── Wybierz treść dymka (zawsze po polsku, zawsze z emaila) ──────────────
     if panel_index == 1:
-        # Losowa zasada
-        if zasady:
-            zasada_raw = random.choice(zasady)
-            # Skróć do rozsądnej długości dla chmurki
-            bubble_text = zasada_raw[:120]
-        else:
-            bubble_text = "Nie mówi się o tym."
-        panel_purpose = "Tyler confronts the viewer with one of his rules"
+        bubble_text   = tyler_sentences["panel1"]
+        panel_purpose = "Tyler konfrontuje widza z jedną ze swoich zasad"
 
     elif panel_index == 2:
-        # Losowy manifest
-        if manifesty:
-            manifest = random.choice(manifesty)
-            bubble_text = f"{manifest.get('temat', '')}: {manifest.get('tresc', '')}"[:140]
-        else:
-            bubble_text = "You are not your job."
-        panel_purpose = "Tyler delivers a nihilistic manifesto speech"
+        bubble_text   = tyler_sentences["panel2"]
+        panel_purpose = "Tyler wygłasza nihilistyczny manifest"
 
     else:
-        # Panel 3 — rzeczy nadawcy wyrzucane do śmietnika
-        # Wyciągamy kluczowe słowa z treści emaila
-        bubble_text = f"All of this? In the trash. You don't need any of it."
-        panel_purpose = "Tyler throws away objects representing the sender's concerns"
+        bubble_text   = tyler_sentences["panel3"]
+        panel_purpose = "Tyler wyrzuca przedmioty symbolizujące problemy nadawcy"
 
     # System prompt dla modelu generującego prompt FLUX
     system_for_flux = (
@@ -399,6 +497,8 @@ def _generate_panel_prompt(
         "You create precise, vivid English prompts for photorealistic movie stills. "
         "Always describe: actor name, character name, exact pose, lighting, background, "
         "speech bubble content and placement. "
+        "CRITICAL RULE: The speech bubble text MUST appear in Polish exactly as given — "
+        "do NOT translate it to English under any circumstances. "
         "Output: ONE paragraph, max 120 words, no bullet points, no explanations. "
         "Only the prompt text."
     )
@@ -408,13 +508,13 @@ def _generate_panel_prompt(
         f"Actor: {actor} as {character} from Fight Club (1999)\n"
         f"Panel purpose: {panel_purpose}\n"
         f"Layout description: {layout}\n"
-        f"Speech bubble text (in Polish): \"{bubble_text}\"\n"
+        f"Speech bubble text — MUST BE IN POLISH, do not translate: \"{bubble_text}\"\n"
         f"Speech bubble visual style: {bubble_style}\n"
         f"Base visual style: {base_style}\n"
         f"Quality tags: {quality}\n"
         f"Negative prompt (do NOT include these): {neg_prompt}\n\n"
         f"Original email context (Polish, for reference only, do NOT translate):\n{body[:500]}\n\n"
-        "Write the complete FLUX prompt now:"
+        "Write the complete FLUX prompt now. Remember: speech bubble text stays in Polish:"
     )
 
     flux_prompt, provider = _call_ai_with_fallback(system_for_flux, user_for_flux, max_tokens=300)
