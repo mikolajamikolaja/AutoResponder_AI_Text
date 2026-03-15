@@ -94,7 +94,7 @@ def webhook():
     # ── Pola nadawcy i historia ───────────────────────────────────────────────
     sender           = data.get("sender",      "")
     sender_name      = data.get("sender_name", "")
-   previous_body    = data.get("previous_body") or None
+    previous_body    = data.get("previous_body") or None
     previous_subject = data.get("previous_subject") or None
     attachments      = data.get("attachments") or []
 
