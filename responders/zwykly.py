@@ -316,6 +316,13 @@ def _parse_response(raw: str) -> tuple[str, str]:
 
         emotion_key = EMOCJA_MAP.get(emocja, FALLBACK_EMOT)
 
+        # Sprawdź czy odpowiedź zawiera sekcję Tylera — jeśli nie, JSON jest niekompletny
+        if tekst and "### TYLER DURDEN" not in tekst:
+            current_app.logger.warning(
+                "[zwykly] Brak sekcji TYLER DURDEN — odpowiedź niekompletna (%.80s)", tekst
+            )
+            tekst = ""  # wymusi fallback poniżej
+
         if not tekst:
             tekst = sanitize_model_output(raw)
 
@@ -495,30 +502,49 @@ def _generate_panel_prompt(
         panel_purpose = "Tyler wyrzuca przedmioty symbolizujące problemy nadawcy"
 
     # System prompt dla modelu generującego prompt FLUX
-    system_for_flux = (
-        "You are a cinematic visual prompt engineer for FLUX image generation. "
-        "You create precise, vivid English prompts for photorealistic movie stills. "
-        "Always describe: actor name, character name, exact pose, lighting, background, "
-        "speech bubble content and placement. "
-        "CRITICAL RULE: The speech bubble text MUST appear in Polish exactly as given — "
-        "do NOT translate it to English under any circumstances. "
-        "Output: ONE paragraph, max 120 words, no bullet points, no explanations. "
-        "Only the prompt text."
-    )
-
-    user_for_flux = (
-        f"Create a FLUX image generation prompt for panel {panel_index} of 3 in a triptych.\n\n"
-        f"Actor: {actor} as {character} from Fight Club (1999)\n"
-        f"Panel purpose: {panel_purpose}\n"
-        f"Layout description: {layout}\n"
-        f"Speech bubble text — MUST BE IN POLISH, do not translate: \"{bubble_text}\"\n"
-        f"Speech bubble visual style: {bubble_style}\n"
-        f"Base visual style: {base_style}\n"
-        f"Quality tags: {quality}\n"
-        f"Negative prompt (do NOT include these): {neg_prompt}\n\n"
-        f"Original email context (Polish, for reference only, do NOT translate):\n{body[:500]}\n\n"
-        "Write the complete FLUX prompt now. Remember: speech bubble text stays in Polish:"
-    )
+    if panel_index == 2:
+        # Panel środkowy — wolna interpretacja cytatu, bez narzucania kompozycji
+        system_for_flux = (
+            "You are a cinematic visual prompt engineer for FLUX image generation. "
+            "You receive a Polish quote and create a free visual interpretation — "
+            "NO fixed poses, NO fixed camera angles, NO fixed backgrounds. "
+            "The image should FEEL like the quote, not illustrate it literally. "
+            "CRITICAL: The Polish quote text must appear somewhere in the image exactly as given — "
+            "do NOT translate it. "
+            "Output: ONE paragraph, max 100 words, no bullet points. Only the prompt."
+        )
+        user_for_flux = (
+            f"Create a free FLUX image prompt inspired by this Polish quote:\n"
+            f"\"{bubble_text}\"\n\n"
+            f"Character if present: {actor} as {character}, {base_style}\n"
+            f"The quote must appear in the image in Polish exactly as written.\n"
+            f"Style: {base_style}, {quality}\n"
+            "No fixed layout. Interpret freely. Write the prompt now:"
+        )
+    else:
+        system_for_flux = (
+            "You are a cinematic visual prompt engineer for FLUX image generation. "
+            "You create precise, vivid English prompts for photorealistic movie stills. "
+            "Always describe: actor name, character name, exact pose, lighting, background, "
+            "speech bubble content and placement. "
+            "CRITICAL RULE: The speech bubble text MUST appear in Polish exactly as given — "
+            "do NOT translate it to English under any circumstances. "
+            "Output: ONE paragraph, max 120 words, no bullet points, no explanations. "
+            "Only the prompt text."
+        )
+        user_for_flux = (
+            f"Create a FLUX image generation prompt for panel {panel_index} of 3 in a triptych.\n\n"
+            f"Actor: {actor} as {character} from Fight Club (1999)\n"
+            f"Panel purpose: {panel_purpose}\n"
+            f"Layout description: {layout}\n"
+            f"Speech bubble text — MUST BE IN POLISH, do not translate: \"{bubble_text}\"\n"
+            f"Speech bubble visual style: {bubble_style}\n"
+            f"Base visual style: {base_style}\n"
+            f"Quality tags: {quality}\n"
+            f"Negative prompt (do NOT include these): {neg_prompt}\n\n"
+            f"Original email context (Polish, for reference only, do NOT translate):\n{body[:500]}\n\n"
+            "Write the complete FLUX prompt now. Remember: speech bubble text stays in Polish:"
+        )
 
     flux_prompt, provider = _call_ai_with_fallback(system_for_flux, user_for_flux, max_tokens=300)
 
@@ -803,12 +829,23 @@ def build_zwykly_section(body: str) -> dict:
     user_msg   = prompt_str
 
     # ── 2. Wywołaj model (Groq → DeepSeek) ───────────────────────────────────
-    res_raw, provider = _call_ai_with_fallback(system_msg, user_msg)
+    res_raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=8000)
 
     current_app.logger.info("[zwykly] Provider użyty: %s", provider)
 
     # ── 3. Parsuj odpowiedź ───────────────────────────────────────────────────
     res_text, emotion_key = _parse_response(res_raw)
+
+    # ── 3b. Retry z DeepSeek jeśli odpowiedź niekompletna ────────────────────
+    if not res_text and provider == "groq":
+        current_app.logger.warning("[zwykly] Groq zwrócił niekompletną odpowiedź — retry DeepSeek")
+        res_raw_retry = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+        if res_raw_retry:
+            res_text, emotion_key = _parse_response(res_raw_retry)
+            if res_text:
+                provider = "deepseek-retry"
+                res_raw  = res_raw_retry
+                current_app.logger.info("[zwykly] DeepSeek retry OK")
 
     if not res_text:
         res_text = (
