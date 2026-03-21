@@ -313,6 +313,28 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tu
 # ═══════════════════════════════════════════════════════════════════════════════
 # PARSOWANIE ODPOWIEDZI MODELU
 # ═══════════════════════════════════════════════════════════════════════════════
+def _clean_manifest_labels(text: str) -> str:
+    """
+    Usuwa etykiety manifestów które model wypisuje mimo zakazu.
+    np. "KONSUMPCJONIZM: treść" → "treść"
+    """
+    if not text:
+        return text
+    labels = [
+        "KONSUMPCJONIZM", "DNO", r"DNO \(Rock Bottom\)",
+        r"BÓG/RELIGIA", "BÓG", "RELIGIA",
+        "KLASA ROBOTNICZA", r"ŚMIERTELNOŚĆ",
+        r"ODPUSZCZENIE \(Let Go\)", "ODPUSZCZENIE",
+        "AUTENTYCZNOŚĆ", "ILUZJA BEZPIECZEŃSTWA",
+        "HISTORIA", "SAMODOSKONALENIE", "TOŻSAMOŚĆ",
+        "RYZYKO", "BUNT", "KONTROLA",
+    ]
+    pattern = r'^(?:' + '|'.join(labels) + r')\s*:\s*'
+    lines = text.split('\n')
+    cleaned = []
+    for line in lines:
+        cleaned.append(re.sub(pattern, '', line, flags=re.IGNORECASE))
+    return '\n'.join(cleaned)
 
 def _parse_response(raw: str) -> tuple[str, str]:
     """
@@ -330,7 +352,7 @@ def _parse_response(raw: str) -> tuple[str, str]:
 
     try:
         data   = json.loads(json_str)
-        tekst  = data.get("odpowiedz_tekstowa", "").strip()
+        tekst  = _clean_manifest_labels(data.get("odpowiedz_tekstowa", "").strip())
         emocja = data.get("emocja", "").strip().lower()
 
         # Usuń ewentualne znaki | jeśli model zwrócił schemat zamiast wartości
