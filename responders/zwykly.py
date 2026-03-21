@@ -438,67 +438,77 @@ def _load_style_config() -> dict:
     return {}
 
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # KONFIGURACJA POSTACI, STYLÓW, AKCJI
 # ═══════════════════════════════════════════════════════════════════════════════
 
 FIGHT_CLUB_CHARACTERS = [
-    # Tyler Durden - Essence of chaos
-    "Brad Pitt as Tyler Durden — raw, feral intensity. Post-fight appearance: blood-caked knuckles, a chipped front tooth, and a deep gash over a swollen eye. Wearing a scuffed, dirty red leather jacket over a bare, sweat-glistening chest marked with chemical soap-burn scars. His hair is a greasy, matted mess. He's holding a smoldering cigarette, standing amidst the wreckage of a burned-out house. Hyper-realistic, 35mm film grain, 1990s grime.",
+    # Tyler Durden - Esencja chaosu
+    "Brad Pitt as Tyler Durden — raw, feral intensity. Post-fight appearance: blood-caked knuckles, a chipped front tooth, and a deep gash over a swollen eye. Wearing a scuffed, dirty red leather jacket over a bare, sweat-glistening chest marked with chemical soap-burn scars. His hair is a greasy, matted mess. He’s holding a smoldering cigarette, standing amidst the wreckage of a burned-out house. Hyper-realistic, 35mm film grain, 1990s grime.",
 
-    # Edward Norton - Total psychological collapse
-    "Edward Norton as the Narrator — the look of total insomnia. Sunken, charcoal-rimmed eyes, pale sickly skin with visible veins. Wearing a sweat-stained, tattered white dress shirt with the sleeves ripped off, covered in dried blood and office coffee stains. A massive purple hematoma on his cheekbone and a split lip. He looks completely dissociated and broken, staring into the camera with a thousand-yard stare. Dark, moody lighting.",
+    # Narrator (Norton) - Symbol totalnego rozkładu psychicznego
+    "Edward Norton as the Narrator — the look of total insomnia. Sunken, charcoal-rimmed eyes, pale sickly skin with visible veins. Wearing a sweat-stained, tattered white dress shirt with the sleeves ripped off, covered in dried blood and office coffee stains. A massive purple hematoma on his cheekbone and a split lip. He looks completely dissociated and broken, staring into the camera with a 'thousand-yard stare'. Dark, moody lighting.",
 
-    # Marla Singer - Destroyed bride
-    "Helena Bonham Carter as Marla Singer — wearing a shredded, soot-covered vintage bridesmaid dress from a thrift store. Her hair is an unwashed, bird's-nest tangle. Smudged, heavy black raccoon eye makeup running down her face. She's leaning against a peeling wallpaper wall in a derelict hallway, a pink feather boa hanging like a dead animal around her neck. Nihilistic smirk, blood on her teeth, holding a cigarette with trembling, ash-covered fingers.",
+    # Marla Singer - Zniszczona panna młoda (zgodnie z prośbą)
+    "Helena Bonham Carter as Marla Singer — wearing a shredded, soot-covered vintage bridesmaid/wedding dress from a thrift store. Her hair is an unwashed, bird's-nest tangle. Smudged, heavy black 'raccoon' eye makeup running down her face. She’s leaning against a peeling wallpaper wall in a derelict hallway, a pink feather boa hanging like a dead animal around her neck. Nihilistic smirk, blood on her teeth, holding a cigarette with trembling, ash-covered fingers.",
 
-    # Angel Face - Destroyed beauty
+    # Angel Face (Jared Leto) - Zniszczone piękno
     "Jared Leto as Angel Face — once-ethereal, angelic features now pulverized into a pulp of gore. Both eyes swollen shut, nose shattered and crooked, blood dripping from a ruined mouth. His platinum blonde hair is soaked in crimson. A haunting contrast between his delicate bone structure and the absolute brutality of the beating. Extreme close-up, harsh fluorescent lighting.",
 
-    # Bob - Despair and physical mass
+    # Bob - Rozpacz i fizyczna masa
     "Meat Loaf as Bob — a mountain of a man in a state of emotional collapse. Wearing a massive, sweat-drenched, grey XXXL sweatshirt. Tear-streaked face, puffy eyes, and the visible shape of gynecomastia. He looks like a tragic, broken giant. Surroundings: a dark, damp basement with cracked concrete and single bare lightbulb casting long, dramatic shadows."
 ]
 
-PANEL_STYLES = [
-    "35mm film grain, high contrast, sickly green and amber tones, Fincher cinematography",
-    "raw gritty street photography, harsh fluorescent light, 1990s documentary style",
-    "extreme chiaroscuro, single bare bulb lighting, deep shadows, industrial decay",
-    "handheld camera blur, motion, chaotic energy, smoke and sweat",
-    "desaturated noir, cold blue shadows, cracked concrete textures",
-    "overexposed bleach bypass, washed out whites, dark crushed blacks",
+FIGHT_CLUB_CHARACTERS = [
+    # Tyler Durden - Esencja chaosu i zniszczenia
+    "Brad Pitt as Tyler Durden POST-CAR CRASH — raw damage, blood smeared on forehead, glazed thousand-yard stare, unwashed, bruised face, split lip, dried blood under nose, greasy matted hair stuck to forehead, shirtless with prominent soap-burn scars and chemical burns on forearms, cigarette ash on fingers, dark circles under bloodshot eyes, holding a burning book in a dimly lit space, looks like a feral survivor of a wreck.",
+
+    # Edward Norton as the Narrator - Symbol totalnego rozkładu
+    "Edward Norton as the Narrator — black eye, torn and dirty business suit, hollow exhausted gaze, pale sickly skin, hasn't slept in days, blood-stained shirt collar, hands trembling with desperation, sitting at the bottom of a dark rocky pit, staring up at a bleak grey sky[cite: 22, 23].",
+
+    # Helena Bonham Carter as Marla Singer - Zniszczona panna młoda
+    "Helena Bonham Carter as Marla Singer — wearing a shredded, soot-stained vintage wedding dress covered in ash, dark smoky 'raccoon' eyes, cigarette burning down to her fingers, nihilistic smirk, blood on teeth, unwashed hair matted to her face, screaming at the camera with veins bulging on her neck.",
+
+    # Angel Face - Zmasakrowane piękno
+    "Jared Leto as Angel Face — once-beautiful face now destroyed into a pulp, blood on perfect teeth, swollen shut eye, angelic features beaten into ruin, platinum blonde hair soaked in crimson, extreme close-up under harsh fluorescent light.",
+
+    # Meat Loaf as Bob - Tragiczna masa
+    "Meat Loaf as Bob — enormous man with gynecomastia, tearful and desperate hollow eyes, oversized stained sweater, sitting on a dirty floor surrounded by industrial wreckage, personifying pure hopelessness."
 ]
 
 PANEL_ACTIONS = [
-    # Iconic car scene
+    # Kultowa scena z samochodem
     "releasing steering wheel of a speeding car, hands off, smiling maniacally while oncoming headlights reflect in glazed eyes, 35mm motion blur, chaos",
 
-    # Marla in wedding dress
-    "standing in a scorched, derelict ballroom, arms spread wide in a ruined wedding dress, face turned toward black soot and smoke, liberated and destroyed",
+    # Marla w sukni ślubnej (zgodnie z Twoją prośbą)
+    "standing in a scorched, derelict ballroom, arms spread wide in a ruined wedding dress, face turned toward black soot and smoke, liberated and destroyed ",
 
-    # Raymond K. Hessel confrontation
+    # Scena z Raymondem K. Hesselem (pistolet do głowy/konfrontacja)
     "crouching over a terrified clerk pinned against a dumpster in a rain-slicked alley, forcing them to confront their meaningless life, steam rising from grates, rats scurrying in shadows",
 
-    # Consumer nihilism
+    # Nihilizm konsumpcyjny
     "laughing maniacally with blood-caked teeth, standing amidst a bonfire of burning IKEA furniture and designer catalogs, high contrast",
 
-    # Rock bottom
-    "sitting at the bottom of a dark, wet rocky pit, staring up at a tiny square of grey sky with hollow eyes, personifying hitting rock bottom",
+    # Rock Bottom (Narrator)
+    "sitting at the bottom of a dark, wet rocky pit, staring up at a tiny square of grey sky with hollow eyes, personifying 'hitting rock bottom' [cite: 22]",
 
-    # Portrait of rage
-    "screaming directly into the lens with veins bulging on the neck, face inches from camera, splattered with sweat and grime, raw rage and contempt",
+    # Portret wściekłości
+    "screaming directly into the lens with veins bulging on the neck, face inches from camera, splattered with sweat and grime, raw rage and contempt ",
 
-    # Writing in blood
+    # Pisanie krwią/mydłem
     "writing a nihilistic manifesto on a cracked wall with bloody knuckles, chemical smoke and lye dust in the background, industrial setting",
 
-    # Walking away from wreck
-    "walking away from a twisted, flaming car wreck in slow motion, face smeared with blood, looking dead ahead without blinking, fire illuminating the night",
+    # Zniszczenie życia nadawcy (Jadzi)
+    "standing over a pile of burning truskawka-themed objects and 12-zloty notes, pointing a judgmental finger at the camera, cold lighting",
 
-    # Church scene
-    "reading from a burning book in a dimly lit, empty church, surrounded by a congregation of rats, amidst 35mm film grain and heavy shadows",
+    # Wyjście z wypadku
+    "walking away from a twisted, flaming car wreck in slow motion, face smeared with blood, looking dead ahead without blinking, fire illuminating the night ",
 
-    # Standing over sender's burning life
-    "standing over a pile of burning personal objects and worthless banknotes, pointing a judgmental finger directly at the camera, cold industrial lighting"
+    # Scena w kościele (z logu debug)
+    "reading from a burning book in a dimly lit, empty church, surrounded by a congregation of rats, amidst 35mm film grain and heavy shadows "
 ]
+
 
 def _extract_nouns_from_body(body: str) -> list:
     """
@@ -572,7 +582,7 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
         W, H = img.size
 
         # Pasek na dole — 18% wysokości, min 80px
-        bar_h = max(80, int(H * 0.28))
+        bar_h = max(80, int(H * 0.18))
         new_img = Image.new("RGB", (W, H + bar_h), (10, 10, 10))
         new_img.paste(img, (0, 0))
 
@@ -1526,6 +1536,61 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     return base64.b64encode(pdf_bytes).decode("ascii")
 
 
+
+def _build_explanation_txt(res_text: str, body: str) -> dict | None:
+    """
+    Generuje plik wyjaśnienie.txt — Groq/DeepSeek tłumaczy każde zdanie
+    Tylera i Sokratesa prostym językiem po polsku.
+    Zwraca dict {base64, content_type, filename} lub None przy błędzie.
+    """
+    if not res_text or not res_text.strip():
+        return None
+
+    system_msg = (
+        "Jesteś pomocnym asystentem który wyjaśnia odpowiedzi Tylera Durdena i Sokratesa. "
+        "Otrzymasz odpowiedź napisaną do nadawcy emaila. "
+        "Twoje zadanie: wyjaśnij PO POLSKU każde zdanie lub akapit z tej odpowiedzi — "
+        "co autor miał na myśli, dlaczego tak napisał, do czego nawiązuje. "
+        "Pisz prosto i zrozumiale, jakbyś tłumaczył przyjacielowi. "
+        "Zachowaj kolejność — najpierw wyjaśnij Sokratesa, potem Tylera. "
+        "Dla każdego zdania/akapitu napisz: ZDANIE: [cytat] → WYJAŚNIENIE: [co to znaczy]. "
+        "Nie używaj markdownu. Tylko czysty tekst."
+    )
+
+    user_msg = (
+        f"Email który otrzymał program (kontekst):\n{body[:500]}\n\n"
+        f"Odpowiedź do wyjaśnienia:\n{res_text[:3000]}"
+    )
+
+    raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=3000)
+
+    if not raw or not raw.strip():
+        current_app.logger.warning("[zwykly] Brak wyjaśnienia od AI")
+        return None
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"wyjasnienie_{ts}.txt"
+
+    # Nagłówek pliku
+    header = (
+        f"=== WYJAŚNIENIE ODPOWIEDZI TYLERA I SOKRATESA ===\n"
+        f"Data: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
+        f"Provider: {provider}\n"
+        f"{'=' * 50}\n\n"
+    )
+
+    content = header + raw.strip()
+    b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+
+    current_app.logger.info("[zwykly] Wyjaśnienie wygenerowane: %d znaków", len(content))
+
+    return {
+        "base64":       b64,
+        "content_type": "text/plain",
+        "filename":     filename,
+    }
+
+
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "") -> dict:
     """
     Buduje sekcję 'zwykly' odpowiedzi:
@@ -1641,7 +1706,10 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         panel_prompts=panel_prompts,
     )
 
-    # ── 9. Zwróć wszystko ─────────────────────────────────────────────────────
+    # ── 9. Wyjaśnienie odpowiedzi ─────────────────────────────────────────────
+    explanation_txt = _build_explanation_txt(res_text, body)
+
+    # ── 10. Zwróć wszystko ────────────────────────────────────────────────────
     imie_nazwisko = (cv_data.get("imie_nazwisko", "CV") if cv_data else "CV")
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', imie_nazwisko)[:30]
 
@@ -1662,4 +1730,5 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "triptych":           triptych_images,
         "triptych_for_drive": triptych_images,
         "debug_txt":          debug_txt,
+        "explanation_txt":    explanation_txt,
     }
