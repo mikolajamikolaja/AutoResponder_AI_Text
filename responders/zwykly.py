@@ -801,7 +801,7 @@ def _generate_panel_prompt(
 
     user_for_flux = (
         f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
-        f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are naked, having fun, they are slim and well-groomed, their hair is gray..\n\n"
+        f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are having fun, they are slim and well-groomed, their hair is gray dressed for hot summer weather, light casual clothes..\n\n"
         f"Main character: {character}\n"
         f"Action: {action}\n"
         f"Objects in scene (from sender email context): {nouns_str}\n"
