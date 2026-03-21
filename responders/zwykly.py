@@ -1552,10 +1552,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         )
 
     # ── 4. Emotka FLUX (zastępuje pliki z dysku) ──────────────────────────────
-    pdf_b64 = read_file_base64(os.path.join(PDF_DIR, f"{emotion_key}.pdf"))
-    if not pdf_b64:
-        pdf_b64 = read_file_base64(os.path.join(PDF_DIR, f"{FALLBACK_EMOT}.pdf"))
-
+    # PDF emocji wyłączony — zastąpiony przez cv_pdf generowany dynamicznie
     png_b64 = _generate_icon_flux(body, emotion_key)
     if not png_b64:
         current_app.logger.warning("[zwykly] FLUX emotka zawiodła — fallback na plik")
@@ -1628,10 +1625,6 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             "base64":       png_b64,
             "content_type": "image/png",
             "filename":     f"emotka_{emotion_key}.png",
-        },
-        "pdf": {
-            "base64":   pdf_b64,
-            "filename": f"{emotion_key}.pdf",
         },
         "cv_pdf": {
             "base64":       cv_pdf_b64,
