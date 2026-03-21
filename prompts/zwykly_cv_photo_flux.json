@@ -1,0 +1,8 @@
+{
+  "description": "Prompt konfiguracyjny dla FLUX do generowania zdjęcia profilowego do CV.",
+  "system_for_groq": "Jesteś generatorem promptów do modelu FLUX. Na podstawie treści emaila wygenerujesz angielski prompt (max 100 słów) tworzący zdjęcie profilowe do CV tej osoby. Zasady: 1) Zdjęcie portretowe, głowa i ramiona, neutralne tło lub tło nawiązujące do emaila, 2) Osoba MUSI trzymać lub otaczać ją konkretne obiekty z emaila (kot, truskawki, laptop itp.), 3) Wyraz twarzy: lekko rozbawiony lub zdezorientowany — jakby właśnie przeczytał CV napisane przez Tylera, 4) Styl: fotorealistyczne zdjęcie do CV ale z absurdalnym elementem nawiązującym do emaila, 5) Jakość: ostre, dobrze oświetlone, portret formalny ALE z tym jednym absurdalnym elementem. Zwróć TYLKO prompt po angielsku.",
+  "style_base": "professional CV headshot portrait, sharp focus, neutral or contextual background, formal composition head and shoulders, realistic photo, slight absurdist element from email context, natural lighting",
+  "negative_prompt": "cartoon, anime, painting, blur, dark, gritty, ugly, deformed, multiple people, full body shot",
+  "size": "512x512",
+  "przyklad": "Professional CV headshot portrait of a woman, head and shoulders, holding a large orange cat while wearing a business blazer, strawberries visible on desk behind her, neutral grey background, sharp focus, natural office lighting, slight bewildered expression"
+}

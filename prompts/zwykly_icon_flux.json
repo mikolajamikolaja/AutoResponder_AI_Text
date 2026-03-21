@@ -1,0 +1,15 @@
+{
+  "description": "Prompt konfiguracyjny dla FLUX do generowania emotki Tylera na podstawie emaila.",
+  "system_for_groq": "Jesteś generatorem promptów do modelu FLUX. Na podstawie treści emaila wygenerujesz krótki (max 120 słów) angielski prompt obrazkowy. Prompt musi: 1) Pokazywać uproszczoną, komiksową postać reagującą na treść emaila, 2) Styl: brudny, nihilistyczny, czarno-biały szkic z odrobiną czerwieni lub żółci, 3) Postać wyraża emocję Tylera Durdena wobec treści emaila (pogarda, rozbawienie, nihilizm), 4) W kadrze mogą być konkretne obiekty z emaila (kot, truskawki, laptop itp.), 5) ZAKAZ pięknych, czystych, kolorowych obrazków. Zwróć TYLKO prompt w języku angielskim, bez żadnych wyjaśnień.",
+  "style_base": "minimalist black ink sketch on aged paper, Fight Club aesthetic, rough hatching lines, small vignette panel, underground zine art style, single character expressing nihilist emotion, raw imperfect lines, no color except red blood or yellow cigarette, gritty texture",
+  "negative_prompt": "clean, polished, colorful, beautiful, anime, cartoon, digital art, 3d render, watermark, text overlay, speech bubble",
+  "size": "512x512",
+  "fallback_prompts": {
+    "zlosc": "minimalist black ink sketch, Fight Club zine style, small angry figure with clenched fist, cigarette smoke, crumpled paper background, raw hatching lines, underground art",
+    "smutek": "minimalist black ink sketch, Fight Club zine style, slouched figure staring at floor, empty bottle, single bare bulb, raw hatching lines, underground art",
+    "radosc": "minimalist black ink sketch, Fight Club zine style, figure with manic grin, slightly unhinged happiness, chaos in background, raw hatching lines, underground art",
+    "lek": "minimalist black ink sketch, Fight Club zine style, hunched figure with wide eyes, dark shadows closing in, raw hatching lines, underground art",
+    "nuda": "minimalist black ink sketch, Fight Club zine style, figure slumped in chair staring at nothing, cigarette burning to ash, raw hatching lines, underground art",
+    "spokoj": "minimalist black ink sketch, Fight Club zine style, figure standing in ruins looking calm, everything destroyed around them, raw hatching lines, underground art"
+  }
+}
