@@ -411,11 +411,11 @@ def _load_style_config() -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 FIGHT_CLUB_CHARACTERS = [
-    "Brad Pitt as Tyler Durden — unwashed, split lip, bruised face, greasy matted hair, shirtless with soap-burn scars",
-    "Edward Norton as the Narrator — disheveled office worker, black eye, torn suit, exhausted hollow gaze",
-    "Helena Bonham Carter as Marla Singer — dark smoky eyes, vintage thrift-store dress, cigarette always in hand, nihilistic smirk",
-    "Meat Loaf as Bob — enormous man with gynecomastia, tearful desperate eyes, oversized sweater",
-    "Jared Leto as Angel Face — beautiful but battered face, blood on perfect teeth, angelic features destroyed",
+    "Brad Pitt as Tyler Durden POST-CAR CRASH — blood smeared on forehead, glazed thousand-yard stare, unwashed, split lip, bruised cheekbone, dried blood under nose, greasy matted hair stuck to face, shirtless with soap-burn scars and chemical burns on forearms, cigarette ash on fingers, dark circles under bloodshot eyes, looks like he just walked away from a burning car wreck. NOT handsome. NOT groomed. Raw damage only.",
+    "Edward Norton as the Narrator — black eye, torn dirty suit, hollow exhausted gaze, pale skin, hasn't slept in days, blood on shirt collar, hands trembling",
+    "Helena Bonham Carter as Marla Singer — dark smoky eyes, tattered vintage dress covered in ash, cigarette burning down to fingers, nihilistic smirk, blood on teeth, unwashed hair matted to face",
+    "Meat Loaf as Bob — enormous man with gynecomastia, tearful desperate hollow eyes, oversized stained sweater, sitting on dirty floor surrounded by wreckage",
+    "Jared Leto as Angel Face — once-beautiful face now destroyed, blood on perfect teeth, swollen eye, angelic features beaten into ruin",
 ]
 
 PANEL_STYLES = [
@@ -428,16 +428,16 @@ PANEL_STYLES = [
 ]
 
 PANEL_ACTIONS = [
-    "screaming at the camera with veins on neck",
-    "throwing objects violently across the room",
-    "laughing maniacally with blood on teeth",
-    "grabbing someone by the collar",
-    "smoking aggressively, ash falling on clothes",
-    "pointing finger directly at viewer with intense rage",
-    "sitting on floor surrounded by wreckage, staring into nothing",
-    "writing on a wall with bloody knuckles",
-    "running through a dark corridor",
-    "standing over a pile of burning objects",
+    "releasing steering wheel of speeding car, smiling, oncoming headlights reflected in glazed eyes, motion blur",
+    "standing before a burning field, arms spread wide, face turned upward toward black smoke, liberated and destroyed",
+    "crouching over terrified ordinary person pinned against dumpster in dark alley, forcing them to confront their meaningless life, steam from pipes, rats visible",
+    "laughing maniacally with blood on teeth, surrounded by burning consumer goods",
+    "sitting at the bottom of a dark pit, looking up at a tiny square of grey sky, rock bottom",
+    "screaming at the camera with veins on neck, face inches from lens, rage and contempt",
+    "writing manifesto on wall with bloody knuckles, chemical smoke in background",
+    "standing over pile of burning objects from sender's life, pointing finger at camera",
+    "walking away from car wreck in slow motion, fire behind, not looking back",
+    "reading from burning book in empty church, congregation of rats",
 ]
 
 
