@@ -118,7 +118,8 @@ def webhook():
     wants_text_reply = bool(data.get("wants_text_reply", True))
     wave1 = {}
     if wants_text_reply:
-        wave1["zwykly"] = lambda: run(build_zwykly_section, body)
+        _prev = previous_body
+        wave1["zwykly"] = lambda: run(build_zwykly_section, body, _prev)
         wave1["biznes"] = lambda: run(build_biznes_section, body)
     wave1["nawiazanie"] = lambda: run(
         build_nawiazanie_section,

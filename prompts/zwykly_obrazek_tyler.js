@@ -1,40 +1,58 @@
 // <STYLE_CONFIG>
 {
   "model_target": "FLUX.1 [schnell]",
-  "optimization_strategy": "High-impact descriptive natural language. Focus on physical textures and direct spatial instructions. Minimalist but heavy on atmospheric 'grit'.",
-  
-  "character_profile": "Brad Pitt as Tyler Durden from 1999. Unwashed, disheveled. Split lip, bruised cheekbone, dried blood under nose. Greasy matted hair. Shirtless with soap-burn scars and fresh bruises, or wearing a filthy torn shirt. Cigarette ash on fingers. Dark circles under bloodshot eyes. Looks like he has not slept in 3 days. Absolutely NOT clean, NOT groomed, NOT handsome. Raw, damaged, real.",
+  "optimization_strategy": "High-impact descriptive natural language. Focus on physical textures and direct spatial instructions. Minimalist but heavy on atmospheric 'grit'. David Fincher visual language — underexposed, chemical, violent.",
 
-  "fincher_lighting_engine": "Cinematic chiaroscuro. Sickly green and amber underexposed tones. Heavy 35mm film grain. Deep shadows, industrial grime, flickering fluorescent light effect. 1990s film stock aesthetic.",
+  "character_profile": "Brad Pitt as Tyler Durden from Fight Club 1999. POST-CAR CRASH version: blood smeared on forehead, glazed thousand-yard stare, smoke rising from background wreckage. Unwashed, disheveled beyond recognition. Split lip, bruised cheekbone, dried blood under nose and ear. Greasy matted hair stuck to face. Shirtless with soap-burn scars, fresh bruises, chemical burns on forearms. Cigarette ash on fingers, nicotine-stained nails. Dark circles under bloodshot eyes. Looks like he has not slept in 5 days and just walked away from a burning car. Absolutely NOT clean, NOT groomed, NOT handsome, NOT heroic. Raw, damaged, real. No retouching. No beauty. Only wreckage.",
+
+  "fincher_lighting_engine": "Cinematic chiaroscuro at maximum intensity. Sickly green and corpse-yellow underexposed tones. Extreme 35mm film grain with visible scratches. Deep black shadows swallowing 40% of frame. Industrial grime on every surface. Flickering failing fluorescent light. 1990s film stock pushed to ISO 3200. Chemical burn aesthetic. Colors desaturated to near-monochrome except for fire and blood.",
 
   "triptych": {
-    "instruction": "A wide horizontal 3:1 aspect ratio image divided into 3 equal side-by-side vertical panels by thin black lines. Each panel must show a distinct camera angle.",
+    "instruction": "A wide horizontal 3:1 aspect ratio image divided into 3 equal side-by-side vertical panels by thin black lines. Each panel must show a distinct camera angle and distinct nihilist scenario.",
     "panels": [
       {
-        "panel_1": "Medium shot. Tyler Durden in a dark basement. He is pointing his finger at the camera. Intimidating gaze. Industrial background.",
-        "text_rendering": "A speech bubble with hand-drawn ink style containing the words: '[TEXT_1]'. Text must be sharp and legible."
+        "panel_1": "Extreme close-up. Tyler Durden's bloody hands releasing a car steering wheel at high speed. Dashboard lights reflected in his glazed eyes. Motion blur on background. He is smiling. The windshield shows oncoming headlights.",
+        "text_rendering": "A hand-drawn speech bubble with cracked ink style containing the words: '[TEXT_1]'. Text sharp and legible despite chaos."
       },
       {
-        "panel_2": "Free composition — no layout imposed. Visual interpretation of the quote: [TEXT_2]",
-        "text_rendering": "The quote '[TEXT_2]' is rendered somewhere in the scene — as graffiti, a speech bubble, or text burned into a surface. Placement and style decided by the image."
+        "panel_2": "Medium shot. Tyler standing before a burning field of [USER_OBJECTS], arms spread wide, face turned upward toward black smoke. He looks liberated. Background: total destruction.",
+        "text_rendering": "The quote '[TEXT_2]' burned as graffiti into the scorched ground. Letters uneven, raw."
       },
       {
-        "panel_3": "Low angle wide shot. Tyler standing victoriously over a pile of [USER_OBJECTS]. Dark urban alleyway, steam rising from pipes.",
-        "text_rendering": "Text '[TEXT_3]' rendered as bold graffiti on the wall behind him."
+        "panel_3": "Low angle. Tyler crouching over a terrified [USER_PERSON] pinned against a dumpster in a dark alley, Tyler holding something to their temple, forcing them to confront their meaningless life. Steam from pipes. Rats.",
+        "text_rendering": "Text '[TEXT_3]' as stencil graffiti on the brick wall. Paint dripping."
       }
     ]
   },
+
+  "panel_actions_additional": [
+    "Tyler releasing steering wheel in speeding car, smiling, headlights incoming",
+    "Tyler standing in front of burning strawberry field, arms open, liberated",
+    "Tyler forcing Raymond K. Hessel moment — gun to temple of ordinary person",
+    "Tyler in flooded basement surrounded by floating consumer goods, laughing",
+    "Tyler at bottom of a pit looking up at a tiny square of grey sky — rock bottom",
+    "Tyler reading from a burning book in an empty church, congregation of rats"
+  ],
 
   "schnell_technical_parameters": {
     "aspect_ratio": "3:1",
     "steps_optimized": "4-8 steps",
     "guidance_scale": "3.5",
-    "style_tags": "Raw photo, gritty realism, 35mm movie still, high contrast, industrial decay, realistic textures."
+    "style_tags": "Raw photo, gritty realism, 35mm movie still, extreme high contrast, industrial decay, realistic textures, David Fincher aesthetic, chemical color grade, underexposed, film grain, no beauty, no retouching."
   },
 
+  "atmosphere_intensifiers": [
+    "Every surface covered in grime, rust, chemical residue",
+    "Light sources: only failing fluorescents, fire, distant headlights",
+    "Color palette: desaturated grey-green-yellow with isolated red of blood or fire",
+    "No natural light, no daylight, no sunshine anywhere",
+    "Smoke or chemical vapor in every scene",
+    "Background always implies decay, abandonment, or imminent disaster"
+  ],
+
   "safety_and_content_filter": {
-    "forbidden_words": ["walka", "walczą", "faceci", "klub"],
-    "replacement_logic": "Always map to sender's context (e.g., 'Project Excel', 'The Laundry War', 'Cleaning Sessions')."
+    "forbidden_words": ["walka", "walczą", "faceci", "klub", "szczęście", "harmonia", "balans"],
+    "replacement_logic": "Always map to sender's context — destruction, nihilism, and the specific objects from their email."
   }
 }
 // </STYLE_CONFIG>

@@ -128,12 +128,12 @@ def _fallback_prompt_dict() -> dict:
         "user_text_placeholder": "{{USER_TEXT}}"
     }
 
-
-def _render_prompt(data: dict, body: str) -> str:
+def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
     """
     Buduje pełny string promptu z danych prompt.json.
     Obsługuje zarówno stary format (instrukcje/zasady_tylera/manifesty)
     jak i nowy (tyler_zasady_OBOWIAZKOWE / tyler_manifesty_OBOWIAZKOWE).
+    Obsługuje previous_body — poprzednią wiadomość od nadawcy.
     """
     lines = []
 
@@ -148,10 +148,30 @@ def _render_prompt(data: dict, body: str) -> str:
         lines.append(json.dumps(schema, ensure_ascii=False, indent=2))
         lines.append("")
 
+    # ── Poprzednia wiadomość (jeśli dostępna) ─────────────────────────────────
+    if previous_body and previous_body.strip():
+        lines.append("### POPRZEDNIA WIADOMOŚĆ OD TEJ OSOBY (Tyler i Sokrates MUSZĄ do niej nawiązać):")
+        lines.append(previous_body[:500])
+        lines.append("")
+        # Instrukcja nawiązania z prompt.json
+        poprzednia_instr = data.get("tyler_poprzednia_wiadomosc", "")
+        if poprzednia_instr:
+            lines.append("### INSTRUKCJA NAWIĄZANIA DO POPRZEDNIEJ WIADOMOŚCI:")
+            lines.append(poprzednia_instr)
+            lines.append("")
+
     # ── Tekst użytkownika ─────────────────────────────────────────────────────
-    lines.append("### WIADOMOŚĆ OD NADAWCY (na jej podstawie generuj WSZYSTKO):")
+    lines.append("### OBECNA WIADOMOŚĆ OD NADAWCY (na jej podstawie generuj WSZYSTKO):")
     lines.append(body)
     lines.append("")
+
+    # ── Hard constraints ──────────────────────────────────────────────────────
+    hard = data.get("hard_constraints", [])
+    if hard:
+        lines.append("### BEZWZGLĘDNE ZAKAZY I WYMOGI (naruszenie = błędna odpowiedź):")
+        for h in hard:
+            lines.append(f"- {h}")
+        lines.append("")
 
     # ── Sokrates ──────────────────────────────────────────────────────────────
     sokrates = (
@@ -179,6 +199,7 @@ def _render_prompt(data: dict, body: str) -> str:
     if zasady_obj:
         lines.append("### TYLER — 8 PUNKTÓW/DOGMATÓW (OBOWIĄZKOWE, KONKRETNE):")
         lines.append(zasady_obj.get("opis", ""))
+        lines.append(f"WYMÓG ZASADA 1=2: {zasady_obj.get('zasada_1_2_identyczne', '')}")
         lines.append(f"FORMAT: {zasady_obj.get('format', '')}")
         lines.append(f"PRZYKŁAD ZŁY:   {zasady_obj.get('przyklad_zly', '')}")
         lines.append(f"PRZYKŁAD DOBRY: {zasady_obj.get('przyklad_dobry', '')}")
@@ -216,14 +237,16 @@ def _render_prompt(data: dict, body: str) -> str:
     # ── Formatowanie adresata ─────────────────────────────────────────────────
     fmt = data.get("formatowanie_adresata", "")
     if fmt:
-        lines.append("### FORMATOWANIE ADRESATA:")
+        lines.append("### FORMATOWANIE ADRESATA (OBOWIĄZKOWE):")
         lines.append(fmt)
         lines.append("")
 
     # ── Końcowe przypomnienie ─────────────────────────────────────────────────
     lines.append("### PRZYPOMNIENIE PRZED GENEROWANIEM:")
     lines.append("Każde zdanie Tylera MUSI nawiązywać do konkretnych słów z wiadomości nadawcy.")
-    lines.append("ZAKAZ ogólnych rad, coachingu, pozytywnego myślenia.")
+    lines.append("ZAKAZ ogólnych rad, coachingu, pozytywnego myślenia, pocieszania.")
+    lines.append("ZASADA 1 I ZASADA 2 MUSZĄ BYĆ IDENTYCZNE SŁOWO W SŁOWO.")
+    lines.append("ADRESAT: ZAKAZ 'Drogi/Droga' — tylko forma wołacza jak w instrukcji.")
     lines.append("Zwróć WYŁĄCZNIE poprawny JSON bez żadnego tekstu poza klamrami.")
     lines.append("")
 
@@ -576,20 +599,21 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
 # GENEROWANIE PROMPTÓW DLA TRYPTYKU (Groq → DeepSeek fallback)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _extract_tyler_sentences(response_text: str) -> dict:
     """
     Wyciąga gotowe zdania z odpowiedzi Tylera do użycia w dymkach tryptyku.
+    Priorytetyzuje najbardziej agresywne zdania — o Bogu, śmierci, dnie.
     Zwraca dict:
-      panel1 — pierwsze zdanie z sekcji zasad (1. / dogmat)
-      panel2 — pierwsze zdanie z sekcji manifestów (CAPS: ...)
+      panel1 — pierwsza zasada (identyczna 1=2)
+      panel2 — manifest DNO/BÓG/ŚMIERTELNOŚĆ (priorytet nihilistyczny)
       panel3 — okrzyk końcowy lub ostatnie zdanie Tylera
-    Fallbacki są po polsku.
     """
     if not response_text:
         return {
             "panel1": "Nie mówi się o tym.",
-            "panel2": "Nie jesteś swoją pracą.",
-            "panel3": "To wszystko? Na śmietnik.",
+            "panel2": "Bóg cię nie lubi. Prawdopodobnie cię nienawidzi.",
+            "panel3": "Puść kierownicę. Pozwól sobie na wypadek.",
         }
 
     # Wytnij sekcję Tylera
@@ -599,7 +623,7 @@ def _extract_tyler_sentences(response_text: str) -> dict:
 
     lines = [l.strip() for l in tyler_section.splitlines() if l.strip()]
 
-    # Panel 1 — pierwsza zasada w stylu Fight Club ("Pierwsza zasada Projektu X: ...")
+    # Panel 1 — pierwsza zasada w stylu Fight Club
     panel1 = None
     ordinal_re = re.compile(
         r'^(pierwsza|druga|trzecia|czwarta|pi[aą]ta|sz[oó]sta|si[oó]dma|[oó]sma)\s+zasada',
@@ -609,7 +633,6 @@ def _extract_tyler_sentences(response_text: str) -> dict:
         if ordinal_re.match(line):
             panel1 = line[:120]
             break
-    # fallback: linia z cyfrą (stary format)
     if not panel1:
         for line in lines:
             if re.match(r'^[1-8][.)]', line):
@@ -618,35 +641,43 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     if not panel1:
         panel1 = "Pierwsza zasada: nie mówi się o tym."
 
-    # Panel 2 — pierwsza linia z CAPS tematem manifestu (np. "KONSUMPCJONIZM:")
+    # Panel 2 — priorytet: DNO, BÓG, ŚMIERTELNOŚĆ, ODPUSZCZENIE (nihilistyczne)
     panel2 = None
-    for line in lines:
-        if re.match(r'^[A-ZŻŹĆĄŚĘÓŁŃ]{4,}[\s:]', line):
-            panel2 = line[:140]
+    nihilist_priority = ["DNO", "BÓG", "ŚMIERTELNOŚĆ", "ODPUSZCZENIE", "AUTENTYCZNOŚĆ", "ILUZJA"]
+    for priority_word in nihilist_priority:
+        for line in lines:
+            if line.upper().startswith(priority_word):
+                panel2 = line[:140]
+                break
+        if panel2:
             break
+    # fallback: pierwsza linia z CAPS tematem manifestu
     if not panel2:
-        # fallback: szukaj linii z myślnikiem (manifest bez CAPS)
+        for line in lines:
+            if re.match(r'^[A-ZŻŹĆĄŚĘÓŁŃ]{4,}[\s:]', line):
+                panel2 = line[:140]
+                break
+    if not panel2:
         for line in lines:
             if line.startswith("- ") and len(line) > 15:
                 panel2 = line[2:][:140]
                 break
     if not panel2:
-        panel2 = "Nie jesteś swoją pracą."
+        panel2 = "Bóg cię nie lubi. Jesteś niechcianym produktem historii."
 
-    # Panel 3 — okrzyk końcowy (szuka "Okrzyk" najpierw, potem ostatnie zdanie)
+    # Panel 3 — okrzyk końcowy lub ostatnie zdanie
     panel3 = None
     for line in lines:
         if "okrzyk" in line.lower():
             panel3 = re.sub(r'^okrzyk[^:]*:\s*', '', line, flags=re.IGNORECASE).strip()[:120]
             break
     if not panel3 and lines:
-        # Ostatnie niepuste zdanie z sekcji Tylera (nie nagłówek, nie podpis)
         for line in reversed(lines):
             if line and not line.startswith("---") and not line.startswith("###") and len(line) > 15:
                 panel3 = line[:120]
                 break
     if not panel3:
-        panel3 = "To wszystko? Na śmietnik."
+        panel3 = "Puść kierownicę. Pozwól sobie na wypadek."
 
     return {"panel1": panel1, "panel2": panel2, "panel3": panel3}
 
@@ -968,8 +999,7 @@ def _build_debug_txt(
         "filename":     f"zwykly_debug_{ts}.txt",
     }
 
-
-def build_zwykly_section(body: str) -> dict:
+def build_zwykly_section(body: str, previous_body: str = None) -> dict:
     """
     Buduje sekcję 'zwykly' odpowiedzi:
 
@@ -987,8 +1017,8 @@ def build_zwykly_section(body: str) -> dict:
       - triptych    (lista max 3 PNG — jeśli tokeny HF dostępne)
     """
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────
-    prompt_data   = _load_prompt_json()
-    prompt_str    = _render_prompt(prompt_data, body)
+    prompt_data = _load_prompt_json()
+    prompt_str  = _render_prompt(prompt_data, body, previous_body)
 
     # System i user dla modelu — cały prompt idzie jako user (jak w oryginale)
     system_msg = prompt_data.get("system", "Odpowiadaj wyłącznie w formacie JSON.")
@@ -1031,7 +1061,7 @@ def build_zwykly_section(body: str) -> dict:
     triptych_images, panel_prompts = _generate_triptych(res_text, prompt_data, body)
 
     current_app.logger.info(
-        "[zwykly] OK provider=%s emotion=%s png=%s pdf=%s triptych=%d paneli",
+        "[zwykly] OK provider=%s emotion=%s png=%s pdf=%s tryptyk=%d paneli",
         provider, emotion_key, bool(png_b64), bool(pdf_b64), len(triptych_images)
     )
 
