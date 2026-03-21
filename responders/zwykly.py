@@ -35,6 +35,14 @@ from core.ai_client    import call_deepseek, extract_clean_text, sanitize_model_
 from core.files        import read_file_base64
 from core.html_builder import build_html_reply
 
+# reportlab — budowanie PDF CV
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.utils import ImageReader
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ŚCIEŻKI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,8 +51,11 @@ EMOTKI_DIR  = os.path.join(BASE_DIR, "emotki")
 PDF_DIR     = os.path.join(BASE_DIR, "pdf")
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 
-PROMPT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_prompt.json")
-STYLE_JS_PATH      = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
+PROMPT_JSON_PATH      = os.path.join(PROMPTS_DIR, "zwykly_prompt.json")
+CV_CONTENT_JSON_PATH  = os.path.join(PROMPTS_DIR, "zwykly_cv_content.json")
+CV_PHOTO_FLUX_PATH    = os.path.join(PROMPTS_DIR, "zwykly_cv_photo_flux.json")
+ICON_FLUX_JSON_PATH   = os.path.join(PROMPTS_DIR, "zwykly_icon_flux.json")
+STYLE_JS_PATH         = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STAŁE API
@@ -1021,34 +1032,501 @@ def _build_debug_txt(
         "filename":     f"zwykly_debug_{ts}.txt",
     }
 
+def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
+    """
+    Generuje emotkę PNG przez FLUX na podstawie treści emaila.
+    Używa Groq do wygenerowania promptu, potem FLUX do obrazka.
+    Zwraca base64 PNG lub None przy błędzie.
+    """
+    try:
+        with open(ICON_FLUX_JSON_PATH, encoding="utf-8") as f:
+            icon_cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[icon-flux] Brak zwykly_icon_flux.json: %s", e)
+        icon_cfg = {}
+
+    style_base   = icon_cfg.get("style_base", "minimalist black ink sketch, Fight Club zine style")
+    neg_prompt   = icon_cfg.get("negative_prompt", "clean, polished, colorful, beautiful, anime")
+    system_groq  = icon_cfg.get("system_for_groq", "Generate a short FLUX image prompt based on this email.")
+    fallbacks    = icon_cfg.get("fallback_prompts", {})
+
+    icon_prompt = None
+    try:
+        groq_key = os.getenv("API_KEY_GROQ", "")
+        if groq_key:
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type":  "application/json",
+            }
+            payload = {
+                "model":    GROQ_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_groq},
+                    {"role": "user",   "content": f"Email:\n{body[:800]}\nEmocja: {emotion_key}"},
+                ],
+                "max_tokens":  150,
+                "temperature": 0.7,
+            }
+            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                icon_prompt = resp.json()["choices"][0]["message"]["content"].strip()
+                current_app.logger.info("[icon-flux] Groq prompt: %.100s", icon_prompt)
+    except Exception as e:
+        current_app.logger.warning("[icon-flux] Groq błąd: %s", e)
+
+    if not icon_prompt:
+        icon_prompt = call_deepseek(
+            system_groq,
+            f"Email:\n{body[:800]}\nEmocja: {emotion_key}",
+            MODEL_TYLER,
+            timeout=20,
+        )
+
+    if not icon_prompt or len(icon_prompt.strip()) < 10:
+        icon_prompt = fallbacks.get(emotion_key, fallbacks.get("zlosc", style_base))
+        current_app.logger.warning("[icon-flux] Używam fallback promptu dla emocji: %s", emotion_key)
+
+    full_prompt = f"{icon_prompt.strip()}, {style_base}"
+    current_app.logger.info("[icon-flux] Pełny prompt: %.150s", full_prompt)
+
+    img = _generate_flux_image(full_prompt, panel_index=99)
+    if img and img.get("base64"):
+        try:
+            from PIL import Image as PILImage
+            raw = base64.b64decode(img["base64"])
+            pil = PILImage.open(io.BytesIO(raw)).convert("RGB")
+            pil = pil.resize((256, 256), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            pil.save(buf, format="PNG", optimize=True)
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception as e:
+            current_app.logger.warning("[icon-flux] Błąd resize: %s — zwracam oryginał", e)
+            return img["base64"]
+    return None
+
+
+def _generate_cv_content(body: str, previous_body: str | None, sender_email: str) -> dict | None:
+    """
+    Generuje treść CV w stylu Tylera przez AI (Groq → DeepSeek fallback).
+    Zwraca dict z polami CV lub None przy błędzie.
+    """
+    try:
+        with open(CV_CONTENT_JSON_PATH, encoding="utf-8") as f:
+            cv_cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[cv] Brak zwykly_cv_content.json: %s", e)
+        cv_cfg = {}
+
+    system_msg = cv_cfg.get("system", "Generuj prześmiewcze CV w stylu Tylera Durdena. Zwróć TYLKO JSON.")
+    schema     = cv_cfg.get("output_schema", {})
+    instrukcje = cv_cfg.get("instrukcje_dodatkowe", [])
+
+    context_parts = [f"EMAIL:\n{body[:1500]}"]
+    if previous_body and previous_body.strip():
+        context_parts.append(f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:500]}")
+    if sender_email:
+        context_parts.append(f"\nEMAIL NADAWCY: {sender_email}")
+    context_parts.append(f"\nSCHEMAT JSON DO WYPEŁNIENIA:\n{json.dumps(schema, ensure_ascii=False, indent=2)}")
+    if instrukcje:
+        context_parts.append(f"\nINSTRUKCJE:\n" + "\n".join(f"- {i}" for i in instrukcje))
+    context_parts.append("\nZwróć TYLKO czysty JSON bez żadnego tekstu poza klamrami.")
+
+    user_msg = "\n".join(context_parts)
+
+    raw, _ = _call_ai_with_fallback(system_msg, user_msg, max_tokens=2000)
+
+    if not raw:
+        current_app.logger.warning("[cv] Brak odpowiedzi od AI")
+        return None
+
+    try:
+        clean = raw.strip()
+        clean = re.sub(r'^```[a-z]*', '', clean, flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        cv_data = json.loads(clean.strip())
+        current_app.logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
+        return cv_data
+    except json.JSONDecodeError as e:
+        current_app.logger.warning("[cv] Błąd JSON: %s | raw: %.200s", e, raw)
+        return None
+
+
+def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
+    """
+    Generuje zdjęcie profilowe do CV przez FLUX.
+    Używa Groq do promptu, FLUX do obrazka.
+    Zwraca base64 PNG lub None.
+    """
+    try:
+        with open(CV_PHOTO_FLUX_PATH, encoding="utf-8") as f:
+            photo_cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[cv-photo] Brak zwykly_cv_photo_flux.json: %s", e)
+        photo_cfg = {}
+
+    system_groq = photo_cfg.get("system_for_groq", "Generate a FLUX portrait prompt for a CV photo.")
+    style_base  = photo_cfg.get("style_base", "professional CV headshot portrait, sharp focus")
+    neg_prompt  = photo_cfg.get("negative_prompt", "cartoon, anime, blur, dark")
+
+    imie     = cv_data.get("imie_nazwisko", "unknown person") if cv_data else "unknown person"
+    tytul    = cv_data.get("tytul_zawodowy", "") if cv_data else ""
+    user_msg = (
+        f"Person: {imie}\n"
+        f"Job title: {tytul}\n"
+        f"Email content (for context on objects to include):\n{body[:600]}"
+    )
+
+    photo_prompt = None
+    try:
+        groq_key = os.getenv("API_KEY_GROQ", "")
+        if groq_key:
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type":  "application/json",
+            }
+            payload = {
+                "model":    GROQ_MODEL,
+                "messages": [
+                    {"role": "system", "content": system_groq},
+                    {"role": "user",   "content": user_msg},
+                ],
+                "max_tokens":  120,
+                "temperature": 0.7,
+            }
+            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                photo_prompt = resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        current_app.logger.warning("[cv-photo] Groq błąd: %s", e)
+
+    if not photo_prompt:
+        photo_prompt = call_deepseek(system_groq, user_msg, MODEL_TYLER, timeout=20)
+
+    if not photo_prompt:
+        photo_prompt = f"Professional CV headshot portrait, {style_base}"
+
+    full_prompt = f"{photo_prompt.strip()}, {style_base}"
+    current_app.logger.info("[cv-photo] Prompt: %.150s", full_prompt)
+
+    img = _generate_flux_image(full_prompt, panel_index=98)
+    if img and img.get("base64"):
+        try:
+            from PIL import Image as PILImage
+            raw = base64.b64decode(img["base64"])
+            pil = PILImage.open(io.BytesIO(raw)).convert("RGB")
+            w, h = pil.size
+            side = min(w, h)
+            left = (w - side) // 2
+            top  = (h - side) // 2
+            pil  = pil.crop((left, top, left + side, top + side))
+            pil  = pil.resize((300, 300), PILImage.LANCZOS)
+            buf  = io.BytesIO()
+            pil.save(buf, format="PNG")
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception as e:
+            current_app.logger.warning("[cv-photo] Błąd resize: %s", e)
+            return img["base64"]
+    return None
+
+
+def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
+    """
+    Buduje PDF CV z reportlab z polskimi znakami (UTF-8).
+    Zdjęcie w prawym górnym rogu.
+    Zwraca base64 PDF lub None przy błędzie.
+    """
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.lib.utils import ImageReader
+    except ImportError as e:
+        current_app.logger.error("[cv-pdf] Brak reportlab: %s", e)
+        return None
+
+    FONT_DIR = os.path.join(BASE_DIR, "fonts")
+    FN = "Helvetica"
+    FB = "Helvetica-Bold"
+    try:
+        np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+        bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+        if os.path.exists(np_):
+            pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+            FN = "DejaVuSans"
+        if os.path.exists(bp_):
+            pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+            FB = "DejaVuSans-Bold"
+    except Exception as e:
+        current_app.logger.warning("[cv-pdf] Czcionki: %s — używam Helvetica", e)
+
+    buf = io.BytesIO()
+    W, H = A4
+    c = rl_canvas.Canvas(buf, pagesize=A4)
+
+    BLACK  = (0.05, 0.05, 0.05)
+    DARK   = (0.15, 0.15, 0.15)
+    GRAY   = (0.45, 0.45, 0.45)
+    LGRAY  = (0.85, 0.85, 0.85)
+    RED    = (0.7,  0.1,  0.1)
+    WHITE  = (1.0,  1.0,  1.0)
+
+    def set_color(rgb):
+        c.setFillColorRGB(*rgb)
+
+    def draw_text(txt, x, y, font=FN, size=10, color=BLACK, max_width=None):
+        set_color(color)
+        c.setFont(font, size)
+        if max_width:
+            words = str(txt).split()
+            line  = ""
+            lines = []
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_width:
+                    line = test
+                else:
+                    if line:
+                        lines.append(line)
+                    line = w
+            if line:
+                lines.append(line)
+            for i, ln in enumerate(lines):
+                c.drawString(x, y - i * (size + 2), ln)
+            return len(lines) * (size + 2)
+        else:
+            c.drawString(x, y, str(txt))
+            return size + 2
+
+    c.setFillColorRGB(*BLACK)
+    c.rect(0, H - 45*mm, W, 45*mm, fill=1, stroke=0)
+
+    imie = cv_data.get("imie_nazwisko", "Anonim Bezdomny")
+    set_color(WHITE)
+    c.setFont(FB, 22)
+    c.drawString(15*mm, H - 20*mm, imie)
+
+    tytul = cv_data.get("tytul_zawodowy", "")
+    set_color((0.8, 0.8, 0.8))
+    c.setFont(FN, 11)
+    c.drawString(15*mm, H - 30*mm, tytul)
+
+    email_str = cv_data.get("email", "")
+    tel_str   = cv_data.get("telefon", "")
+    miasto    = cv_data.get("miasto", "")
+    kontakt   = " | ".join(filter(None, [email_str, tel_str, miasto]))
+    set_color((0.65, 0.65, 0.65))
+    c.setFont(FN, 9)
+    c.drawString(15*mm, H - 39*mm, kontakt)
+
+    if photo_b64:
+        try:
+            photo_bytes = base64.b64decode(photo_b64)
+            photo_reader = ImageReader(io.BytesIO(photo_bytes))
+            photo_size = 38*mm
+            c.drawImage(
+                photo_reader,
+                W - photo_size - 10*mm,
+                H - photo_size - 3.5*mm,
+                width=photo_size,
+                height=photo_size,
+                preserveAspectRatio=True,
+                mask="auto",
+            )
+        except Exception as e:
+            current_app.logger.warning("[cv-pdf] Błąd wklejania zdjęcia: %s", e)
+
+    c.setStrokeColorRGB(*RED)
+    c.setLineWidth(2)
+    c.line(15*mm, H - 48*mm, W - 15*mm, H - 48*mm)
+
+    y = H - 58*mm
+    left_margin  = 15*mm
+    right_margin = W - 15*mm
+    col_width    = right_margin - left_margin
+
+    def section_header(title, ypos):
+        c.setFont(FB, 11)
+        c.setFillColorRGB(*RED)
+        c.drawString(left_margin, ypos, title.upper())
+        c.setStrokeColorRGB(*RED)
+        c.setLineWidth(0.5)
+        c.line(left_margin, ypos - 2, right_margin, ypos - 2)
+        return ypos - 8*mm
+
+    def check_page_break(ypos, needed=20*mm):
+        if ypos < needed:
+            c.showPage()
+            return H - 20*mm
+        return ypos
+
+    podsumowanie = cv_data.get("podsumowanie", "")
+    if podsumowanie:
+        y = section_header("Podsumowanie zawodowe", y)
+        c.setFont(FN, 10)
+        c.setFillColorRGB(*DARK)
+        words = podsumowanie.split()
+        line  = ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(test, FN, 10) <= col_width:
+                line = test
+            else:
+                c.drawString(left_margin, y, line)
+                y -= 5*mm
+                line = w
+                y = check_page_break(y)
+        if line:
+            c.drawString(left_margin, y, line)
+            y -= 5*mm
+        y -= 3*mm
+
+    doswiadczenie = cv_data.get("doswiadczenie", [])
+    if doswiadczenie:
+        y = check_page_break(y, 40*mm)
+        y = section_header("Doświadczenie zawodowe", y)
+        for job in doswiadczenie:
+            y = check_page_break(y, 30*mm)
+            firma      = job.get("firma", "")
+            stanowisko = job.get("stanowisko", "")
+            okres      = job.get("okres", "")
+            obowiazki  = job.get("obowiazki", [])
+
+            c.setFont(FB, 10)
+            c.setFillColorRGB(*BLACK)
+            c.drawString(left_margin, y, firma)
+            c.setFont(FN, 10)
+            c.setFillColorRGB(*GRAY)
+            c.drawRightString(right_margin, y, okres)
+            y -= 5*mm
+
+            c.setFont(FN, 10)
+            c.setFillColorRGB(*DARK)
+            c.drawString(left_margin + 2*mm, y, stanowisko)
+            y -= 5*mm
+
+            c.setFont(FN, 9)
+            c.setFillColorRGB(*DARK)
+            for ob in obowiazki:
+                y = check_page_break(y)
+                c.drawString(left_margin + 4*mm, y, f"• {ob}")
+                y -= 4.5*mm
+            y -= 3*mm
+
+    wyksztalcenie = cv_data.get("wyksztalcenie", [])
+    if wyksztalcenie:
+        y = check_page_break(y, 25*mm)
+        y = section_header("Wykształcenie", y)
+        for edu in wyksztalcenie:
+            uczelnia = edu.get("uczelnia", "")
+            kierunek = edu.get("kierunek", "")
+            rok      = edu.get("rok", "")
+            c.setFont(FB, 10)
+            c.setFillColorRGB(*BLACK)
+            c.drawString(left_margin, y, uczelnia)
+            c.setFont(FN, 9)
+            c.setFillColorRGB(*GRAY)
+            c.drawRightString(right_margin, y, str(rok))
+            y -= 5*mm
+            c.setFont(FN, 10)
+            c.setFillColorRGB(*DARK)
+            c.drawString(left_margin + 2*mm, y, kierunek)
+            y -= 7*mm
+
+    umiejetnosci = cv_data.get("umiejetnosci", [])
+    if umiejetnosci:
+        y = check_page_break(y, 20*mm)
+        y = section_header("Umiejętności", y)
+        half = len(umiejetnosci) // 2 + len(umiejetnosci) % 2
+        col1 = umiejetnosci[:half]
+        col2 = umiejetnosci[half:]
+        col_w2 = col_width / 2
+        y_start = y
+        c.setFont(FN, 9)
+        c.setFillColorRGB(*DARK)
+        for i, um in enumerate(col1):
+            c.drawString(left_margin, y_start - i * 5*mm, f"• {um}")
+        for i, um in enumerate(col2):
+            c.drawString(left_margin + col_w2, y_start - i * 5*mm, f"• {um}")
+        y = y_start - max(len(col1), len(col2)) * 5*mm - 3*mm
+
+    jezyki = cv_data.get("jezyki", [])
+    if jezyki:
+        y = check_page_break(y, 15*mm)
+        y = section_header("Języki", y)
+        c.setFont(FN, 9)
+        c.setFillColorRGB(*DARK)
+        for j in jezyki:
+            c.drawString(left_margin, y, f"• {j}")
+            y -= 4.5*mm
+        y -= 3*mm
+
+    zainteresowania = cv_data.get("zainteresowania", [])
+    if zainteresowania:
+        y = check_page_break(y, 15*mm)
+        y = section_header("Zainteresowania", y)
+        c.setFont(FN, 9)
+        c.setFillColorRGB(*DARK)
+        line_z = " | ".join(zainteresowania)
+        c.drawString(left_margin, y, line_z)
+        y -= 8*mm
+
+    cytat = cv_data.get("cytat_tylera", "")
+    if cytat:
+        y = check_page_break(y, 20*mm)
+        c.setStrokeColorRGB(*LGRAY)
+        c.setLineWidth(0.5)
+        c.line(left_margin, y + 3*mm, right_margin, y + 3*mm)
+        y -= 3*mm
+        c.setFont(FN, 8)
+        c.setFillColorRGB(*RED)
+        words = cytat.split()
+        line  = ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(test, FN, 8) <= col_width:
+                line = test
+            else:
+                c.drawString(left_margin, y, f"— {line}")
+                y -= 4*mm
+                line = w
+        if line:
+            c.drawString(left_margin, y, f"— {line}")
+
+    c.save()
+    pdf_bytes = buf.getvalue()
+    current_app.logger.info("[cv-pdf] PDF wygenerowany: %d B", len(pdf_bytes))
+    return base64.b64encode(pdf_bytes).decode("ascii")
+
+
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "") -> dict:
     """
     Buduje sekcję 'zwykly' odpowiedzi:
 
-    1. Wczytuje prompt.json i renderuje prompt programowo
+    1. Wczytuje zwykly_prompt.json i renderuje prompt programowo
     2. Groq PIERWSZY → DeepSeek FALLBACK — generuje odpowiedź Tyler+Sokrates
     3. Parsuje JSON z odpowiedzi: tekst + emocja
-    4. Dobiera emotkę PNG i PDF do emocji
-    5. Generuje tryptyk PNG (3 panele FLUX Fight Club) — opcjonalnie
-    6. Zwraca dict ze wszystkimi elementami
+    4. Generuje emotkę PNG przez FLUX (zastępuje pliki z dysku)
+    5. Generuje CV PDF z zdjęciem FLUX
+    6. Generuje tryptyk PNG (3 panele FLUX Fight Club)
+    7. Zwraca dict ze wszystkimi elementami
 
     Nadawca dostaje:
-      - reply_html  (pastelowy HTML z odpowiedzią)
-      - emoticon    (PNG emocji inline)
-      - pdf         (PDF emocji jako załącznik)
-      - triptych    (lista max 3 PNG — jeśli tokeny HF dostępne)
+      - reply_html  (HTML z odpowiedzią)
+      - emoticon    (PNG emotki generowanej przez FLUX — inline)
+      - cv_pdf      (PDF CV w stylu Tylera — załącznik)
+      - triptych    (lista max 3 JPG — jeśli tokeny HF dostępne)
     """
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────
     prompt_data = _load_prompt_json()
     prompt_str  = _render_prompt(prompt_data, body, previous_body)
 
-    # System i user dla modelu — cały prompt idzie jako user (jak w oryginale)
     system_msg = prompt_data.get("system", "Odpowiadaj wyłącznie w formacie JSON.")
     user_msg   = prompt_str
 
     # ── 2. Wywołaj model (Groq → DeepSeek) ───────────────────────────────────
     res_raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=6000)
-
     current_app.logger.info("[zwykly] Provider użyty: %s", provider)
 
     # ── 3. Parsuj odpowiedź ───────────────────────────────────────────────────
@@ -1068,13 +1546,22 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     if not res_text:
         res_text = (
             "### SOKRATES\n\nPrzepraszam, tym razem słowa do mnie nie przyszły.\n\n"
-            "--- Sokrates\n\n---\n\n### TYLER DURDEN\n\n"
+            "— Sokrates\n\n---\n\n### TYLER DURDEN\n\n"
             "System zawiódł. Ale to i tak lepiej — maszyny nie powinny za nas myśleć.\n\n"
-            "--- Tyler Durden"
+            "— Tyler Durden"
         )
 
-    # ── 4. Emotka + PDF ───────────────────────────────────────────────────────
-    png_b64, pdf_b64 = _get_emoticon_and_pdf(emotion_key)
+    # ── 4. Emotka FLUX (zastępuje pliki z dysku) ──────────────────────────────
+    pdf_b64 = read_file_base64(os.path.join(PDF_DIR, f"{emotion_key}.pdf"))
+    if not pdf_b64:
+        pdf_b64 = read_file_base64(os.path.join(PDF_DIR, f"{FALLBACK_EMOT}.pdf"))
+
+    png_b64 = _generate_icon_flux(body, emotion_key)
+    if not png_b64:
+        current_app.logger.warning("[zwykly] FLUX emotka zawiodła — fallback na plik")
+        png_b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
+        if not png_b64:
+            png_b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{FALLBACK_EMOT}.png"))
 
     # ── 5. Buduj HTML reply ───────────────────────────────────────────────────
     reply_html = build_html_reply(res_text)
@@ -1082,12 +1569,45 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     # ── 6. Tryptyk FLUX ───────────────────────────────────────────────────────
     triptych_images, panel_prompts = _generate_triptych(res_text, prompt_data, body)
 
+    # ── 7. Generuj CV (treść + zdjęcie + PDF) ─────────────────────────────────
+    cv_pdf_b64   = None
+    cv_data      = None
+    cv_photo_b64 = None
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        from flask import current_app as flask_app
+        app_obj = flask_app._get_current_object()
+
+        def gen_cv_content():
+            with app_obj.app_context():
+                return _generate_cv_content(body, previous_body, sender_email)
+
+        def gen_cv_photo(cv_d):
+            with app_obj.app_context():
+                return _generate_cv_photo(body, cv_d)
+
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            f = ex.submit(gen_cv_content)
+            cv_data = f.result(timeout=45)
+
+        if cv_data:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                f = ex.submit(gen_cv_photo, cv_data)
+                cv_photo_b64 = f.result(timeout=55)
+
+        if cv_data:
+            cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo_b64)
+
+    except Exception as e:
+        current_app.logger.error("[zwykly] Błąd generowania CV: %s", e)
+
     current_app.logger.info(
-        "[zwykly] OK provider=%s emotion=%s png=%s pdf=%s tryptyk=%d paneli",
-        provider, emotion_key, bool(png_b64), bool(pdf_b64), len(triptych_images)
+        "[zwykly] OK provider=%s emotion=%s png=%s cv_pdf=%s tryptyk=%d paneli",
+        provider, emotion_key, bool(png_b64), bool(cv_pdf_b64), len(triptych_images)
     )
 
-    # ── 7. Debug TXT do Google Drive ─────────────────────────────────────────
+    # ── 8. Debug TXT do Google Drive ─────────────────────────────────────────
     debug_txt = _build_debug_txt(
         body=body,
         provider=provider,
@@ -1098,17 +1618,25 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         panel_prompts=panel_prompts,
     )
 
-    # ── 8. Zwróć wszystko ─────────────────────────────────────────────────────
+    # ── 9. Zwróć wszystko ─────────────────────────────────────────────────────
+    imie_nazwisko = (cv_data.get("imie_nazwisko", "CV") if cv_data else "CV")
+    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', imie_nazwisko)[:30]
+
     return {
         "reply_html": reply_html,
         "emoticon": {
             "base64":       png_b64,
             "content_type": "image/png",
-            "filename":     f"{emotion_key}.png",
+            "filename":     f"emotka_{emotion_key}.png",
         },
         "pdf": {
             "base64":   pdf_b64,
             "filename": f"{emotion_key}.pdf",
+        },
+        "cv_pdf": {
+            "base64":       cv_pdf_b64,
+            "content_type": "application/pdf",
+            "filename":     f"CV_{safe_name}_Tyler.pdf",
         },
         "detected_emotion":   emotion_key,
         "provider":           provider,
