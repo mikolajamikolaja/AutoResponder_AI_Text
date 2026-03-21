@@ -572,7 +572,7 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
         W, H = img.size
 
         # Pasek na dole — 18% wysokości, min 80px
-        bar_h = max(80, int(H * 0.18))
+        bar_h = max(80, int(H * 0.28))
         new_img = Image.new("RGB", (W, H + bar_h), (10, 10, 10))
         new_img.paste(img, (0, 0))
 
