@@ -43,7 +43,7 @@ EMOTKI_DIR  = os.path.join(BASE_DIR, "emotki")
 PDF_DIR     = os.path.join(BASE_DIR, "pdf")
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 
-PROMPT_JSON_PATH   = os.path.join(PROMPTS_DIR, "prompt.json")
+PROMPT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_prompt.json")
 STYLE_JS_PATH      = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
 
 # ─────────────────────────────────────────────────────────────────────────────
