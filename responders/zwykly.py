@@ -479,7 +479,7 @@ def _detect_sender_name(body: str) -> str | None:
 
 def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
     """
-    Rozszerza obrazek o 15% na dole i dopisuje tekst Pillow.
+    Rozszerza obrazek o 18% na dole i dopisuje tekst Pillow.
     Zwraca nowy dict z zaktualizowanym base64/filename.
     """
     try:
@@ -489,16 +489,14 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
         img = Image.open(io.BytesIO(raw)).convert("RGB")
         W, H = img.size
 
-        # Pasek na dole — 15% wysokości, min 60px
-        bar_h = max(60, int(H * 0.15))
+        # Pasek na dole — 18% wysokości, min 80px
+        bar_h = max(80, int(H * 0.18))
         new_img = Image.new("RGB", (W, H + bar_h), (10, 10, 10))
         new_img.paste(img, (0, 0))
 
         draw = ImageDraw.Draw(new_img)
 
-        # Font — próbuj systemowy, fallback na default
-        # Rozmiar: zaczynamy od bar_h//4, potem zmniejszamy aż tekst się zmieści
-        PADDING = 16  # marginesy lewy+prawy
+        PADDING = 24
         max_w = W - PADDING * 2
 
         def load_font(size):
@@ -513,7 +511,6 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
                     continue
             return ImageFont.load_default()
 
-        # Zawijanie tekstu z uwzględnieniem rzeczywistej szerokości pikseli
         def wrap_text(txt, fnt, max_px):
             words = txt.split()
             lines_out = []
@@ -531,18 +528,18 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
                 lines_out.append(current)
             return lines_out
 
-        # Dobierz font_size tak żeby tekst zmieścił się w max 3 liniach w pasku
-        font_size = max(14, bar_h // 4)
-        for attempt in range(8):
+        # Dobierz font_size tak żeby tekst zmieścił się w max 4 liniach w pasku
+        font_size = max(10, bar_h // 4)
+        for attempt in range(14):
             font = load_font(font_size)
             lines_out = wrap_text(text, font, max_w)
             line_h = font_size + 6
             total_h = len(lines_out) * line_h
-            if total_h <= bar_h - 8 and len(lines_out) <= 3:
+            if total_h <= bar_h - 8 and len(lines_out) <= 4:
                 break
-            font_size = max(12, font_size - 3)
+            font_size = max(10, font_size - 2)
 
-        lines_out = lines_out[:3]
+        lines_out = lines_out[:4]
 
         # Rysuj tekst — wyśrodkowany w pasku
         line_h = font_size + 6
@@ -574,7 +571,6 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
     except Exception as e:
         current_app.logger.warning("[tyler-txt] Błąd dopisywania tekstu: %s", e)
         return image_obj
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GENEROWANIE PROMPTÓW DLA TRYPTYKU (Groq → DeepSeek fallback)
