@@ -1,15 +1,22 @@
 {
-  "description": "Prompt konfiguracyjny dla FLUX do generowania emotki Tylera na podstawie emaila.",
-  "system_for_groq": "Jesteś generatorem promptów do modelu FLUX. Na podstawie treści emaila wygenerujesz krótki (max 120 słów) angielski prompt obrazkowy. Prompt musi: 1) Pokazywać uproszczoną, komiksową postać reagującą na treść emaila, 2) Styl: brudny, nihilistyczny, czarno-biały szkic z odrobiną czerwieni lub żółci, 3) Postać wyraża emocję Tylera Durdena wobec treści emaila (pogarda, rozbawienie, nihilizm), 4) W kadrze mogą być konkretne obiekty z emaila (kot, truskawki, laptop itp.), 5) ZAKAZ pięknych, czystych, kolorowych obrazków. Zwróć TYLKO prompt w języku angielskim, bez żadnych wyjaśnień.",
-  "style_base": "minimalist black ink sketch on aged paper, Fight Club aesthetic, rough hatching lines, small vignette panel, underground zine art style, single character expressing nihilist emotion, raw imperfect lines, no color except red blood or yellow cigarette, gritty texture",
-  "negative_prompt": "clean, polished, colorful, beautiful, anime, cartoon, digital art, 3d render, watermark, text overlay, speech bubble",
+  "description": "Prompt konfiguracyjny dla FLUX do generowania emotki Tylera — musi reagować na KONKRETNĄ treść emaila, nie być generycznym szkicem.",
+
+  "system_for_groq": "Jesteś generatorem promptów FLUX do emotek w stylu Fight Club / Tyler Durden. Na podstawie TREŚCI EMAILA wygenerujesz krótki angielski prompt (max 120 słów) dla małego czarno-białego szkicu reagującego na tę konkretną wiadomość.\n\nZASADY OBOWIĄZKOWE:\n1. Przeczytaj email — zidentyfikuj JEDEN główny obiekt lub sytuację (np. biurko z excelem, kredyt na samochód, pies w kopalni, truskawki na polu).\n2. Postać na obrazku (Tyler lub sylwetka) musi WCHODZIĆ W INTERAKCJĘ z tym konkretnym obiektem z emaila — nie stać obok niego ale go palić, deptać, trzymać, wskazywać z pogardą.\n3. Styl: brudny czarno-biały szkic zin/komiks, minimum kolorów (tylko czerwień krwi lub żółć papierosa).\n4. Emocja postaci pasuje do parametru emocja: zlosc=zaciśnięta pięść z pogardą, smutek=skulona postać, radosc=maniakalny uśmiech, lek=wielkie oczy, nuda=ziewająca postać, spokoj=postać pośród ruin spokojna.\n5. Format: mały kadr jak panel komiksu lub naklejka zin.\n6. Zwróć TYLKO prompt angielski — bez wyjaśnień.",
+
+  "style_base": "minimalist black ink sketch on aged yellowed paper, Fight Club underground zine aesthetic, rough aggressive hatching lines, small comic panel format, single figure or silhouette interacting with one specific object from email context, raw imperfect lines, gritty texture, underground punk art, no digital smoothing",
+
+  "negative_prompt": "clean, polished, colorful, beautiful, anime, cartoon, digital art, 3d render, watermark, text overlay, speech bubble, multiple colors, gradients",
+
   "size": "512x512",
+
+  "instrukcja_dla_modelu": "Kluczowy krok: PRZED napisaniem promptu — wypisz sobie jeden konkretny obiekt z emaila który będzie w kadrze. Zły prompt: 'figure with clenched fist, cigarette smoke'. Dobry prompt: 'silhouette of figure in suit sitting at desk drowning in Excel spreadsheets, papers falling around him, clenched fist on keyboard, cigarette burning on monitor edge, minimalist black ink sketch, Fight Club zine style'.",
+
   "fallback_prompts": {
-    "zlosc": "minimalist black ink sketch, Fight Club zine style, small angry figure with clenched fist, cigarette smoke, crumpled paper background, raw hatching lines, underground art",
-    "smutek": "minimalist black ink sketch, Fight Club zine style, slouched figure staring at floor, empty bottle, single bare bulb, raw hatching lines, underground art",
-    "radosc": "minimalist black ink sketch, Fight Club zine style, figure with manic grin, slightly unhinged happiness, chaos in background, raw hatching lines, underground art",
-    "lek": "minimalist black ink sketch, Fight Club zine style, hunched figure with wide eyes, dark shadows closing in, raw hatching lines, underground art",
-    "nuda": "minimalist black ink sketch, Fight Club zine style, figure slumped in chair staring at nothing, cigarette burning to ash, raw hatching lines, underground art",
-    "spokoj": "minimalist black ink sketch, Fight Club zine style, figure standing in ruins looking calm, everything destroyed around them, raw hatching lines, underground art"
+    "zlosc": "minimalist black ink sketch Fight Club zine style, angry silhouette destroying office desk with bare fist, papers flying, monitor smashed, coffee mug shattered, raw hatching lines, underground punk art, no color except red on knuckles",
+    "smutek": "minimalist black ink sketch Fight Club zine style, slouched figure at empty desk staring at blank screen, single bare light bulb overhead, crumpled papers on floor, cigarette burned to ash in ashtray, raw hatching lines, underground punk art",
+    "radosc": "minimalist black ink sketch Fight Club zine style, figure with manic wide grin standing in burning office, arms raised, flames around filing cabinets, slightly unhinged liberation, raw hatching lines, underground punk art",
+    "lek": "minimalist black ink sketch Fight Club zine style, hunched figure surrounded by closing walls of filing cabinets and spreadsheets, wide eyes, raw hatching lines, underground punk art, darkness closing in from edges",
+    "nuda": "minimalist black ink sketch Fight Club zine style, figure slumped in office chair mid-meeting, eyes glazed, presenter in background reduced to featureless blob, cigarette burning to long ash, raw hatching lines, underground punk art",
+    "spokoj": "minimalist black ink sketch Fight Club zine style, figure standing calmly in completely destroyed office, debris everywhere, small smile, one intact coffee mug in hand, everything else in ruins, raw hatching lines, underground punk art"
   }
 }
