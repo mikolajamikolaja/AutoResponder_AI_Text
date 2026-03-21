@@ -1021,7 +1021,7 @@ def _build_debug_txt(
         "filename":     f"zwykly_debug_{ts}.txt",
     }
 
-def build_zwykly_section(body: str, previous_body: str = None) -> dict:
+def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "") -> dict:
     """
     Buduje sekcję 'zwykly' odpowiedzi:
 
