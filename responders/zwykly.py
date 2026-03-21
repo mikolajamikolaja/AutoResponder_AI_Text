@@ -461,21 +461,13 @@ FIGHT_CLUB_CHARACTERS = [
     "Meat Loaf as Bob — a mountain of a man in a state of emotional collapse. Wearing a massive, sweat-drenched, grey XXXL sweatshirt. Tear-streaked face, puffy eyes, and the visible shape of gynecomastia. He looks like a tragic, broken giant. Surroundings: a dark, damp basement with cracked concrete and single bare lightbulb casting long, dramatic shadows."
 ]
 
-FIGHT_CLUB_CHARACTERS = [
-    # Tyler Durden - Esencja chaosu i zniszczenia
-    "Brad Pitt as Tyler Durden POST-CAR CRASH — raw damage, blood smeared on forehead, glazed thousand-yard stare, unwashed, bruised face, split lip, dried blood under nose, greasy matted hair stuck to forehead, shirtless with prominent soap-burn scars and chemical burns on forearms, cigarette ash on fingers, dark circles under bloodshot eyes, holding a burning book in a dimly lit space, looks like a feral survivor of a wreck.",
-
-    # Edward Norton as the Narrator - Symbol totalnego rozkładu
-    "Edward Norton as the Narrator — black eye, torn and dirty business suit, hollow exhausted gaze, pale sickly skin, hasn't slept in days, blood-stained shirt collar, hands trembling with desperation, sitting at the bottom of a dark rocky pit, staring up at a bleak grey sky[cite: 22, 23].",
-
-    # Helena Bonham Carter as Marla Singer - Zniszczona panna młoda
-    "Helena Bonham Carter as Marla Singer — wearing a shredded, soot-stained vintage wedding dress covered in ash, dark smoky 'raccoon' eyes, cigarette burning down to her fingers, nihilistic smirk, blood on teeth, unwashed hair matted to her face, screaming at the camera with veins bulging on her neck.",
-
-    # Angel Face - Zmasakrowane piękno
-    "Jared Leto as Angel Face — once-beautiful face now destroyed into a pulp, blood on perfect teeth, swollen shut eye, angelic features beaten into ruin, platinum blonde hair soaked in crimson, extreme close-up under harsh fluorescent light.",
-
-    # Meat Loaf as Bob - Tragiczna masa
-    "Meat Loaf as Bob — enormous man with gynecomastia, tearful and desperate hollow eyes, oversized stained sweater, sitting on a dirty floor surrounded by industrial wreckage, personifying pure hopelessness."
+PANEL_STYLES = [
+    "35mm film grain, high contrast, sickly green and amber tones, Fincher cinematography",
+    "raw gritty street photography, harsh fluorescent light, 1990s documentary style",
+    "extreme chiaroscuro, single bare bulb lighting, deep shadows, industrial decay",
+    "handheld camera blur, motion, chaotic energy, smoke and sweat",
+    "desaturated noir, cold blue shadows, cracked concrete textures",
+    "overexposed bleach bypass, washed out whites, dark crushed blacks",
 ]
 
 PANEL_ACTIONS = [
