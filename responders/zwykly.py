@@ -1095,7 +1095,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
             from PIL import Image as PILImage
             raw = base64.b64decode(img["base64"])
             pil = PILImage.open(io.BytesIO(raw)).convert("RGB")
-            pil = pil.resize((256, 256), PILImage.LANCZOS)
+            pil = pil.resize((512, 512), PILImage.LANCZOS)
             buf = io.BytesIO()
             pil.save(buf, format="PNG", optimize=True)
             return base64.b64encode(buf.getvalue()).decode("ascii")
