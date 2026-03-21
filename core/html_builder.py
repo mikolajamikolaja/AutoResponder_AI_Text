@@ -22,7 +22,7 @@ def build_html_reply(body_text: str) -> str:
             margin: 0;
             padding: 20px;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #FFE4E1 0%, #E0F4FF 25%, #E8F5E9 50%, #FFF9C4 75%, #FCE4EC 100%);
+            background: #ffffff;
             min-height: 100vh;
         }}
         .container {{
@@ -48,11 +48,11 @@ def build_html_reply(body_text: str) -> str:
         }}
         .content p {{
             margin: 15px 0;
-            color: #444;
+            color: #000000;
         }}
         .content i {{
-            color: #7B68EE;
-            font-style: italic;
+            color: #000000;
+            font-style: normal;
         }}
         .footer {{
             margin-top: 30px;
@@ -88,7 +88,7 @@ def build_html_reply(body_text: str) -> str:
         </div>
         
         <div class="content">
-            <p><i>{body_text}</i></p>
+            <p>{body_text}</p>
         </div>
         
         <div class="footer">
