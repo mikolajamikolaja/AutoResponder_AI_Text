@@ -825,7 +825,7 @@ def _generate_panel_prompt(
 
 def _get_hf_tokens() -> list:
     """Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKENXx)."""
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(23)]
+    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(24)]
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
@@ -1223,6 +1223,8 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
         clean = re.sub(r'^```[a-z]*', '', clean, flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
         cv_data = json.loads(clean.strip())
+        if not isinstance(cv_data, dict):
+            raise ValueError(f"[cv] Oczekiwano dict, dostałem {type(cv_data).__name__}")
         current_app.logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
         return cv_data
     except json.JSONDecodeError as e:
@@ -1988,6 +1990,8 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
         data = json.loads(clean.strip())
+        if not isinstance(data, dict):
+            raise ValueError(f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}")
     except Exception as e:
         current_app.logger.warning("[horoskop] Błąd JSON: %s", e)
         return None
@@ -2171,6 +2175,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
         data = json.loads(clean.strip())
+        if not isinstance(data, dict):
+            raise ValueError(f"[karta-rpg] Oczekiwano dict, dostałem {type(data).__name__}")
     except Exception as e:
         current_app.logger.warning("[karta-rpg] Błąd JSON: %s", e)
         return None
@@ -2377,6 +2383,8 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
         data = json.loads(clean.strip())
+        if not isinstance(data, dict):
+            raise ValueError(f"[raport] Oczekiwano dict, dostałem {type(data).__name__}")
     except Exception as e:
         current_app.logger.warning("[raport] Błąd JSON: %s", e)
         return None
@@ -2614,6 +2622,8 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
         data = json.loads(clean.strip())
+        if not isinstance(data, dict):
+            raise ValueError(f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}")
     except Exception as e:
         current_app.logger.warning("[plakat] Błąd JSON: %s", e)
         return None
@@ -2723,6 +2733,8 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
         data = json.loads(clean.strip())
+        if not isinstance(data, dict):
+            raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
     except Exception as e:
         current_app.logger.warning("[gra] Błąd JSON: %s", e)
         return None
