@@ -31,6 +31,7 @@ Więcej: Zobacz komentarz po stronie 33 tego pliku.
 import os
 import base64
 import io
+import traceback 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 

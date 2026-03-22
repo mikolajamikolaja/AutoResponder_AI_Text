@@ -1790,6 +1790,8 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         cytat = p.get("cytat_tylera", "")
         pytanie = p.get("pytanie", "")
         odp = p.get("odpowiedzi", {})
+        if not isinstance(odp, dict):
+            odp = {}
         wyjasnienie = p.get("wyjasnienie", "")
         html += f"""
 <div class="pytanie">
@@ -1890,6 +1892,8 @@ function sprawdz() {{
             nr = p.get("nr", "?")
             pytanie_txt = p.get("pytanie", "")
             odp = p.get("odpowiedzi", {})
+            if not isinstance(odp, dict):
+                odp = {}
             wyjasnienie = p.get("wyjasnienie", "")
 
             y = new_page_if_needed(y, 45 * mm)
@@ -2763,6 +2767,8 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         sytuacja = p.get("sytuacja", "")
         pytanie_txt = p.get("pytanie", "")
         odp = p.get("odpowiedzi", {})
+        if not isinstance(odp, dict):
+            odp = {}
         pytania_html += f"""
 <div class="pytanie" id="p{nr}" style="display:none">
   <div class="nr">Pytanie {nr} / {len(pytania)}</div>
