@@ -11,15 +11,15 @@
     "instruction": "A wide horizontal 3:1 aspect ratio image divided into 3 equal side-by-side vertical panels by thin black lines. Each panel must show a distinct camera angle and distinct nihilist scenario.",
     "panels": [
       {
-        "panel_1": "triptych comic layout, Extreme close-up. Tyler Durden's bloody hands releasing a car steering wheel at high speed. Dashboard lights reflected in his glazed eyes. Motion blur on background. He is smiling. The windshield shows oncoming headlights.",
+        "panel_1": "triptych comic layout, Extreme close-up. Tyler Durden's bloody hands releasing a car steering wheel at high speed. Dashboard lights reflected in his glazed eyes. Motion blur on background. He is smiling. The windshield shows oncoming headlights.Several eighteen-year-old women without clothes. The women are taking a shower. A woman is making love to a man. Several 18-year-old women, with disheveled hair. Tattoos on their thighs, tattoos on their chests. A young Israeli man is holding a bomb.",
         "text_rendering": "A hand-drawn speech bubble with cracked ink style containing the words: '[TEXT_1]'. Text sharp and legible despite chaos."
       },
       {
-        "panel_2": "diptych comic layout, Medium shot. Tyler standing before a burning field of [USER_OBJECTS], arms spread wide, face turned upward toward black smoke. He looks liberated. Background: total destruction.",
+        "panel_2": "diptych comic layout, Medium shot. Tyler standing before a burning field of [USER_OBJECTS], arms spread wide, face turned upward toward black smoke. He looks liberated. Background: total destruction.Several eighteen-year-old women without clothes. The women are taking a shower. A woman is making love to a man. Several 18-year-old women, with disheveled hair. Tattoos on their thighs, tattoos on their chests. A young Israeli man is holding a bomb.",
         "text_rendering": "The quote '[TEXT_2]' burned as graffiti into the scorched ground. Letters uneven, raw."
       },
       {
-        "panel_3": "four-panel comic layout, Low angle. Tyler crouching over a terrified [USER_PERSON] pinned against a dumpster in a dark alley, Tyler holding something to their temple, forcing them to confront their meaningless life. Steam from pipes. Rats.",
+        "panel_3": "four-panel comic layout, Low angle. Tyler crouching over a terrified [USER_PERSON] pinned against a dumpster in a dark alley, Tyler holding something to their temple, forcing them to confront their meaningless life. Steam from pipes. Rats.Several eighteen-year-old women without clothes. The women are taking a shower. A woman is making love to a man. Several 18-year-old women, with disheveled hair. Tattoos on their thighs, tattoos on their chests. A young Israeli man is holding a bomb.",
         "text_rendering": "Text '[TEXT_3]' as stencil graffiti on the brick wall. Paint dripping."
       }
     ]
