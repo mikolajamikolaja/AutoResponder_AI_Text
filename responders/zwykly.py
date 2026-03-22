@@ -1771,7 +1771,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     user_msg = (
         f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
         f"Email nadawcy (kontekst):\n{body[:500]}\n\n"
-        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
@@ -2026,9 +2026,9 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
     user_msg = (
         f"Email nadawcy:\n{body[:800]}\n\n"
         f"Odpowiedź Tylera (kontekst):\n{res_text[:1000]}\n\n"
-        f"WAŻNE: W polu 'data' każdego dnia użyj DOKŁADNIE tych dat (w kolejności):\n{daty_str}\n\n"
+        f"WAŻNE: W polu 'data' każdego dnia użyj DOKŁADNIE tych dat:\n{daty_str}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON bez markdown. Klucz główny listy dni MUSI być 'dni'."
+        f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
     )
 
     raw = None
@@ -2056,16 +2056,14 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}")
-        # Normalizacja — model może użyć innych kluczy niż schemat
         KEY_MAP_HOROSKOP = {
-            "horoskop": "dni", "days": "dni", "forecast": "dni", "prognozy": "dni",
-            "przepowiednie": "dni", "lista": "dni",
+            "horoskop": "dni", "days": "dni", "forecast": "dni",
+            "prognozy": "dni", "przepowiednie": "dni", "lista": "dni",
         }
         for wrong, right in KEY_MAP_HOROSKOP.items():
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
-                current_app.logger.info("[horoskop] znormalizowano klucz '%s' → '%s'", wrong, right)
-        # Jeśli dni to lista wewnątrz zagnieżdżonego dict — wyciągnij
+                current_app.logger.info("[horoskop] znormalizowano '%s' → '%s'", wrong, right)
         if not data.get("dni"):
             for v in data.values():
                 if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
@@ -2231,8 +2229,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     user_msg = (
         f"Email:\n{body[:800]}\n\n"
         f"Odpowiedź Tylera:\n{res_text[:800]}\n\n"
-        f"SCHEMAT JSON — użyj DOKŁADNIE tych polskich kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy jak name/stats/age — użyj nazwa_postaci/statystyki."
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych polskich kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
 
     raw = None
@@ -2260,7 +2258,6 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[karta-rpg] Oczekiwano dict, dostałem {type(data).__name__}")
-        # Normalizacja — model może użyć angielskich lub innych kluczy
         KEY_MAP_RPG = {
             "name": "nazwa_postaci", "character_name": "nazwa_postaci", "imie": "nazwa_postaci",
             "class": "klasa_postaci", "klasa": "klasa_postaci", "character_class": "klasa_postaci",
@@ -2346,27 +2343,41 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawString(lm, y, "STATYSTYKI")
         y -= 5 * mm
 
+        # Krok między statystykami — 18pt = etykieta(7) + wartość(7) + odstęp(4)
+        STAT_STEP = 18
+        col_half = cw / 2 - 3 * mm
+
+        def draw_stat_col(items, x_base):
+            sy = y_stat
+            for (sk, sv) in items:
+                label = sk.replace("_", " ").upper()
+                c.setFont(FB, 7)
+                c.setFillColorRGB(*DARK)
+                c.drawString(x_base, sy, label + ":")
+                sy -= 8
+                # Zawijaj wartość jeśli długa
+                val_str = str(sv)
+                c.setFont(FN, 7)
+                c.setFillColorRGB(*GRAY)
+                words = val_str.split()
+                line = ""
+                for w in words:
+                    test = (line + " " + w).strip()
+                    if c.stringWidth(test, FN, 7) <= col_half:
+                        line = test
+                    else:
+                        c.drawString(x_base + 2 * mm, sy, line)
+                        sy -= 8
+                        line = w
+                if line:
+                    c.drawString(x_base + 2 * mm, sy, line)
+                sy -= STAT_STEP - 8
+            return sy
+
         y_stat = y
-        c.setFont(FN, 8)
-        for i, (k, v) in enumerate(col1):
-            c.setFillColorRGB(*DARK)
-            label = k.replace("_", " ").upper()
-            c.setFont(FB, 7)
-            c.drawString(lm, y_stat - i * 9, label + ":")
-            c.setFont(FN, 7)
-            c.setFillColorRGB(*GRAY)
-            c.drawString(lm, y_stat - i * 9 - 4, str(v)[:50])
-
-        for i, (k, v) in enumerate(col2):
-            c.setFillColorRGB(*DARK)
-            label = k.replace("_", " ").upper()
-            c.setFont(FB, 7)
-            c.drawString(lm + cw / 2, y_stat - i * 9, label + ":")
-            c.setFont(FN, 7)
-            c.setFillColorRGB(*GRAY)
-            c.drawString(lm + cw / 2, y_stat - i * 9 - 4, str(v)[:50])
-
-        y = y_stat - max(len(col1), len(col2)) * 9 - 8 * mm
+        sy1 = draw_stat_col(col1, lm)
+        sy2 = draw_stat_col(col2, lm + cw / 2)
+        y = min(sy1, sy2) - 8 * mm
 
         # Umiejętności
         c.setFont(FB, 9)
@@ -2455,8 +2466,8 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
     if previous_body:
         context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:500]}"
     context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:800]}"
-    context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
-    context += "\n\nZwróć TYLKO czysty JSON. KLUCZ dane_pacjenta MUSI istnieć. KLUCZ diagnoza_wstepna MUSI istnieć."
+    context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}"
+    context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
     # DeepSeek PIERWSZY dla raportu
     raw = call_deepseek(system_msg, context, MODEL_TYLER)
@@ -2484,14 +2495,12 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[raport] Oczekiwano dict, dostałem {type(data).__name__}")
-        # Normalizacja — model używa własnych kluczy zamiast schematu
         KEY_MAP_RAPORT = {
             "pacjent": "dane_pacjenta", "patient": "dane_pacjenta",
             "patient_data": "dane_pacjenta", "dane": "dane_pacjenta",
-            "imie_nazwisko": "dane_pacjenta",  # gdy model spłaszcza strukturę
             "diagnoza": "diagnoza_wstepna", "diagnosis": "diagnoza_wstepna",
             "primary_diagnosis": "diagnoza_wstepna", "rozpoznanie": "diagnoza_wstepna",
-            "historia_choroby": "wywiad", "history": "wywiad", "interview": "wywiad",
+            "historia_choroby": "wywiad", "history": "wywiad",
             "powod": "powod_przyjecia", "reason": "powod_przyjecia",
             "symptoms": "objawy", "symptomy": "objawy",
             "recommendations": "zalecenia", "treatment": "zalecenia",
@@ -2502,15 +2511,13 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
                 current_app.logger.info("[raport] znormalizowano '%s' → '%s'", wrong, right)
-        # Jeśli dane_pacjenta to string a nie dict — opakuj
         if isinstance(data.get("dane_pacjenta"), str):
             data["dane_pacjenta"] = {"imie_nazwisko": data["dane_pacjenta"]}
-        # Jeśli brak dane_pacjenta — zbuduj z płaskich kluczy
         if not data.get("dane_pacjenta"):
             flat_keys = ["imie_nazwisko", "wiek", "zawod", "adres", "stan_cywilny"]
-            found = {k: data.pop(k) for k in flat_keys if k in data}
-            if found:
-                data["dane_pacjenta"] = found
+            found_flat = {k: data.pop(k) for k in flat_keys if k in data}
+            if found_flat:
+                data["dane_pacjenta"] = found_flat
         if not data.get("diagnoza_wstepna") and not data.get("dane_pacjenta"):
             current_app.logger.warning("[raport] JSON pusty — raw: %.200s", raw)
             return None
@@ -2723,8 +2730,8 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     schema = cfg.get("output_schema", {})
     user_msg = (
         f"Odpowiedź Tylera:\n{res_text[:2000]}\n\nEmail:\n{body[:400]}\n\n"
-        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy na GÓRNYM POZIOMIE:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj go w 'plakat' ani innym obiekcie."
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy na GÓRNYM POZIOMIE:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj w 'plakat'."
     )
 
     raw = None
@@ -2752,14 +2759,14 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}")
-        # Normalizacja — model może zagnieździć dane w obiekcie "plakat" lub użyć innych kluczy
         if not data.get("glowne_zdanie") and isinstance(data.get("plakat"), dict):
-            data.update(data.pop("plakat"))  # wyciągnij zawartość z zagnieżdżenia
+            data.update(data.pop("plakat"))
             current_app.logger.info("[plakat] wyciągnięto dane z zagnieżdżonego 'plakat'")
         KEY_MAP_PLAKAT = {
             "zdanie": "glowne_zdanie", "main_sentence": "glowne_zdanie",
             "sentence": "glowne_zdanie", "tekst": "glowne_zdanie", "text": "glowne_zdanie",
             "cytat": "glowne_zdanie", "quote": "glowne_zdanie",
+            "tresc": "glowne_zdanie",
             "subtitle": "podtytul", "podtytuł": "podtytul",
             "background": "tlo_opis", "tlo": "tlo_opis",
             "color": "kolor_dominujacy", "kolor": "kolor_dominujacy",
@@ -2783,62 +2790,103 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     kolor_tekst = data.get("kolor_tekstu", "#ffffff")
     slowo = data.get("slowo_klucz", "PUSTKA").upper()
 
-    # Zawijaj główne zdanie co ~30 znaków
-    words = glowne.split()
-    lines = []
-    current_line = ""
-    for w in words:
-        if len(current_line + " " + w) <= 28:
-            current_line = (current_line + " " + w).strip()
-        else:
-            if current_line:
-                lines.append(current_line)
-            current_line = w
-    if current_line:
-        lines.append(current_line)
+    def wrap_words(text, max_chars):
+        """Zawija tekst na linie max_chars znaków."""
+        words = text.split()
+        lines_out, cur = [], ""
+        for w in words:
+            test = (cur + " " + w).strip()
+            if len(test) <= max_chars:
+                cur = test
+            else:
+                if cur:
+                    lines_out.append(cur)
+                cur = w
+        if cur:
+            lines_out.append(cur)
+        return lines_out
 
-    line_height = 60
-    text_start_y = 400 - (len(lines) * line_height) // 2
+    # Główne zdanie — max 26 znaków na linię, font 48
+    lines = wrap_words(glowne, 26)
+    line_height = 62
+    text_start_y = 320 - (len(lines) * line_height) // 2
     text_lines_svg = ""
     for i, line in enumerate(lines):
-        text_lines_svg += f'<text x="420" y="{text_start_y + i * line_height}" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle">{line}</text>\n'
+        text_lines_svg += (
+            f'<text x="420" y="{text_start_y + i * line_height}" '
+            f'font-family="Georgia, serif" font-size="48" font-weight="bold" '
+            f'fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle" '
+            f'letter-spacing="1">{line}</text>\n'
+        )
 
+    # Podtytuł — zawijany, max 40 znaków na linię, font 22
+    sub_lines = wrap_words(podtytul, 40) if podtytul else []
+    sub_start_y = text_start_y + len(lines) * line_height + 50
+    sub_svg = ""
+    for i, sl in enumerate(sub_lines):
+        sub_svg += (
+            f'<text x="420" y="{sub_start_y + i * 30}" '
+            f'font-family="Georgia, serif" font-size="22" '
+            f'fill="{kolor_tekst}" text-anchor="middle" opacity="0.75">{sl}</text>\n'
+        )
+
+    # Dodatkowy tekst — fragment odpowiedzi Tylera jako cytat pod spodem
+    # Bierzemy pierwsze zdanie które nie jest nagłówkiem (max 120 znaków)
+    extra_quote = ""
+    for sentence in res_text.replace("\n", " ").split("."):
+        s = sentence.strip()
+        if len(s) > 30 and not s.startswith("#") and not s.startswith("—"):
+            extra_quote = s[:120]
+            break
+    extra_lines = wrap_words(extra_quote, 45) if extra_quote else []
+    extra_start_y = sub_start_y + max(len(sub_lines), 1) * 30 + 60
+    extra_svg = ""
+    for i, el in enumerate(extra_lines):
+        extra_svg += (
+            f'<text x="420" y="{extra_start_y + i * 26}" '
+            f'font-family="Georgia, serif" font-size="18" font-style="italic" '
+            f'fill="{kolor_tekst}" text-anchor="middle" opacity="0.55">{el}</text>\n'
+        )
+
+    autor_y = extra_start_y + max(len(extra_lines), 1) * 26 + 50
+    linia_y = autor_y - 20
     svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="840" height="1188" viewBox="0 0 840 1188">
   <!-- Tło -->
   <rect width="840" height="1188" fill="{kolor_tlo}"/>
-  
+
   <!-- Słowo klucz — watermark -->
-  <text x="420" y="594" font-family="Arial Black, sans-serif" font-size="200" font-weight="bold" 
-        fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle" 
+  <text x="420" y="594" font-family="Arial Black, sans-serif" font-size="200" font-weight="bold"
+        fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle"
         opacity="0.04" transform="rotate(-30, 420, 594)">{slowo}</text>
-  
+
   <!-- Linia górna dekoracyjna -->
   <rect x="60" y="80" width="720" height="3" fill="#8b0000"/>
   <rect x="60" y="87" width="720" height="1" fill="#8b0000" opacity="0.5"/>
-  
+
   <!-- Główny tekst -->
   {text_lines_svg}
-  
-  <!-- Podtytuł -->
-  <text x="420" y="{text_start_y + len(lines) * line_height + 40}" 
-        font-family="Georgia, serif" font-size="22" fill="{kolor_tekst}" 
-        text-anchor="middle" opacity="0.7">{podtytul}</text>
-  
-  <!-- Linia środkowa -->
-  <rect x="160" y="{text_start_y + len(lines) * line_height + 80}" width="520" height="1" fill="{kolor_tekst}" opacity="0.3"/>
-  
+
+  <!-- Podtytuł (zawijany) -->
+  {sub_svg}
+
+  <!-- Cytat dodatkowy z odpowiedzi Tylera -->
+  {extra_svg}
+
+  <!-- Linia przed autorem -->
+  <rect x="160" y="{linia_y}" width="520" height="1" fill="{kolor_tekst}" opacity="0.3"/>
+
   <!-- Autor -->
-  <text x="420" y="{text_start_y + len(lines) * line_height + 110}" 
-        font-family="Georgia, serif" font-size="20" font-style="italic" 
+  <text x="420" y="{autor_y}"
+        font-family="Georgia, serif" font-size="20" font-style="italic"
         fill="#8b0000" text-anchor="middle">{autor}</text>
-  
+
   <!-- Linia dolna dekoracyjna -->
   <rect x="60" y="1100" width="720" height="1" fill="#8b0000" opacity="0.5"/>
   <rect x="60" y="1104" width="720" height="3" fill="#8b0000"/>
-  
+
   <!-- Małe logo projektu -->
-  <text x="420" y="1150" font-family="Arial, sans-serif" font-size="11" 
+  <text x="420" y="1150" font-family="Arial, sans-serif" font-size="11"
         fill="{kolor_tekst}" text-anchor="middle" opacity="0.3" letter-spacing="3">PROJEKT TYLER DURDEN</text>
 </svg>"""
 
@@ -2866,7 +2914,7 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
     user_msg = (
         f"Email:\n{body[:800]}\n\n"
         f"Odpowiedź Tylera:\n{res_text[:1500]}\n\n"
-        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 

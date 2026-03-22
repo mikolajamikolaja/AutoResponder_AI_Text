@@ -1767,9 +1767,12 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         return None, None
 
     system_msg = cfg.get("system", "")
+    schema = cfg.get("output_schema", {})
     user_msg = (
         f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
-        f"Email nadawcy (kontekst):\n{body[:500]}"
+        f"Email nadawcy (kontekst):\n{body[:500]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
     raw = None
@@ -2018,12 +2021,14 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             range(7)]
 
     system_msg = cfg.get("system", "")
+    schema = cfg.get("output_schema", {})
     daty_str = "\n".join(f"Dzień {i+1} ({d})" for i, d in enumerate(daty))
     user_msg = (
         f"Email nadawcy:\n{body[:800]}\n\n"
         f"Odpowiedź Tylera (kontekst):\n{res_text[:1000]}\n\n"
         f"WAŻNE: W polu 'data' każdego dnia użyj DOKŁADNIE tych dat (w kolejności):\n{daty_str}\n\n"
-        f"Wygeneruj horoskop na 7 dni. Zwróć TYLKO czysty JSON bez markdown."
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON bez markdown. Klucz główny listy dni MUSI być 'dni'."
     )
 
     raw = None
@@ -2051,6 +2056,22 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}")
+        # Normalizacja — model może użyć innych kluczy niż schemat
+        KEY_MAP_HOROSKOP = {
+            "horoskop": "dni", "days": "dni", "forecast": "dni", "prognozy": "dni",
+            "przepowiednie": "dni", "lista": "dni",
+        }
+        for wrong, right in KEY_MAP_HOROSKOP.items():
+            if wrong in data and right not in data:
+                data[right] = data.pop(wrong)
+                current_app.logger.info("[horoskop] znormalizowano klucz '%s' → '%s'", wrong, right)
+        # Jeśli dni to lista wewnątrz zagnieżdżonego dict — wyciągnij
+        if not data.get("dni"):
+            for v in data.values():
+                if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                    data["dni"] = v
+                    current_app.logger.info("[horoskop] wyciągnięto dni z zagnieżdżonej listy")
+                    break
         if not data.get("dni"):
             current_app.logger.warning("[horoskop] JSON OK ale brak dni — raw: %.200s", raw)
             return None
@@ -2206,7 +2227,13 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         return None
 
     system_msg = cfg.get("system", "")
-    user_msg = f"Email:\n{body[:800]}\n\nOdpowiedź Tylera:\n{res_text[:800]}"
+    schema = cfg.get("output_schema", {})
+    user_msg = (
+        f"Email:\n{body[:800]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:800]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych polskich kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy jak name/stats/age — użyj nazwa_postaci/statystyki."
+    )
 
     raw = None
     for name, key in _get_groq_keys():
@@ -2233,6 +2260,22 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[karta-rpg] Oczekiwano dict, dostałem {type(data).__name__}")
+        # Normalizacja — model może użyć angielskich lub innych kluczy
+        KEY_MAP_RPG = {
+            "name": "nazwa_postaci", "character_name": "nazwa_postaci", "imie": "nazwa_postaci",
+            "class": "klasa_postaci", "klasa": "klasa_postaci", "character_class": "klasa_postaci",
+            "level": "poziom",
+            "stats": "statystyki", "statistics": "statystyki", "attributes": "statystyki",
+            "skills": "umiejetnosci_specjalne", "abilities": "umiejetnosci_specjalne",
+            "equipment": "ekwipunek", "items": "ekwipunek",
+            "weakness": "slabosci", "weaknesses": "slabosci",
+            "quest": "quest_glowny", "main_quest": "quest_glowny",
+            "quote": "cytat_postaci", "character_quote": "cytat_postaci",
+        }
+        for wrong, right in KEY_MAP_RPG.items():
+            if wrong in data and right not in data:
+                data[right] = data.pop(wrong)
+                current_app.logger.info("[karta-rpg] znormalizowano '%s' → '%s'", wrong, right)
         if not data.get("nazwa_postaci") and not data.get("statystyki"):
             current_app.logger.warning("[karta-rpg] JSON pusty — raw: %.200s", raw)
             return None
@@ -2407,10 +2450,13 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         return None
 
     system_msg = cfg.get("system", "")
+    schema = cfg.get("output_schema", {})
     context = f"EMAIL PACJENTA:\n{body[:1500]}"
     if previous_body:
         context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:500]}"
     context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:800]}"
+    context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+    context += "\n\nZwróć TYLKO czysty JSON. KLUCZ dane_pacjenta MUSI istnieć. KLUCZ diagnoza_wstepna MUSI istnieć."
 
     # DeepSeek PIERWSZY dla raportu
     raw = call_deepseek(system_msg, context, MODEL_TYLER)
@@ -2438,6 +2484,33 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[raport] Oczekiwano dict, dostałem {type(data).__name__}")
+        # Normalizacja — model używa własnych kluczy zamiast schematu
+        KEY_MAP_RAPORT = {
+            "pacjent": "dane_pacjenta", "patient": "dane_pacjenta",
+            "patient_data": "dane_pacjenta", "dane": "dane_pacjenta",
+            "imie_nazwisko": "dane_pacjenta",  # gdy model spłaszcza strukturę
+            "diagnoza": "diagnoza_wstepna", "diagnosis": "diagnoza_wstepna",
+            "primary_diagnosis": "diagnoza_wstepna", "rozpoznanie": "diagnoza_wstepna",
+            "historia_choroby": "wywiad", "history": "wywiad", "interview": "wywiad",
+            "powod": "powod_przyjecia", "reason": "powod_przyjecia",
+            "symptoms": "objawy", "symptomy": "objawy",
+            "recommendations": "zalecenia", "treatment": "zalecenia",
+            "prognosis": "rokowanie",
+            "notatka": "notatka_oddzialu", "note": "notatka_oddzialu",
+        }
+        for wrong, right in KEY_MAP_RAPORT.items():
+            if wrong in data and right not in data:
+                data[right] = data.pop(wrong)
+                current_app.logger.info("[raport] znormalizowano '%s' → '%s'", wrong, right)
+        # Jeśli dane_pacjenta to string a nie dict — opakuj
+        if isinstance(data.get("dane_pacjenta"), str):
+            data["dane_pacjenta"] = {"imie_nazwisko": data["dane_pacjenta"]}
+        # Jeśli brak dane_pacjenta — zbuduj z płaskich kluczy
+        if not data.get("dane_pacjenta"):
+            flat_keys = ["imie_nazwisko", "wiek", "zawod", "adres", "stan_cywilny"]
+            found = {k: data.pop(k) for k in flat_keys if k in data}
+            if found:
+                data["dane_pacjenta"] = found
         if not data.get("diagnoza_wstepna") and not data.get("dane_pacjenta"):
             current_app.logger.warning("[raport] JSON pusty — raw: %.200s", raw)
             return None
@@ -2647,7 +2720,12 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         return None
 
     system_msg = cfg.get("system", "")
-    user_msg = f"Odpowiedź Tylera:\n{res_text[:2000]}\n\nEmail:\n{body[:400]}"
+    schema = cfg.get("output_schema", {})
+    user_msg = (
+        f"Odpowiedź Tylera:\n{res_text[:2000]}\n\nEmail:\n{body[:400]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy na GÓRNYM POZIOMIE:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj go w 'plakat' ani innym obiekcie."
+    )
 
     raw = None
     for name, key in _get_groq_keys():
@@ -2674,6 +2752,23 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}")
+        # Normalizacja — model może zagnieździć dane w obiekcie "plakat" lub użyć innych kluczy
+        if not data.get("glowne_zdanie") and isinstance(data.get("plakat"), dict):
+            data.update(data.pop("plakat"))  # wyciągnij zawartość z zagnieżdżenia
+            current_app.logger.info("[plakat] wyciągnięto dane z zagnieżdżonego 'plakat'")
+        KEY_MAP_PLAKAT = {
+            "zdanie": "glowne_zdanie", "main_sentence": "glowne_zdanie",
+            "sentence": "glowne_zdanie", "tekst": "glowne_zdanie", "text": "glowne_zdanie",
+            "cytat": "glowne_zdanie", "quote": "glowne_zdanie",
+            "subtitle": "podtytul", "podtytuł": "podtytul",
+            "background": "tlo_opis", "tlo": "tlo_opis",
+            "color": "kolor_dominujacy", "kolor": "kolor_dominujacy",
+            "keyword": "slowo_klucz", "slowo": "slowo_klucz",
+        }
+        for wrong, right in KEY_MAP_PLAKAT.items():
+            if wrong in data and right not in data:
+                data[right] = data.pop(wrong)
+                current_app.logger.info("[plakat] znormalizowano '%s' → '%s'", wrong, right)
         if not data.get("glowne_zdanie"):
             current_app.logger.warning("[plakat] JSON bez glowne_zdanie — raw: %.200s", raw)
             return None
@@ -2767,7 +2862,13 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         return None
 
     system_msg = cfg.get("system", "")
-    user_msg = f"Email:\n{body[:800]}\n\nOdpowiedź Tylera:\n{res_text[:1500]}"
+    schema = cfg.get("output_schema", {})
+    user_msg = (
+        f"Email:\n{body[:800]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:1500]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+    )
 
     raw = None
     for name, key in _get_groq_keys():
