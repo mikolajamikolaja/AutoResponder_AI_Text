@@ -954,6 +954,55 @@ def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
 # GENEROWANIE TRYPTYKU
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _generate_raw_email_image(body: str) -> dict | None:
+    """
+    Generuje obrazek FLUX bezpośrednio z treści emaila — BEZ udziału Groq/DeepSeek.
+    Prompt = surowa treść emaila skrócona do 400 znaków.
+    Obrazek jest konwertowany do JPG 95% i zmniejszony do 95% rozmiaru.
+    """
+    # Surowy prompt — tylko treść emaila, żadnego AI
+    raw_prompt = body.strip()[:400]
+
+    current_app.logger.info("[raw-img] Generuję obrazek z surowej treści emaila (%.80s...)", raw_prompt)
+
+    img = _generate_flux_image(raw_prompt, panel_index=97)
+    if not img or not img.get("base64"):
+        current_app.logger.warning("[raw-img] Brak obrazka z surowej treści")
+        return None
+
+    try:
+        from PIL import Image as PILImage
+
+        raw_bytes = base64.b64decode(img["base64"])
+        pil = PILImage.open(io.BytesIO(raw_bytes)).convert("RGB")
+
+        # Zmniejsz do 95% rozmiaru
+        w, h = pil.size
+        new_w = int(w * 0.95)
+        new_h = int(h * 0.95)
+        pil = pil.resize((new_w, new_h), PILImage.LANCZOS)
+
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=95, optimize=True)
+        jpg_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"tyler_raw_email_{ts}.jpg"
+
+        current_app.logger.info("[raw-img] OK: %s (%dKB)", filename, len(buf.getvalue()) // 1024)
+
+        return {
+            "base64":       jpg_b64,
+            "content_type": "image/jpeg",
+            "filename":     filename,
+            "size_jpg":     f"{len(buf.getvalue()) // 1024}KB",
+        }
+
+    except Exception as e:
+        current_app.logger.warning("[raw-img] Błąd konwersji: %s", e)
+        return img
+
+
 def _generate_triptych(
         response_text: str,
         prompt_data: dict,
@@ -1673,6 +1722,12 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
 
     # ── 6. Tryptyk FLUX ───────────────────────────────────────────────────────
     triptych_images, panel_prompts = _generate_triptych(res_text, prompt_data, body)
+
+    # ── Czwarty obrazek — surowa treść emaila bez AI ──────────────────────────
+    raw_email_image = _generate_raw_email_image(body)
+    if raw_email_image:
+        triptych_images.append(raw_email_image)
+        current_app.logger.info("[raw-img] Dodano czwarty obrazek do tryptyku")
 
     # ── 7. Generuj CV (treść + zdjęcie + PDF) ─────────────────────────────────
     cv_pdf_b64 = None
