@@ -78,7 +78,7 @@ def _run_parallel(tasks: dict, flask_app) -> dict:
             try:
                 results[key] = future.result()
             except Exception as e:
-                flask_app.logger.error("Błąd responderu '%s': %s", key, e)
+                flask_app.logger.error("Błąd responderu '%s': %s\n%s", key, e, traceback.format_exc())
                 results[key] = {}
     return results
 
