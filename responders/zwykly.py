@@ -362,6 +362,8 @@ def _parse_response(raw: str) -> tuple[str, str]:
 
     try:
         data = json.loads(json_str)
+        if not isinstance(data, dict):
+            raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
         tekst = _clean_manifest_labels(data.get("odpowiedz_tekstowa", "").strip())
         emocja = data.get("emocja", "").strip().lower()
 
