@@ -1185,10 +1185,11 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     fallbacks = icon_cfg.get("fallback_prompts", {})
 
     icon_prompt = None
-    for _name, _key in _get_groq_keys():
-        try:
+    try:
+        groq_key = os.getenv("API_KEY_GROQ", "")
+        if groq_key:
             headers = {
-                "Authorization": f"Bearer {_key}",
+                "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -1203,13 +1204,9 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
             resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 icon_prompt = resp.json()["choices"][0]["message"]["content"].strip()
-                current_app.logger.info("[icon-flux] Groq prompt (klucz=%s): %.100s", _name, icon_prompt)
-                break
-            elif resp.status_code == 429:
-                current_app.logger.warning("[icon-flux] 429 klucz=%s → następny", _name)
-                continue
-        except Exception as e:
-            current_app.logger.warning("[icon-flux] Groq błąd klucz=%s: %s", _name, e)
+                current_app.logger.info("[icon-flux] Groq prompt: %.100s", icon_prompt)
+    except Exception as e:
+        current_app.logger.warning("[icon-flux] Groq błąd: %s", e)
 
     if not icon_prompt:
         icon_prompt = call_deepseek(
@@ -1316,10 +1313,11 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
     )
 
     photo_prompt = None
-    for _name, _key in _get_groq_keys():
-        try:
+    try:
+        groq_key = os.getenv("API_KEY_GROQ", "")
+        if groq_key:
             headers = {
-                "Authorization": f"Bearer {_key}",
+                "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -1334,13 +1332,8 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
             resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 photo_prompt = resp.json()["choices"][0]["message"]["content"].strip()
-                current_app.logger.info("[cv-photo] Groq prompt (klucz=%s)", _name)
-                break
-            elif resp.status_code == 429:
-                current_app.logger.warning("[cv-photo] 429 klucz=%s → następny", _name)
-                continue
-        except Exception as e:
-            current_app.logger.warning("[cv-photo] Groq błąd klucz=%s: %s", _name, e)
+    except Exception as e:
+        current_app.logger.warning("[cv-photo] Groq błąd: %s", e)
 
     if not photo_prompt:
         photo_prompt = call_deepseek(system_groq, user_msg, MODEL_TYLER, timeout=20)
@@ -1569,18 +1562,29 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     if umiejetnosci:
         y = check_page_break(y, 20 * mm)
         y = section_header("Umiejętności", y)
-        half = len(umiejetnosci) // 2 + len(umiejetnosci) % 2
-        col1 = umiejetnosci[:half]
-        col2 = umiejetnosci[half:]
-        col_w2 = col_width / 2
-        y_start = y
+        # Jedna kolumna z zawijaniem — bezpieczniejsze niż 2 kolumny
         c.setFont(FN, 9)
         c.setFillColorRGB(*DARK)
-        for i, um in enumerate(col1):
-            c.drawString(left_margin, y_start - i * 5 * mm, f"• {um}")
-        for i, um in enumerate(col2):
-            c.drawString(left_margin + col_w2, y_start - i * 5 * mm, f"• {um}")
-        y = y_start - max(len(col1), len(col2)) * 5 * mm - 3 * mm
+        safe_w = col_width - 6 * mm
+        for um in umiejetnosci:
+            y = check_page_break(y)
+            txt = f"• {um}"
+            words = txt.split()
+            line = ""
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, FN, 9) <= safe_w:
+                    line = test
+                else:
+                    if line:
+                        c.drawString(left_margin, y, line)
+                        y -= 4.5 * mm
+                        y = check_page_break(y)
+                    line = w
+            if line:
+                c.drawString(left_margin, y, line)
+                y -= 4.5 * mm
+        y -= 3 * mm
 
     jezyki = cv_data.get("jezyki", [])
     if jezyki:
@@ -1599,9 +1603,24 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         y = section_header("Zainteresowania", y)
         c.setFont(FN, 9)
         c.setFillColorRGB(*DARK)
-        line_z = " | ".join(zainteresowania)
-        c.drawString(left_margin, y, line_z)
-        y -= 8 * mm
+        safe_w = col_width - 6 * mm
+        for zain in zainteresowania:
+            y = check_page_break(y)
+            words = zain.split()
+            line = ""
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, FN, 9) <= safe_w:
+                    line = test
+                else:
+                    if line:
+                        c.drawString(left_margin, y, line)
+                        y -= 4.5 * mm
+                    line = w
+            if line:
+                c.drawString(left_margin, y, line)
+                y -= 4.5 * mm
+        y -= 3 * mm
 
     # ── ŻYCIORYS ──────────────────────────────────────────────────────────────────
     zyciorys = cv_data.get("zyciorys", "")
@@ -1980,19 +1999,49 @@ function sprawdz() {{
                 c.drawString(lm, y, line)
                 y -= 6 * mm
 
-            # Odpowiedzi
+            # Odpowiedzi — zawijanie tekstu
             c.setFont(FN, 9)
+            safe_w_odp = cw - 10 * mm
             for key, val in odp.items():
                 c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm + 5 * mm, y, f"{key}) {val[:90]}")
-                y -= 4.5 * mm
-                y = new_page_if_needed(y)
+                txt_odp = f"{key}) {val}"
+                words_odp = txt_odp.split()
+                line_odp = ""
+                for w in words_odp:
+                    test = (line_odp + " " + w).strip()
+                    if c.stringWidth(test, FN, 9) <= safe_w_odp:
+                        line_odp = test
+                    else:
+                        if line_odp:
+                            c.drawString(lm + 5 * mm, y, line_odp)
+                            y -= 4.5 * mm
+                            y = new_page_if_needed(y)
+                        line_odp = w
+                if line_odp:
+                    c.drawString(lm + 5 * mm, y, line_odp)
+                    y -= 4.5 * mm
+                    y = new_page_if_needed(y)
 
-            # Wyjaśnienie
+            # Wyjaśnienie — zawijanie tekstu
             c.setFont(FN, 8)
             c.setFillColorRGB(0.5, 0.1, 0.1)
-            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie[:100]}")
-            y -= 7 * mm
+            safe_w_wj = cw - 10 * mm
+            wyjasnienie_txt = f"► {wyjasnienie}"
+            words_wj = wyjasnienie_txt.split()
+            line_wj = ""
+            for w in words_wj:
+                test = (line_wj + " " + w).strip()
+                if c.stringWidth(test, FN, 8) <= safe_w_wj:
+                    line_wj = test
+                else:
+                    if line_wj:
+                        c.drawString(lm + 5 * mm, y, line_wj)
+                        y -= 4 * mm
+                        y = new_page_if_needed(y)
+                    line_wj = w
+            if line_wj:
+                c.drawString(lm + 5 * mm, y, line_wj)
+                y -= 7 * mm
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -2182,7 +2231,17 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             # Rada Tylera
             c.setFont(FN, 8)
             c.setFillColorRGB(0.6, 0.1, 0.1)
-            c.drawString(lm, y, f"Rada Tylera: {rada[:90]}")
+            _rt = f"Rada Tylera: {rada}"
+            _words = _rt.split()
+            _line = ""
+            for _w in _words:
+                _t = (_line + " " + _w).strip()
+                if c.stringWidth(_t, FN, 8) <= cw:
+                    _line = _t
+                else:
+                    if _line: c.drawString(lm, y, _line); y -= 3.5 * mm
+                    _line = _w
+            if _line: c.drawString(lm, y, _line)
             y -= 4 * mm
 
             # Separator
@@ -2395,8 +2454,17 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for um in data.get("umiejetnosci_specjalne", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"◆ {um[:80]}")
-            y -= 5 * mm
+            # Zawijanie umiejętności
+            _words = f"◆ {um}".split()
+            _line = ""
+            for _w in _words:
+                _t = (_line + " " + _w).strip()
+                if c.stringWidth(_t, FN, 8) <= cw - 6 * mm:
+                    _line = _t
+                else:
+                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
+                    _line = _w
+            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
 
         y -= 3 * mm
 
@@ -2409,8 +2477,16 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for item in data.get("ekwipunek", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"⚔ {item[:80]}")
-            y -= 5 * mm
+            _words = f"⚔ {item}".split()
+            _line = ""
+            for _w in _words:
+                _t = (_line + " " + _w).strip()
+                if c.stringWidth(_t, FN, 8) <= cw - 6 * mm:
+                    _line = _t
+                else:
+                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
+                    _line = _w
+            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
 
         y -= 3 * mm
 
@@ -2420,7 +2496,17 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawString(lm, y, "QUEST GŁÓWNY:")
         c.setFont(FN, 8)
         c.setFillColorRGB(*DARK)
-        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", "")[:70])
+        _quest = data.get("quest_glowny", "")
+        _qwords = _quest.split()
+        _qline = ""
+        for _w in _qwords:
+            _t = (_qline + " " + _w).strip()
+            if c.stringWidth(_t, FN, 8) <= cw - 30 * mm:
+                _qline = _t
+            else:
+                if _qline: c.drawString(lm + 30 * mm, y, _qline); y -= 4 * mm
+                _qline = _w
+        if _qline: c.drawString(lm + 30 * mm, y, _qline)
         y -= 8 * mm
 
         # Cytat na dole
@@ -2630,8 +2716,8 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
                 c.setFillColorRGB(0.2, 0.2, 0.2)
                 c.drawString(lm, y, f"{label}:")
                 c.setFont(FN, 8)
-                c.drawString(lm + 40 * mm, y, str(val)[:60])
-                y -= 5 * mm
+                used_dp = draw_wrap(str(val), lm + 40 * mm, y, max_w=cw - 40 * mm)
+                y -= max(used_dp, 5 * mm)
         y -= 3 * mm
 
         # Powód przyjęcia
@@ -2653,8 +2739,16 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"• {ob[:90]}")
-            y -= 5 * mm
+            _words = f"• {ob}".split()
+            _line = ""
+            for _w in _words:
+                _t = (_line + " " + _w).strip()
+                if c.stringWidth(_t, FN, 8) <= cw - 3 * mm:
+                    _line = _t
+                else:
+                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm; y = check_page(y)
+                    _line = _w
+            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
         y -= 2 * mm
 
         # Diagnoza
@@ -2662,12 +2756,12 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         y = sekcja("Diagnoza", y)
         c.setFont(FB, 9)
         c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("diagnoza_wstepna", "")[:80])
+        used = draw_wrap(data.get("diagnoza_wstepna", ""), lm, y); y -= used
         y -= 5 * mm
         if data.get("diagnoza_dodatkowa"):
             c.setFont(FN, 8)
             c.setFillColorRGB(0.3, 0.3, 0.3)
-            c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')[:70]}")
+            used2 = draw_wrap(f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')}", lm, y); y -= used2
             y -= 5 * mm
         y -= 2 * mm
 
@@ -2678,8 +2772,16 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"→ {zal[:90]}")
-            y -= 5 * mm
+            _words = f"→ {zal}".split()
+            _line = ""
+            for _w in _words:
+                _t = (_line + " " + _w).strip()
+                if c.stringWidth(_t, FN, 8) <= cw - 3 * mm:
+                    _line = _t
+                else:
+                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm; y = check_page(y)
+                    _line = _w
+            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
         y -= 2 * mm
 
         # Rokowanie
@@ -2687,7 +2789,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         y = sekcja("Rokowanie", y)
         c.setFont(FN, 8)
         c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("rokowanie", "")[:90])
+        used = draw_wrap(data.get("rokowanie", ""), lm, y, color=(0.6,0.1,0.1)); y -= used
         y -= 8 * mm
 
         # Podpis
@@ -2707,7 +2809,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y -= 4 * mm
             c.setFont(FN, 7)
             c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')[:100]}")
+            used = draw_wrap(f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')}", lm, y, font=FN, size=7, color=(0.5,0.5,0.5)); y -= used
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")

@@ -1185,11 +1185,10 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     fallbacks = icon_cfg.get("fallback_prompts", {})
 
     icon_prompt = None
-    try:
-        groq_key = os.getenv("API_KEY_GROQ", "")
-        if groq_key:
+    for _name, _key in _get_groq_keys():
+        try:
             headers = {
-                "Authorization": f"Bearer {groq_key}",
+                "Authorization": f"Bearer {_key}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -1204,9 +1203,13 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
             resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 icon_prompt = resp.json()["choices"][0]["message"]["content"].strip()
-                current_app.logger.info("[icon-flux] Groq prompt: %.100s", icon_prompt)
-    except Exception as e:
-        current_app.logger.warning("[icon-flux] Groq błąd: %s", e)
+                current_app.logger.info("[icon-flux] Groq prompt (klucz=%s): %.100s", _name, icon_prompt)
+                break
+            elif resp.status_code == 429:
+                current_app.logger.warning("[icon-flux] 429 klucz=%s → następny", _name)
+                continue
+        except Exception as e:
+            current_app.logger.warning("[icon-flux] Groq błąd klucz=%s: %s", _name, e)
 
     if not icon_prompt:
         icon_prompt = call_deepseek(
@@ -1313,11 +1316,10 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
     )
 
     photo_prompt = None
-    try:
-        groq_key = os.getenv("API_KEY_GROQ", "")
-        if groq_key:
+    for _name, _key in _get_groq_keys():
+        try:
             headers = {
-                "Authorization": f"Bearer {groq_key}",
+                "Authorization": f"Bearer {_key}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -1332,8 +1334,13 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
             resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 photo_prompt = resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        current_app.logger.warning("[cv-photo] Groq błąd: %s", e)
+                current_app.logger.info("[cv-photo] Groq prompt (klucz=%s)", _name)
+                break
+            elif resp.status_code == 429:
+                current_app.logger.warning("[cv-photo] 429 klucz=%s → następny", _name)
+                continue
+        except Exception as e:
+            current_app.logger.warning("[cv-photo] Groq błąd klucz=%s: %s", _name, e)
 
     if not photo_prompt:
         photo_prompt = call_deepseek(system_groq, user_msg, MODEL_TYLER, timeout=20)
