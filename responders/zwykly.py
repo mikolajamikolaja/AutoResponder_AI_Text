@@ -2893,6 +2893,8 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
       - cv_pdf      (PDF CV w stylu Tylera — załącznik)
       - triptych    (lista max 3 JPG — jeśli tokeny HF dostępne)
     """
+    current_app.logger.info("[zwykly] VERSION_CHECK: isinstance_fix=True file=%s", __file__)
+
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────
     prompt_data = _load_prompt_json()
     prompt_str = _render_prompt(prompt_data, body, previous_body)
