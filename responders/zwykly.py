@@ -824,8 +824,8 @@ def _generate_panel_prompt(
 
 
 def _get_hf_tokens() -> list:
-    """Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKEN20)."""
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(22)]
+    """Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKENXx)."""
+    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(23)]
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
