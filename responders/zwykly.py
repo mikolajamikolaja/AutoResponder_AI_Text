@@ -1144,10 +1144,10 @@ def _build_debug_txt(
         (body or "")[:500],
         "",
         "--- RAW MODEL OUTPUT ---",
-        (res_raw or "(brak)")[:3000],
+        (res_raw or "(brak)")[:6000],
         "",
         "--- ODPOWIEDZ TEKSTOWA ---",
-        (res_text or "(brak)")[:2000],
+        (res_text or "(brak)")[:6000],
         "",
         "--- PROMPTY PANELI ---",
     ]
