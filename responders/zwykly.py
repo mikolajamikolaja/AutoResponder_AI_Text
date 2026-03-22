@@ -1144,10 +1144,10 @@ def _build_debug_txt(
         (body or "")[:500],
         "",
         "--- RAW MODEL OUTPUT ---",
-        (res_raw or "(brak)")[:6000],
+        (res_raw or "(brak)")[:3000],
         "",
         "--- ODPOWIEDZ TEKSTOWA ---",
-        (res_text or "(brak)")[:6000],
+        (res_text or "(brak)")[:2000],
         "",
         "--- PROMPTY PANELI ---",
     ]
@@ -1562,29 +1562,18 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     if umiejetnosci:
         y = check_page_break(y, 20 * mm)
         y = section_header("Umiejętności", y)
-        # Jedna kolumna z zawijaniem — bezpieczniejsze niż 2 kolumny
+        half = len(umiejetnosci) // 2 + len(umiejetnosci) % 2
+        col1 = umiejetnosci[:half]
+        col2 = umiejetnosci[half:]
+        col_w2 = col_width / 2
+        y_start = y
         c.setFont(FN, 9)
         c.setFillColorRGB(*DARK)
-        safe_w = col_width - 6 * mm
-        for um in umiejetnosci:
-            y = check_page_break(y)
-            txt = f"• {um}"
-            words = txt.split()
-            line = ""
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, FN, 9) <= safe_w:
-                    line = test
-                else:
-                    if line:
-                        c.drawString(left_margin, y, line)
-                        y -= 4.5 * mm
-                        y = check_page_break(y)
-                    line = w
-            if line:
-                c.drawString(left_margin, y, line)
-                y -= 4.5 * mm
-        y -= 3 * mm
+        for i, um in enumerate(col1):
+            c.drawString(left_margin, y_start - i * 5 * mm, f"• {um}")
+        for i, um in enumerate(col2):
+            c.drawString(left_margin + col_w2, y_start - i * 5 * mm, f"• {um}")
+        y = y_start - max(len(col1), len(col2)) * 5 * mm - 3 * mm
 
     jezyki = cv_data.get("jezyki", [])
     if jezyki:
@@ -1603,24 +1592,9 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         y = section_header("Zainteresowania", y)
         c.setFont(FN, 9)
         c.setFillColorRGB(*DARK)
-        safe_w = col_width - 6 * mm
-        for zain in zainteresowania:
-            y = check_page_break(y)
-            words = zain.split()
-            line = ""
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, FN, 9) <= safe_w:
-                    line = test
-                else:
-                    if line:
-                        c.drawString(left_margin, y, line)
-                        y -= 4.5 * mm
-                    line = w
-            if line:
-                c.drawString(left_margin, y, line)
-                y -= 4.5 * mm
-        y -= 3 * mm
+        line_z = " | ".join(zainteresowania)
+        c.drawString(left_margin, y, line_z)
+        y -= 8 * mm
 
     # ── ŻYCIORYS ──────────────────────────────────────────────────────────────────
     zyciorys = cv_data.get("zyciorys", "")
@@ -1795,15 +1769,15 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
-        f"Email nadawcy (kontekst):\n{body[:500]}\n\n"
+        f"Odpowiedź Tylera do nadawcy:\n{res_text[:2000]}\n\n"
+        f"Email nadawcy (kontekst):\n{body[:300]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+        f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
     raw = None
     for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 3000)
+        result = _call_groq_single(key, system_msg, user_msg, 4000)
         if result and result != "RATE_LIMIT":
             raw = result
             current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
@@ -1823,11 +1797,20 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        # wytnij JSON z ewentualnego otoczenia tekstowego
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
-        data = json.loads(clean.strip())
+        # Próba naprawy uciętego JSON — obetnij do ostatniego kompletnego ]
+        try:
+            data = json.loads(clean.strip())
+        except json.JSONDecodeError:
+            last_bracket = clean.rfind('"}')
+            if last_bracket > 0:
+                clean = clean[:last_bracket + 2] + ']}'  # zamknij pytania i root
+                current_app.logger.warning("[ankieta] JSON ucięty — próba naprawy")
+                data = json.loads(clean)
+            else:
+                raise
         if not isinstance(data, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
@@ -1999,49 +1982,19 @@ function sprawdz() {{
                 c.drawString(lm, y, line)
                 y -= 6 * mm
 
-            # Odpowiedzi — zawijanie tekstu
+            # Odpowiedzi
             c.setFont(FN, 9)
-            safe_w_odp = cw - 10 * mm
             for key, val in odp.items():
                 c.setFillColorRGB(0.2, 0.2, 0.2)
-                txt_odp = f"{key}) {val}"
-                words_odp = txt_odp.split()
-                line_odp = ""
-                for w in words_odp:
-                    test = (line_odp + " " + w).strip()
-                    if c.stringWidth(test, FN, 9) <= safe_w_odp:
-                        line_odp = test
-                    else:
-                        if line_odp:
-                            c.drawString(lm + 5 * mm, y, line_odp)
-                            y -= 4.5 * mm
-                            y = new_page_if_needed(y)
-                        line_odp = w
-                if line_odp:
-                    c.drawString(lm + 5 * mm, y, line_odp)
-                    y -= 4.5 * mm
-                    y = new_page_if_needed(y)
+                c.drawString(lm + 5 * mm, y, f"{key}) {val[:90]}")
+                y -= 4.5 * mm
+                y = new_page_if_needed(y)
 
-            # Wyjaśnienie — zawijanie tekstu
+            # Wyjaśnienie
             c.setFont(FN, 8)
             c.setFillColorRGB(0.5, 0.1, 0.1)
-            safe_w_wj = cw - 10 * mm
-            wyjasnienie_txt = f"► {wyjasnienie}"
-            words_wj = wyjasnienie_txt.split()
-            line_wj = ""
-            for w in words_wj:
-                test = (line_wj + " " + w).strip()
-                if c.stringWidth(test, FN, 8) <= safe_w_wj:
-                    line_wj = test
-                else:
-                    if line_wj:
-                        c.drawString(lm + 5 * mm, y, line_wj)
-                        y -= 4 * mm
-                        y = new_page_if_needed(y)
-                    line_wj = w
-            if line_wj:
-                c.drawString(lm + 5 * mm, y, line_wj)
-                y -= 7 * mm
+            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie[:100]}")
+            y -= 7 * mm
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -2231,17 +2184,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             # Rada Tylera
             c.setFont(FN, 8)
             c.setFillColorRGB(0.6, 0.1, 0.1)
-            _rt = f"Rada Tylera: {rada}"
-            _words = _rt.split()
-            _line = ""
-            for _w in _words:
-                _t = (_line + " " + _w).strip()
-                if c.stringWidth(_t, FN, 8) <= cw:
-                    _line = _t
-                else:
-                    if _line: c.drawString(lm, y, _line); y -= 3.5 * mm
-                    _line = _w
-            if _line: c.drawString(lm, y, _line)
+            c.drawString(lm, y, f"Rada Tylera: {rada[:90]}")
             y -= 4 * mm
 
             # Separator
@@ -2454,17 +2397,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for um in data.get("umiejetnosci_specjalne", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            # Zawijanie umiejętności
-            _words = f"◆ {um}".split()
-            _line = ""
-            for _w in _words:
-                _t = (_line + " " + _w).strip()
-                if c.stringWidth(_t, FN, 8) <= cw - 6 * mm:
-                    _line = _t
-                else:
-                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
-                    _line = _w
-            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
+            c.drawString(lm + 3 * mm, y, f"◆ {um[:80]}")
+            y -= 5 * mm
 
         y -= 3 * mm
 
@@ -2477,16 +2411,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for item in data.get("ekwipunek", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            _words = f"⚔ {item}".split()
-            _line = ""
-            for _w in _words:
-                _t = (_line + " " + _w).strip()
-                if c.stringWidth(_t, FN, 8) <= cw - 6 * mm:
-                    _line = _t
-                else:
-                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
-                    _line = _w
-            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
+            c.drawString(lm + 3 * mm, y, f"⚔ {item[:80]}")
+            y -= 5 * mm
 
         y -= 3 * mm
 
@@ -2496,17 +2422,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawString(lm, y, "QUEST GŁÓWNY:")
         c.setFont(FN, 8)
         c.setFillColorRGB(*DARK)
-        _quest = data.get("quest_glowny", "")
-        _qwords = _quest.split()
-        _qline = ""
-        for _w in _qwords:
-            _t = (_qline + " " + _w).strip()
-            if c.stringWidth(_t, FN, 8) <= cw - 30 * mm:
-                _qline = _t
-            else:
-                if _qline: c.drawString(lm + 30 * mm, y, _qline); y -= 4 * mm
-                _qline = _w
-        if _qline: c.drawString(lm + 30 * mm, y, _qline)
+        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", "")[:70])
         y -= 8 * mm
 
         # Cytat na dole
@@ -2716,8 +2632,8 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
                 c.setFillColorRGB(0.2, 0.2, 0.2)
                 c.drawString(lm, y, f"{label}:")
                 c.setFont(FN, 8)
-                used_dp = draw_wrap(str(val), lm + 40 * mm, y, max_w=cw - 40 * mm)
-                y -= max(used_dp, 5 * mm)
+                c.drawString(lm + 40 * mm, y, str(val)[:60])
+                y -= 5 * mm
         y -= 3 * mm
 
         # Powód przyjęcia
@@ -2739,16 +2655,8 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            _words = f"• {ob}".split()
-            _line = ""
-            for _w in _words:
-                _t = (_line + " " + _w).strip()
-                if c.stringWidth(_t, FN, 8) <= cw - 3 * mm:
-                    _line = _t
-                else:
-                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm; y = check_page(y)
-                    _line = _w
-            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
+            c.drawString(lm + 3 * mm, y, f"• {ob[:90]}")
+            y -= 5 * mm
         y -= 2 * mm
 
         # Diagnoza
@@ -2756,12 +2664,12 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         y = sekcja("Diagnoza", y)
         c.setFont(FB, 9)
         c.setFillColorRGB(0.6, 0.1, 0.1)
-        used = draw_wrap(data.get("diagnoza_wstepna", ""), lm, y); y -= used
+        c.drawString(lm, y, data.get("diagnoza_wstepna", "")[:80])
         y -= 5 * mm
         if data.get("diagnoza_dodatkowa"):
             c.setFont(FN, 8)
             c.setFillColorRGB(0.3, 0.3, 0.3)
-            used2 = draw_wrap(f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')}", lm, y); y -= used2
+            c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')[:70]}")
             y -= 5 * mm
         y -= 2 * mm
 
@@ -2772,16 +2680,8 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            _words = f"→ {zal}".split()
-            _line = ""
-            for _w in _words:
-                _t = (_line + " " + _w).strip()
-                if c.stringWidth(_t, FN, 8) <= cw - 3 * mm:
-                    _line = _t
-                else:
-                    if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm; y = check_page(y)
-                    _line = _w
-            if _line: c.drawString(lm + 3 * mm, y, _line); y -= 5 * mm
+            c.drawString(lm + 3 * mm, y, f"→ {zal[:90]}")
+            y -= 5 * mm
         y -= 2 * mm
 
         # Rokowanie
@@ -2789,7 +2689,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         y = sekcja("Rokowanie", y)
         c.setFont(FN, 8)
         c.setFillColorRGB(0.6, 0.1, 0.1)
-        used = draw_wrap(data.get("rokowanie", ""), lm, y, color=(0.6,0.1,0.1)); y -= used
+        c.drawString(lm, y, data.get("rokowanie", "")[:90])
         y -= 8 * mm
 
         # Podpis
@@ -2809,7 +2709,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y -= 4 * mm
             c.setFont(FN, 7)
             c.setFillColorRGB(0.5, 0.5, 0.5)
-            used = draw_wrap(f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')}", lm, y, font=FN, size=7, color=(0.5,0.5,0.5)); y -= used
+            c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')[:100]}")
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
