@@ -1707,54 +1707,54 @@ def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> 
     # ANKIETA HTML + PDF
     # ═══════════════════════════════════════════════════════════════════════════════
 
-    def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
-        """
-        Generuje ankietę wiedzy o odpowiedzi Tylera.
-        Zwraca (html_dict, pdf_dict) lub (None, None) przy błędzie.
-        """
-        try:
-            with open(ANKIETA_JSON_PATH, encoding="utf-8") as f:
-                cfg = json.load(f)
-        except Exception as e:
-            current_app.logger.warning("[ankieta] Brak JSON: %s", e)
-            return None, None
+def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
+    """
+    Generuje ankietę wiedzy o odpowiedzi Tylera.
+    Zwraca (html_dict, pdf_dict) lub (None, None) przy błędzie.
+    """
+    try:
+        with open(ANKIETA_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[ankieta] Brak JSON: %s", e)
+        return None, None
 
-        system_msg = cfg.get("system", "")
-        user_msg = (
-            f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
-            f"Email nadawcy (kontekst):\n{body[:500]}"
-        )
+    system_msg = cfg.get("system", "")
+    user_msg = (
+        f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
+        f"Email nadawcy (kontekst):\n{body[:500]}"
+    )
 
-        raw = None
-        for name, key in _get_groq_keys():
-            result = _call_groq_single(key, system_msg, user_msg, 3000)
-            if result and result != "RATE_LIMIT":
-                raw = result
-                current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
-                break
-            elif result == "RATE_LIMIT":
-                continue
+    raw = None
+    for name, key in _get_groq_keys():
+        result = _call_groq_single(key, system_msg, user_msg, 3000)
+        if result and result != "RATE_LIMIT":
+            raw = result
+            current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
+            break
+        elif result == "RATE_LIMIT":
+            continue
 
-        if not raw:
-            raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    if not raw:
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
 
-        if not raw:
-            current_app.logger.warning("[ankieta] Brak danych od AI")
-            return None, None
+    if not raw:
+        current_app.logger.warning("[ankieta] Brak danych od AI")
+        return None, None
 
-        try:
-            clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-            clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-            data = json.loads(clean.strip())
-            if not isinstance(data, dict):
-                raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
-        except Exception as e:
-            current_app.logger.warning("[ankieta] Błąd JSON: %s", e)
-            return None, None
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        data = json.loads(clean.strip())
+        if not isinstance(data, dict):
+            raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
+    except Exception as e:
+        current_app.logger.warning("[ankieta] Błąd JSON: %s", e)
+        return None, None
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        tytul = data.get("tytul", "Test Tylera Durdena")
-        pytania = data.get("pytania", [])
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tytul = data.get("tytul", "Test Tylera Durdena")
+    pytania = data.get("pytania", [])
 
     # ── Buduj HTML ────────────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
