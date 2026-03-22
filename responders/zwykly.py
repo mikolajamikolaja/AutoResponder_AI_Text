@@ -3014,7 +3014,10 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     )
 
     # ── 11. Zwróć wszystko ────────────────────────────────────────────────────
-    imie_nazwisko = (cv_data.get("imie_nazwisko", "CV") if cv_data else "CV")
+    if isinstance(cv_data, dict):
+        imie_nazwisko = cv_data.get("imie_nazwisko", "CV")
+    else:
+        imie_nazwisko = "CV"
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', imie_nazwisko)[:30]
 
     return {
