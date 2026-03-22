@@ -114,7 +114,7 @@ def build_html_reply_minimal(body_text: str) -> str:
     Wersja minimalistyczna — tylko tekst z pastelowymikolorami tła.
     Szybka i lekka dla szybszych emaili.
     """
-    body_text = body_text.replace("\n", "<br>")
+    body_text = body_text.replace("\n\n", "</p><p>").replace("\n", "<br>")
     
     return f"""<!DOCTYPE html>
 <html>
