@@ -256,7 +256,12 @@ def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
     fmt = data.get("formatowanie_adresata", "")
     if fmt:
         lines.append("### FORMATOWANIE ADRESATA (OBOWIĄZKOWE):")
-        lines.append(fmt)
+        # fmt może być dict (nowy JSON) lub str (stary format)
+        if isinstance(fmt, dict):
+            for k, v in fmt.items():
+                lines.append(f"{k}: {v}")
+        else:
+            lines.append(fmt)
         lines.append("")
 
     # ── Końcowe przypomnienie ─────────────────────────────────────────────────
