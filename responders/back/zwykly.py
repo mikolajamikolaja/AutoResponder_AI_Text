@@ -64,59 +64,6 @@ PLAKAT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_plakat.json")
 GRA_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_gra.json")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# POMOCNIK: rejestracja czcionek z polskimi znakami
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _register_fonts() -> tuple:
-    """
-    Rejestruje czcionki DejaVuSans (obsługują polskie znaki) w reportlab.
-    Szuka najpierw w katalogu fonts/ projektu, potem w ścieżkach systemowych.
-    Zwraca (FN, FB) — nazwy czcionek normalnej i pogrubionej.
-    Bezpieczne do wielokrotnego wywołania (reportlab ignoruje duplikaty).
-    """
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-
-    FONT_DIR = os.path.join(BASE_DIR, "fonts")
-
-    # Kolejność szukania: projekt → system Ubuntu/Debian → system ogólny
-    NORMAL_PATHS = [
-        os.path.join(FONT_DIR, "DejaVuSans.ttf"),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-    ]
-    BOLD_PATHS = [
-        os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf"),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    ]
-
-    FN, FB = "Helvetica", "Helvetica-Bold"
-
-    for path in NORMAL_PATHS:
-        if os.path.exists(path):
-            try:
-                pdfmetrics.registerFont(TTFont("DejaVuSans", path))
-                FN = "DejaVuSans"
-                break
-            except Exception:
-                continue
-
-    for path in BOLD_PATHS:
-        if os.path.exists(path):
-            try:
-                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", path))
-                FB = "DejaVuSans-Bold"
-                break
-            except Exception:
-                continue
-
-    return FN, FB
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # STAŁE API
 # ─────────────────────────────────────────────────────────────────────────────
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -205,17 +152,8 @@ def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
     Obsługuje zarówno stary format (instrukcje/zasady_tylera/manifesty)
     jak i nowy (tyler_zasady_OBOWIAZKOWE / tyler_manifesty_OBOWIAZKOWE).
     Obsługuje previous_body — poprzednią wiadomość od nadawcy.
-    Hard constraints umieszczone NA POCZĄTKU — żeby nie zostały ucięte przy długich emailach.
     """
     lines = []
-
-    # ── Hard constraints PIERWSZE — krytyczne zakazy na samym początku ────────
-    hard = data.get("hard_constraints", [])
-    if hard:
-        lines.append("### BEZWZGLĘDNE ZAKAZY I WYMOGI — NARUSZENIE = BŁĘDNA ODPOWIEDŹ:")
-        for h in hard:
-            lines.append(f"- {h}")
-        lines.append("")
 
     # ── System ───────────────────────────────────────────────────────────────
     lines.append(data.get("system", ""))
@@ -244,6 +182,14 @@ def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
     lines.append("### OBECNA WIADOMOŚĆ OD NADAWCY (na jej podstawie generuj WSZYSTKO):")
     lines.append(body)
     lines.append("")
+
+    # ── Hard constraints ──────────────────────────────────────────────────────
+    hard = data.get("hard_constraints", [])
+    if hard:
+        lines.append("### BEZWZGLĘDNE ZAKAZY I WYMOGI (naruszenie = błędna odpowiedź):")
+        for h in hard:
+            lines.append(f"- {h}")
+        lines.append("")
 
     # ── Sokrates ──────────────────────────────────────────────────────────────
     sokrates = (
@@ -1161,8 +1107,7 @@ def _build_debug_txt(
     return {
         "base64": b64,
         "content_type": "text/plain",
-        "filename": "_.txt",  # stała nazwa — GAS szuka tego pliku po nazwie
-        "filename_drive": f"zwykly_debug_{ts}.txt",  # na Drive używa znacznika czasu
+        "filename": f"zwykly_debug_{ts}.txt",
     }
 
 
@@ -1382,8 +1327,20 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         current_app.logger.error("[cv-pdf] Brak reportlab: %s", e)
         return None
 
-    FN, FB = _register_fonts()
-    current_app.logger.info("[cv-pdf] Czcionki: FN=%s FB=%s", FN, FB)
+    FONT_DIR = os.path.join(BASE_DIR, "fonts")
+    FN = "Helvetica"
+    FB = "Helvetica-Bold"
+    try:
+        np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+        bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+        if os.path.exists(np_):
+            pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+            FN = "DejaVuSans"
+        if os.path.exists(bp_):
+            pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+            FB = "DejaVuSans-Bold"
+    except Exception as e:
+        current_app.logger.warning("[cv-pdf] Czcionki: %s — używam Helvetica", e)
 
     buf = io.BytesIO()
     W, H = A4
@@ -1603,12 +1560,11 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         y = section_header("Życiorys", y)
         c.setFont(FN, 10)
         c.setFillColorRGB(*DARK)
-        safe_w = col_width - 4 * mm  # margines bezpieczeństwa dla polskich znaków
         words = zyciorys.split()
         line = ""
         for w in words:
             test = (line + " " + w).strip()
-            if c.stringWidth(test, FN, 10) <= safe_w:
+            if c.stringWidth(test, FN, 10) <= col_width:
                 line = test
             else:
                 c.drawString(left_margin, y, line)
@@ -1628,12 +1584,11 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         y -= 3 * mm
         c.setFont(FN, 8)
         c.setFillColorRGB(*RED)
-        safe_w8 = col_width - 4 * mm
         words = cytat.split()
         line = ""
         for w in words:
             test = (line + " " + w).strip()
-            if c.stringWidth(test, FN, 8) <= safe_w8:
+            if c.stringWidth(test, FN, 8) <= col_width:
                 line = test
             else:
                 c.drawString(left_margin, y, f"— {line}")
@@ -1789,23 +1744,14 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         current_app.logger.warning("[ankieta] Brak danych od AI")
         return None, None
 
-    current_app.logger.info("[ankieta] raw AI (pierwsze 300 znaków): %.300s", raw)
-
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        # wytnij JSON z ewentualnego otoczenia tekstowego
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
-        if not data.get("pytania"):
-            current_app.logger.warning("[ankieta] JSON OK ale brak pytań — raw: %.200s", raw)
-            return None, None
     except Exception as e:
-        current_app.logger.warning("[ankieta] Błąd JSON: %s | raw: %.200s", e, raw)
+        current_app.logger.warning("[ankieta] Błąd JSON: %s", e)
         return None, None
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1844,13 +1790,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         cytat = p.get("cytat_tylera", "")
         pytanie = p.get("pytanie", "")
         odp = p.get("odpowiedzi", {})
-        if isinstance(odp, list):
-            # model zwrócił listę [{"klucz":"a","tresc":"..."}] zamiast {"a":"..."}
-            odp = {
-                str(item.get("klucz", item.get("key", chr(97 + i)))): str(item.get("tresc", item.get("text", "")))
-                for i, item in enumerate(odp)
-            }
-        elif not isinstance(odp, dict):
+        if not isinstance(odp, dict):
             odp = {}
         wyjasnienie = p.get("wyjasnienie", "")
         html += f"""
@@ -1910,7 +1850,19 @@ function sprawdz() {{
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
 
-        FN, FB = _register_fonts()
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
 
         buf = io.BytesIO()
         W, H = A4
@@ -2018,12 +1970,10 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             range(7)]
 
     system_msg = cfg.get("system", "")
-    daty_str = "\n".join(f"Dzień {i+1} ({d})" for i, d in enumerate(daty))
     user_msg = (
         f"Email nadawcy:\n{body[:800]}\n\n"
         f"Odpowiedź Tylera (kontekst):\n{res_text[:1000]}\n\n"
-        f"WAŻNE: W polu 'data' każdego dnia użyj DOKŁADNIE tych dat (w kolejności):\n{daty_str}\n\n"
-        f"Wygeneruj horoskop na 7 dni. Zwróć TYLKO czysty JSON bez markdown."
+        f"Daty kolejnych 7 dni: {', '.join(daty)}"
     )
 
     raw = None
@@ -2040,22 +1990,14 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
     if not raw:
         return None
 
-    current_app.logger.info("[horoskop] raw AI (pierwsze 300 znaków): %.300s", raw)
-
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}")
-        if not data.get("dni"):
-            current_app.logger.warning("[horoskop] JSON OK ale brak dni — raw: %.200s", raw)
-            return None
     except Exception as e:
-        current_app.logger.warning("[horoskop] Błąd JSON: %s | raw: %.200s", e, raw)
+        current_app.logger.warning("[horoskop] Błąd JSON: %s", e)
         return None
 
     try:
@@ -2065,7 +2007,19 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
 
-        FN, FB = _register_fonts()
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
 
         buf = io.BytesIO()
         W, H = A4
@@ -2219,25 +2173,16 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     if not raw:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[karta-rpg] Brak odpowiedzi od AI")
         return None
-
-    current_app.logger.info("[karta-rpg] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[karta-rpg] Oczekiwano dict, dostałem {type(data).__name__}")
-        if not data.get("nazwa_postaci") and not data.get("statystyki"):
-            current_app.logger.warning("[karta-rpg] JSON pusty — raw: %.200s", raw)
-            return None
     except Exception as e:
-        current_app.logger.warning("[karta-rpg] Błąd JSON: %s | raw: %.200s", e, raw)
+        current_app.logger.warning("[karta-rpg] Błąd JSON: %s", e)
         return None
 
     try:
@@ -2247,7 +2192,19 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
 
-        FN, FB = _register_fonts()
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
 
         buf = io.BytesIO()
         W, H = A4
@@ -2424,25 +2381,16 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
                 continue
 
     if not raw:
-        current_app.logger.warning("[raport] Brak odpowiedzi od AI")
         return None
-
-    current_app.logger.info("[raport] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[raport] Oczekiwano dict, dostałem {type(data).__name__}")
-        if not data.get("diagnoza_wstepna") and not data.get("dane_pacjenta"):
-            current_app.logger.warning("[raport] JSON pusty — raw: %.200s", raw)
-            return None
     except Exception as e:
-        current_app.logger.warning("[raport] Błąd JSON: %s | raw: %.200s", e, raw)
+        current_app.logger.warning("[raport] Błąd JSON: %s", e)
         return None
 
     try:
@@ -2452,7 +2400,19 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
 
-        FN, FB = _register_fonts()
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
 
         buf = io.BytesIO()
         W, H = A4
@@ -2660,25 +2620,16 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     if not raw:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[plakat] Brak odpowiedzi od AI")
         return None
-
-    current_app.logger.info("[plakat] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}")
-        if not data.get("glowne_zdanie"):
-            current_app.logger.warning("[plakat] JSON bez glowne_zdanie — raw: %.200s", raw)
-            return None
     except Exception as e:
-        current_app.logger.warning("[plakat] Błąd JSON: %s | raw: %.200s", e, raw)
+        current_app.logger.warning("[plakat] Błąd JSON: %s", e)
         return None
 
     glowne = data.get("glowne_zdanie", "Nie jesteś wyjątkowy.")
@@ -2780,25 +2731,16 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
     if not raw:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[gra] Brak odpowiedzi od AI")
         return None
-
-    current_app.logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
         data = json.loads(clean.strip())
         if not isinstance(data, dict):
             raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
-        if not data.get("pytania"):
-            current_app.logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
-            return None
     except Exception as e:
-        current_app.logger.warning("[gra] Błąd JSON: %s | raw: %.200s", e, raw)
+        current_app.logger.warning("[gra] Błąd JSON: %s", e)
         return None
 
     tytul = data.get("tytul_gry", "Gra Tylera Durdena")
@@ -2825,12 +2767,7 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         sytuacja = p.get("sytuacja", "")
         pytanie_txt = p.get("pytanie", "")
         odp = p.get("odpowiedzi", {})
-        if isinstance(odp, list):
-            odp = {
-                str(item.get("klucz", item.get("key", chr(97 + i)))): str(item.get("tresc", item.get("text", "")))
-                for i, item in enumerate(odp)
-            }
-        elif not isinstance(odp, dict):
+        if not isinstance(odp, dict):
             odp = {}
         pytania_html += f"""
 <div class="pytanie" id="p{nr}" style="display:none">
