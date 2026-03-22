@@ -26,14 +26,14 @@
   },
 
   "panel_actions_additional": [
-    "Tyler releasing steering wheel in speeding car, smiling, headlights incoming",
-    "Tyler standing in front of burning strawberry field, arms open, liberated",
-    "Tyler forcing Raymond K. Hessel moment — gun to temple of ordinary person",
-    "Tyler in flooded basement surrounded by floating consumer goods, laughing",
-    "Tyler at bottom of a pit looking up at a tiny square of grey sky — rock bottom",
-    "Tyler reading from a burning book in an empty church, congregation of rats"
+    "Tyler releasing steering wheel in speeding car, smiling, headlights incoming, reckless liberation",
+    "Tyler standing in front of a massive burning pile of [USER_OBJECTS], arms open wide, face turned to black smoke",
+    "Tyler forcing Raymond K. Hessel moment — holding [USER_OBJECTS] to the temple of a terrified person in a dark alley",
+    "Tyler in a flooded basement surrounded by floating [USER_OBJECTS] and consumer goods, laughing manically",
+    "Tyler at the bottom of a concrete pit looking up at a tiny square of grey sky — hitting rock bottom",
+    "Tyler destroying [USER_OBJECTS] with a sledgehammer in an abandoned industrial warehouse, sparks flying",
+    "Tyler sitting in a grimy armchair surrounded by stacks of [USER_OBJECTS], holding a chemical burn mark on his hand"
   ],
-
   "schnell_technical_parameters": {
     "aspect_ratio": "3:1",
     "steps_optimized": "4-8 steps",

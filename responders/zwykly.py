@@ -55,7 +55,13 @@ PROMPT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_prompt.json")
 CV_CONTENT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_cv_content.json")
 CV_PHOTO_FLUX_PATH = os.path.join(PROMPTS_DIR, "zwykly_cv_photo_flux.json")
 ICON_FLUX_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_icon_flux.json")
-STYLE_JS_PATH = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
+STYLE_JS_PATH        = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
+ANKIETA_JSON_PATH    = os.path.join(PROMPTS_DIR, "zwykly_ankieta.json")
+HOROSKOP_JSON_PATH   = os.path.join(PROMPTS_DIR, "zwykly_horoskop.json")
+KARTA_RPG_JSON_PATH  = os.path.join(PROMPTS_DIR, "zwykly_karta_rpg.json")
+RAPORT_JSON_PATH     = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
+PLAKAT_JSON_PATH     = os.path.join(PROMPTS_DIR, "zwykly_plakat.json")
+GRA_JSON_PATH        = os.path.join(PROMPTS_DIR, "zwykly_gra.json")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STAŁE API
@@ -271,55 +277,41 @@ def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
 
 def _call_groq(system: str, user: str, max_tokens: int = 6000) -> str | None:
     """
-    Wywołuje Groq API (llama-3.3-70b-versatile).
-    Zwraca tekst odpowiedzi lub None przy błędzie.
+    Wywołuje Groq API z rotacją wszystkich kluczy.
+    Przy 429 przechodzi do następnego klucza.
     """
-    api_key = os.getenv("API_KEY_GROQ", "").strip()
-    if not api_key:
-        current_app.logger.warning("[groq] Brak API_KEY_GROQ w env")
+    groq_keys = _get_groq_keys()
+    if not groq_keys:
+        current_app.logger.warning("[groq] Brak kluczy w env")
         return None
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.9,
-    }
-    try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
-        if resp.status_code == 200:
-            result = resp.json()["choices"][0]["message"]["content"].strip()
-            current_app.logger.info("[groq] OK (%d znaków)", len(result))
+    current_app.logger.info("[groq] Dostępnych kluczy: %d", len(groq_keys))
+    for name, key in groq_keys:
+        result = _call_groq_single(key, system, user, max_tokens)
+        if result and result != "RATE_LIMIT":
+            current_app.logger.info("[groq] OK klucz=%s (%d znaków)", name, len(result))
             return result
-        current_app.logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        current_app.logger.warning("[groq] Wyjątek: %s", str(e)[:120])
+        elif result == "RATE_LIMIT":
+            current_app.logger.warning("[groq] 429 klucz=%s → następny", name)
+            continue
+    current_app.logger.error("[groq] Wszystkie %d kluczy wyczerpane", len(groq_keys))
     return None
 
 
 def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
     """
-    Groq PIERWSZY → DeepSeek FALLBACK.
+    Groq rotacja (wszystkie klucze) → DeepSeek FALLBACK.
     Zwraca (tekst_odpowiedzi, nazwa_providera).
     """
     result = _call_groq(system, user, max_tokens=max_tokens)
     if result:
         return result, "groq"
-
-    current_app.logger.warning("[zwykly] Groq zawiódł → próbuję DeepSeek")
+    current_app.logger.warning("[zwykly] Wszystkie klucze Groq wyczerpane → DeepSeek")
     result = call_deepseek(system, user, MODEL_TYLER)
     if result:
         return result, "deepseek"
-
-    current_app.logger.error("[zwykly] Oba modele zawiodły!")
+    current_app.logger.error("[zwykly] Groq i DeepSeek zawiodły!")
     return None, "none"
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1657,6 +1649,1225 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
     }
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROTACJA KLUCZY GROQ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_groq_keys() -> list:
+    """Zbiera wszystkie klucze Groq z env w kolejności."""
+    keys = []
+    k = os.getenv("API_KEY_GROQ", "").strip()
+    if k:
+        keys.append(("API_KEY_GROQ", k))
+    for i in range(1, 10):
+        name = f"API_KEY_GROQ_{i:02d}"
+        k = os.getenv(name, "").strip()
+        if k:
+            keys.append((name, k))
+    for i in range(1, 21):
+        name = f"API_KEY_GROQ{i}"
+        k = os.getenv(name, "").strip()
+        if k:
+            keys.append((name, k))
+    return keys
+
+
+def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> str | None:
+    """Wywołuje Groq z jednym kluczem. Zwraca tekst lub None."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user}
+        ],
+        "max_tokens":  max_tokens,
+        "temperature": 0.9,
+    }
+    try:
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        elif resp.status_code == 429:
+            return "RATE_LIMIT"
+        else:
+            current_app.logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:100])
+            return None
+    except Exception as e:
+        current_app.logger.warning("[groq] Wyjątek: %s", str(e)[:80])
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ANKIETA HTML + PDF
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
+    """
+    Generuje ankietę wiedzy o odpowiedzi Tylera.
+    Zwraca (html_dict, pdf_dict) lub (None, None) przy błędzie.
+    """
+    try:
+        with open(ANKIETA_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[ankieta] Brak JSON: %s", e)
+        return None, None
+
+    system_msg = cfg.get("system", "")
+    user_msg = (
+        f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
+        f"Email nadawcy (kontekst):\n{body[:500]}"
+    )
+
+    raw = None
+    for name, key in _get_groq_keys():
+        result = _call_groq_single(key, system_msg, user_msg, 3000)
+        if result and result != "RATE_LIMIT":
+            raw = result
+            current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
+            break
+        elif result == "RATE_LIMIT":
+            continue
+
+    if not raw:
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+
+    if not raw:
+        current_app.logger.warning("[ankieta] Brak danych od AI")
+        return None, None
+
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        data = json.loads(clean.strip())
+    except Exception as e:
+        current_app.logger.warning("[ankieta] Błąd JSON: %s", e)
+        return None, None
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tytul = data.get("tytul", "Test Tylera Durdena")
+    pytania = data.get("pytania", [])
+
+    # ── Buduj HTML ────────────────────────────────────────────────────────────
+    html = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>{tytul}</title>
+<style>
+  body {{ font-family: 'Courier New', monospace; background: #0a0a0a; color: #e0d0b0; margin: 0; padding: 20px; }}
+  h1 {{ color: #8b0000; text-align: center; font-size: 1.8em; border-bottom: 2px solid #8b0000; padding-bottom: 10px; }}
+  .intro {{ color: #888; font-style: italic; text-align: center; margin: 20px 0; }}
+  .pytanie {{ background: #111; border-left: 4px solid #8b0000; margin: 20px 0; padding: 15px; border-radius: 0 4px 4px 0; }}
+  .pytanie h3 {{ color: #c8b89a; margin: 0 0 8px 0; font-size: 0.9em; }}
+  .cytat {{ color: #666; font-style: italic; font-size: 0.85em; margin-bottom: 10px; }}
+  .opcje label {{ display: block; margin: 8px 0; cursor: pointer; }}
+  .opcje input {{ margin-right: 8px; accent-color: #8b0000; }}
+  .wyjasnienie {{ display: none; background: #1a0a0a; border: 1px solid #8b0000; padding: 10px; margin-top: 10px; font-size: 0.85em; color: #c8b89a; }}
+  button {{ background: #8b0000; color: white; border: none; padding: 12px 30px; font-size: 1em; cursor: pointer; margin: 20px auto; display: block; font-family: 'Courier New', monospace; }}
+  button:hover {{ background: #a00000; }}
+  #wynik {{ text-align: center; font-size: 1.2em; color: #8b0000; margin: 20px; display: none; }}
+  .nr {{ color: #8b0000; font-weight: bold; }}
+</style>
+</head>
+<body>
+<h1>{tytul}</h1>
+<p class="intro">{data.get("wprowadzenie", "")}</p>
+<form id="quiz">
+"""
+    for p in pytania:
+        nr = p.get("nr", "?")
+        cytat = p.get("cytat_tylera", "")
+        pytanie = p.get("pytanie", "")
+        odp = p.get("odpowiedzi", {})
+        wyjasnienie = p.get("wyjasnienie", "")
+        html += f"""
+<div class="pytanie">
+  <h3><span class="nr">Pytanie {nr}:</span> {pytanie}</h3>
+  <div class="cytat">"{cytat}"</div>
+  <div class="opcje">
+    <label><input type="radio" name="q{nr}" value="a"> a) {odp.get("a", "")}</label>
+    <label><input type="radio" name="q{nr}" value="b"> b) {odp.get("b", "")}</label>
+    <label><input type="radio" name="q{nr}" value="c"> c) {odp.get("c", "")}</label>
+  </div>
+  <div class="wyjasnienie" id="w{nr}">{wyjasnienie}</div>
+</div>"""
+
+    zakonczenie = data.get("zakonczenie", "— Tyler Durden")
+    html += f"""
+</form>
+<button onclick="sprawdz()">Sprawdź wynik</button>
+<div id="wynik"></div>
+<p style="text-align:center;color:#666;font-style:italic;margin-top:40px">{zakonczenie}</p>
+<script>
+function sprawdz() {{
+  var poprawne = 0;
+  var total = {len(pytania)};
+  for (var i = 1; i <= total; i++) {{
+    var sel = document.querySelector('input[name="q'+i+'"]:checked');
+    var wyn = document.getElementById('w'+i);
+    if (sel) {{
+      if (sel.value === 'b') {{ poprawne++; wyn.style.background='#0a1a0a'; }}
+      else {{ wyn.style.background='#1a0a0a'; }}
+      wyn.style.display = 'block';
+    }}
+  }}
+  var wynikDiv = document.getElementById('wynik');
+  wynikDiv.style.display = 'block';
+  wynikDiv.innerHTML = 'Wynik: ' + poprawne + '/' + total + ' — ' + 
+    (poprawne < 4 ? 'Nie rozumiesz nic. Typowe.' : 
+     poprawne < 7 ? 'Trochę rozumiesz. To niepokojące.' : 
+     'Rozumiesz Tylera. Powinieneś się tym martwić.');
+}}
+</script>
+</body>
+</html>"""
+
+    html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
+    html_dict = {
+        "base64": html_b64,
+        "content_type": "text/html",
+        "filename": f"ankieta_{ts}.html",
+    }
+
+    # ── Buduj PDF ─────────────────────────────────────────────────────────────
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
+
+        buf = io.BytesIO()
+        W, H = A4
+        c = rl_canvas.Canvas(buf, pagesize=A4)
+        lm, rm = 15*mm, W - 15*mm
+        cw = rm - lm
+
+        def new_page_if_needed(y, needed=25*mm):
+            if y < needed:
+                c.showPage()
+                return H - 20*mm
+            return y
+
+        # Nagłówek
+        c.setFillColorRGB(0.05, 0.05, 0.05)
+        c.rect(0, H - 30*mm, W, 30*mm, fill=1, stroke=0)
+        c.setFont(FB, 14)
+        c.setFillColorRGB(1, 1, 1)
+        c.drawCentredString(W/2, H - 15*mm, tytul)
+        c.setFont(FN, 9)
+        c.setFillColorRGB(0.7, 0.7, 0.7)
+        c.drawCentredString(W/2, H - 23*mm, data.get("wprowadzenie", "")[:80])
+
+        y = H - 40*mm
+
+        for p in pytania:
+            nr = p.get("nr", "?")
+            pytanie_txt = p.get("pytanie", "")
+            odp = p.get("odpowiedzi", {})
+            wyjasnienie = p.get("wyjasnienie", "")
+
+            y = new_page_if_needed(y, 45*mm)
+
+            # Numer pytania
+            c.setFont(FB, 10)
+            c.setFillColorRGB(0.7, 0.1, 0.1)
+            c.drawString(lm, y, f"Pytanie {nr}:")
+            y -= 5*mm
+
+            # Treść pytania
+            c.setFont(FN, 10)
+            c.setFillColorRGB(0.1, 0.1, 0.1)
+            words = pytanie_txt.split()
+            line = ""
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, FN, 10) <= cw:
+                    line = test
+                else:
+                    c.drawString(lm, y, line)
+                    y -= 5*mm
+                    line = w
+                    y = new_page_if_needed(y)
+            if line:
+                c.drawString(lm, y, line)
+                y -= 6*mm
+
+            # Odpowiedzi
+            c.setFont(FN, 9)
+            for key, val in odp.items():
+                c.setFillColorRGB(0.2, 0.2, 0.2)
+                c.drawString(lm + 5*mm, y, f"{key}) {val[:90]}")
+                y -= 4.5*mm
+                y = new_page_if_needed(y)
+
+            # Wyjaśnienie
+            c.setFont(FN, 8)
+            c.setFillColorRGB(0.5, 0.1, 0.1)
+            c.drawString(lm + 5*mm, y, f"► {wyjasnienie[:100]}")
+            y -= 7*mm
+
+        c.save()
+        pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        pdf_dict = {
+            "base64": pdf_b64,
+            "content_type": "application/pdf",
+            "filename": f"ankieta_{ts}.pdf",
+        }
+        current_app.logger.info("[ankieta] OK: %d pytań", len(pytania))
+        return html_dict, pdf_dict
+
+    except Exception as e:
+        current_app.logger.error("[ankieta] Błąd PDF: %s", e)
+        return html_dict, None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HOROSKOP PDF — styl gazety lat 60
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_horoskop(body: str, res_text: str) -> dict | None:
+    """Generuje horoskop nihilistyczny na 7 dni w stylu gazety lat 60."""
+    try:
+        with open(HOROSKOP_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[horoskop] Brak JSON: %s", e)
+        return None
+
+    # Oblicz daty
+    today = datetime.now()
+    daty = [(today.replace(day=today.day) + __import__("datetime").timedelta(days=i)).strftime("%d.%m.%Y") for i in range(7)]
+
+    system_msg = cfg.get("system", "")
+    user_msg = (
+        f"Email nadawcy:\n{body[:800]}\n\n"
+        f"Odpowiedź Tylera (kontekst):\n{res_text[:1000]}\n\n"
+        f"Daty kolejnych 7 dni: {', '.join(daty)}"
+    )
+
+    raw = None
+    for name, key in _get_groq_keys():
+        result = _call_groq_single(key, system_msg, user_msg, 2500)
+        if result and result != "RATE_LIMIT":
+            raw = result
+            break
+        elif result == "RATE_LIMIT":
+            continue
+
+    if not raw:
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    if not raw:
+        return None
+
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        data = json.loads(clean.strip())
+    except Exception as e:
+        current_app.logger.warning("[horoskop] Błąd JSON: %s", e)
+        return None
+
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
+
+        buf = io.BytesIO()
+        W, H = A4
+        c = rl_canvas.Canvas(buf, pagesize=A4)
+        lm, rm = 12*mm, W - 12*mm
+        cw = rm - lm
+
+        def wrap_draw(txt, x, y, font, size, max_w, color=(0.1,0.1,0.1)):
+            c.setFont(font, size)
+            c.setFillColorRGB(*color)
+            words = str(txt).split()
+            line = ""
+            lines_drawn = 0
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_w:
+                    line = test
+                else:
+                    c.drawString(x, y - lines_drawn*(size+2), line)
+                    lines_drawn += 1
+                    line = w
+            if line:
+                c.drawString(x, y - lines_drawn*(size+2), line)
+                lines_drawn += 1
+            return lines_drawn * (size + 2)
+
+        # ── NAGŁÓWEK gazety ───────────────────────────────────────────────────
+        c.setFillColorRGB(0.05, 0.05, 0.05)
+        c.rect(0, H-28*mm, W, 28*mm, fill=1, stroke=0)
+
+        c.setFont(FB, 20)
+        c.setFillColorRGB(1, 1, 1)
+        c.drawCentredString(W/2, H-14*mm, "GAZETA NIHILISTYCZNA")
+
+        c.setFont(FN, 8)
+        c.setFillColorRGB(0.7, 0.7, 0.7)
+        c.drawCentredString(W/2, H-21*mm, f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia")
+
+        # Linia dekoracyjna
+        c.setStrokeColorRGB(0.7, 0.1, 0.1)
+        c.setLineWidth(2)
+        c.line(lm, H-30*mm, rm, H-30*mm)
+
+        # Tytuł horoskopu
+        znak = data.get("znak_zodiaku", "Nieznany")
+        motto = data.get("motto", "")
+        c.setFont(FB, 13)
+        c.setFillColorRGB(0.6, 0.1, 0.1)
+        c.drawCentredString(W/2, H-37*mm, f"HOROSKOP: {znak.upper()}")
+        c.setFont(FN, 9)
+        c.setFillColorRGB(0.3, 0.3, 0.3)
+        c.drawCentredString(W/2, H-43*mm, motto[:80])
+
+        c.setStrokeColorRGB(0.3, 0.3, 0.3)
+        c.setLineWidth(0.5)
+        c.line(lm, H-46*mm, rm, H-46*mm)
+
+        y = H - 52*mm
+        dni = data.get("dni", [])
+
+        for dzien in dni:
+            if y < 30*mm:
+                c.showPage()
+                y = H - 20*mm
+
+            naglowek = dzien.get("naglowek", "").upper()
+            data_dnia = dzien.get("data", "")
+            tresc = dzien.get("tresc", "")
+            rada = dzien.get("rada_tylera", "")
+
+            # Data
+            c.setFont(FB, 8)
+            c.setFillColorRGB(0.5, 0.5, 0.5)
+            c.drawString(lm, y, data_dnia)
+            y -= 4*mm
+
+            # Nagłówek dnia — styl tabloidu
+            c.setFont(FB, 11)
+            c.setFillColorRGB(0.05, 0.05, 0.05)
+            h = wrap_draw(naglowek, lm, y, FB, 11, cw, (0.05,0.05,0.05))
+            y -= h + 1*mm
+
+            # Treść
+            h = wrap_draw(tresc, lm, y, FN, 9, cw, (0.2,0.2,0.2))
+            y -= h + 1*mm
+
+            # Rada Tylera
+            c.setFont(FN, 8)
+            c.setFillColorRGB(0.6, 0.1, 0.1)
+            c.drawString(lm, y, f"Rada Tylera: {rada[:90]}")
+            y -= 4*mm
+
+            # Separator
+            c.setStrokeColorRGB(0.8, 0.8, 0.8)
+            c.setLineWidth(0.3)
+            c.line(lm, y, rm, y)
+            y -= 4*mm
+
+        # Przepowiednia ogólna
+        if y < 30*mm:
+            c.showPage()
+            y = H - 20*mm
+
+        c.setStrokeColorRGB(0.6, 0.1, 0.1)
+        c.setLineWidth(1)
+        c.line(lm, y+2*mm, rm, y+2*mm)
+        y -= 4*mm
+        c.setFont(FB, 10)
+        c.setFillColorRGB(0.6, 0.1, 0.1)
+        c.drawString(lm, y, "PRZEPOWIEDNIA TYGODNIA:")
+        y -= 5*mm
+        prz = data.get("przepowiednia_ogolna", "")
+        wrap_draw(prz, lm, y, FN, 9, cw, (0.1,0.1,0.1))
+
+        c.save()
+        pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        current_app.logger.info("[horoskop] OK")
+        return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"horoskop_{ts}.pdf"}
+
+    except Exception as e:
+        current_app.logger.error("[horoskop] Błąd PDF: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# KARTA RPG PDF
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_karta_rpg(body: str, res_text: str) -> dict | None:
+    """Generuje kartę postaci RPG."""
+    try:
+        with open(KARTA_RPG_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[karta-rpg] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    user_msg = f"Email:\n{body[:800]}\n\nOdpowiedź Tylera:\n{res_text[:800]}"
+
+    raw = None
+    for name, key in _get_groq_keys():
+        result = _call_groq_single(key, system_msg, user_msg, 2000)
+        if result and result != "RATE_LIMIT":
+            raw = result
+            break
+        elif result == "RATE_LIMIT":
+            continue
+    if not raw:
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    if not raw:
+        return None
+
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        data = json.loads(clean.strip())
+    except Exception as e:
+        current_app.logger.warning("[karta-rpg] Błąd JSON: %s", e)
+        return None
+
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
+
+        buf = io.BytesIO()
+        W, H = A4
+        c = rl_canvas.Canvas(buf, pagesize=A4)
+        lm, rm = 15*mm, W - 15*mm
+        cw = rm - lm
+        RED = (0.6, 0.1, 0.1)
+        DARK = (0.1, 0.1, 0.1)
+        GRAY = (0.4, 0.4, 0.4)
+
+        # Obramowanie karty
+        c.setStrokeColorRGB(*RED)
+        c.setLineWidth(3)
+        c.rect(8*mm, 8*mm, W-16*mm, H-16*mm, fill=0, stroke=1)
+        c.setLineWidth(1)
+        c.rect(10*mm, 10*mm, W-20*mm, H-20*mm, fill=0, stroke=1)
+
+        # Nagłówek
+        c.setFillColorRGB(*DARK)
+        c.rect(10*mm, H-40*mm, W-20*mm, 30*mm, fill=1, stroke=0)
+        c.setFont(FB, 8)
+        c.setFillColorRGB(0.6, 0.6, 0.6)
+        c.drawCentredString(W/2, H-18*mm, "KARTA POSTACI — PROJEKT TYLER DURDEN")
+        c.setFont(FB, 18)
+        c.setFillColorRGB(1, 1, 1)
+        c.drawCentredString(W/2, H-28*mm, data.get("nazwa_postaci", "ANONIM")[:30])
+        c.setFont(FN, 10)
+        c.setFillColorRGB(0.7, 0.5, 0.5)
+        c.drawCentredString(W/2, H-35*mm, data.get("klasa_postaci", "")[:50])
+
+        y = H - 50*mm
+
+        # Poziom
+        poziom = data.get("poziom", "?")
+        c.setFont(FB, 11)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, f"POZIOM: {poziom}")
+        c.setStrokeColorRGB(*RED)
+        c.setLineWidth(0.5)
+        c.line(lm, y-2, rm, y-2)
+        y -= 8*mm
+
+        # Statystyki — 2 kolumny
+        stats = data.get("statystyki", {})
+        stat_list = list(stats.items())
+        half = len(stat_list) // 2 + len(stat_list) % 2
+        col1 = stat_list[:half]
+        col2 = stat_list[half:]
+        col_w = cw / 2 - 5*mm
+
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "STATYSTYKI")
+        y -= 5*mm
+
+        y_stat = y
+        c.setFont(FN, 8)
+        for i, (k, v) in enumerate(col1):
+            c.setFillColorRGB(*DARK)
+            label = k.replace("_", " ").upper()
+            c.setFont(FB, 7)
+            c.drawString(lm, y_stat - i*9, label + ":")
+            c.setFont(FN, 7)
+            c.setFillColorRGB(*GRAY)
+            c.drawString(lm, y_stat - i*9 - 4, str(v)[:50])
+
+        for i, (k, v) in enumerate(col2):
+            c.setFillColorRGB(*DARK)
+            label = k.replace("_", " ").upper()
+            c.setFont(FB, 7)
+            c.drawString(lm + cw/2, y_stat - i*9, label + ":")
+            c.setFont(FN, 7)
+            c.setFillColorRGB(*GRAY)
+            c.drawString(lm + cw/2, y_stat - i*9 - 4, str(v)[:50])
+
+        y = y_stat - max(len(col1), len(col2)) * 9 - 8*mm
+
+        # Umiejętności
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "UMIEJĘTNOŚCI SPECJALNE")
+        c.line(lm, y-2, rm, y-2)
+        y -= 6*mm
+        for um in data.get("umiejetnosci_specjalne", []):
+            c.setFont(FN, 8)
+            c.setFillColorRGB(*DARK)
+            c.drawString(lm + 3*mm, y, f"◆ {um[:80]}")
+            y -= 5*mm
+
+        y -= 3*mm
+
+        # Ekwipunek
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "EKWIPUNEK")
+        c.line(lm, y-2, rm, y-2)
+        y -= 6*mm
+        for item in data.get("ekwipunek", []):
+            c.setFont(FN, 8)
+            c.setFillColorRGB(*DARK)
+            c.drawString(lm + 3*mm, y, f"⚔ {item[:80]}")
+            y -= 5*mm
+
+        y -= 3*mm
+
+        # Quest + cytat
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "QUEST GŁÓWNY:")
+        c.setFont(FN, 8)
+        c.setFillColorRGB(*DARK)
+        c.drawString(lm + 30*mm, y, data.get("quest_glowny", "")[:70])
+        y -= 8*mm
+
+        # Cytat na dole
+        c.setStrokeColorRGB(0.7, 0.7, 0.7)
+        c.line(lm, y, rm, y)
+        y -= 5*mm
+        c.setFont(FN, 8)
+        c.setFillColorRGB(*RED)
+        cytat = data.get("cytat_postaci", "")
+        words = cytat.split()
+        line = ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(f'"{test}"', FN, 8) <= cw:
+                line = test
+            else:
+                c.drawCentredString(W/2, y, f'"{line}"')
+                y -= 4*mm
+                line = w
+        if line:
+            c.drawCentredString(W/2, y, f'"{line}"')
+
+        c.save()
+        pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        current_app.logger.info("[karta-rpg] OK")
+        return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"karta_rpg_{ts}.pdf"}
+
+    except Exception as e:
+        current_app.logger.error("[karta-rpg] Błąd PDF: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RAPORT PSYCHIATRYCZNY PDF
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text: str) -> dict | None:
+    """Generuje raport psychiatryczny w stylu przyjęcia do szpitala — DeepSeek pierwszy."""
+    try:
+        with open(RAPORT_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[raport] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    context = f"EMAIL PACJENTA:\n{body[:1500]}"
+    if previous_body:
+        context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:500]}"
+    context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:800]}"
+
+    # DeepSeek PIERWSZY dla raportu
+    raw = call_deepseek(system_msg, context, MODEL_TYLER)
+    if not raw:
+        for name, key in _get_groq_keys():
+            result = _call_groq_single(key, system_msg, context, 2500)
+            if result and result != "RATE_LIMIT":
+                raw = result
+                break
+            elif result == "RATE_LIMIT":
+                continue
+
+    if not raw:
+        return None
+
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        data = json.loads(clean.strip())
+    except Exception as e:
+        current_app.logger.warning("[raport] Błąd JSON: %s", e)
+        return None
+
+    try:
+        from reportlab.pdfgen import canvas as rl_canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+
+        FONT_DIR = os.path.join(BASE_DIR, "fonts")
+        FN, FB = "Helvetica", "Helvetica-Bold"
+        try:
+            np_ = os.path.join(FONT_DIR, "DejaVuSans.ttf")
+            bp_ = os.path.join(FONT_DIR, "DejaVuSans-Bold.ttf")
+            if os.path.exists(np_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans", np_))
+                FN = "DejaVuSans"
+            if os.path.exists(bp_):
+                pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bp_))
+                FB = "DejaVuSans-Bold"
+        except Exception:
+            pass
+
+        buf = io.BytesIO()
+        W, H = A4
+        c = rl_canvas.Canvas(buf, pagesize=A4)
+        lm, rm = 20*mm, W - 20*mm
+        cw = rm - lm
+
+        def draw_wrap(txt, x, y, font=FN, size=9, color=(0.1,0.1,0.1), max_w=None):
+            if max_w is None:
+                max_w = cw
+            c.setFont(font, size)
+            c.setFillColorRGB(*color)
+            words = str(txt).split()
+            line = ""
+            used = 0
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_w:
+                    line = test
+                else:
+                    c.drawString(x, y - used, line)
+                    used += size + 2
+                    line = w
+            if line:
+                c.drawString(x, y - used, line)
+                used += size + 2
+            return used
+
+        szpital_cfg = cfg.get("szpital", {})
+
+        # Nagłówek szpitala
+        c.setFont(FB, 12)
+        c.setFillColorRGB(0.05, 0.05, 0.05)
+        c.drawCentredString(W/2, H-20*mm, szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"))
+        c.setFont(FN, 8)
+        c.setFillColorRGB(0.4, 0.4, 0.4)
+        c.drawCentredString(W/2, H-25*mm, szpital_cfg.get("adres", "New York, NY"))
+        c.drawCentredString(W/2, H-29*mm, szpital_cfg.get("oddzial", ""))
+
+        c.setStrokeColorRGB(0.1, 0.1, 0.1)
+        c.setLineWidth(1.5)
+        c.line(lm, H-32*mm, rm, H-32*mm)
+        c.line(lm, H-33.5*mm, rm, H-33.5*mm)
+
+        # Tytuł dokumentu
+        c.setFont(FB, 11)
+        c.setFillColorRGB(0.05, 0.05, 0.05)
+        c.drawCentredString(W/2, H-40*mm, "HISTORIA CHOROBY — KARTA PRZYJĘCIA")
+        c.setFont(FN, 8)
+        c.setFillColorRGB(0.4, 0.4, 0.4)
+        nr = data.get("numer_historii_choroby", "NY-2026-00000")
+        c.drawCentredString(W/2, H-45*mm, f"Nr: {nr}  |  Data: {data.get('data_przyjecia', datetime.now().strftime('%d.%m.%Y'))}")
+
+        c.setLineWidth(0.5)
+        c.line(lm, H-48*mm, rm, H-48*mm)
+
+        y = H - 55*mm
+
+        def sekcja(tytul, y):
+            c.setFont(FB, 9)
+            c.setFillColorRGB(0.05, 0.05, 0.05)
+            c.drawString(lm, y, tytul.upper())
+            c.setStrokeColorRGB(0.3, 0.3, 0.3)
+            c.setLineWidth(0.3)
+            c.line(lm, y-2, rm, y-2)
+            return y - 6*mm
+
+        def check_page(y, needed=25*mm):
+            if y < needed:
+                c.showPage()
+                return H - 20*mm
+            return y
+
+        # Dane pacjenta
+        y = sekcja("Dane Pacjenta", y)
+        dp = data.get("dane_pacjenta", {})
+        pairs = [
+            ("Imię i nazwisko", dp.get("imie_nazwisko", "")),
+            ("Wiek", dp.get("wiek", "")),
+            ("Adres", dp.get("adres", "")),
+            ("Zawód", dp.get("zawod", "")),
+            ("Stan cywilny", dp.get("stan_cywilny", "")),
+        ]
+        for label, val in pairs:
+            if val:
+                c.setFont(FB, 8)
+                c.setFillColorRGB(0.2, 0.2, 0.2)
+                c.drawString(lm, y, f"{label}:")
+                c.setFont(FN, 8)
+                c.drawString(lm + 40*mm, y, str(val)[:60])
+                y -= 5*mm
+        y -= 3*mm
+
+        # Powód przyjęcia
+        y = check_page(y, 30*mm)
+        y = sekcja("Powód Przyjęcia", y)
+        used = draw_wrap(data.get("powod_przyjecia", ""), lm, y)
+        y -= used + 4*mm
+
+        # Wywiad
+        y = check_page(y, 35*mm)
+        y = sekcja("Wywiad z Pacjentem", y)
+        used = draw_wrap(data.get("wywiad", ""), lm, y)
+        y -= used + 4*mm
+
+        # Objawy
+        y = check_page(y, 30*mm)
+        y = sekcja("Objawy", y)
+        for ob in data.get("objawy", []):
+            y = check_page(y)
+            c.setFont(FN, 8)
+            c.setFillColorRGB(0.2, 0.2, 0.2)
+            c.drawString(lm + 3*mm, y, f"• {ob[:90]}")
+            y -= 5*mm
+        y -= 2*mm
+
+        # Diagnoza
+        y = check_page(y, 25*mm)
+        y = sekcja("Diagnoza", y)
+        c.setFont(FB, 9)
+        c.setFillColorRGB(0.6, 0.1, 0.1)
+        c.drawString(lm, y, data.get("diagnoza_wstepna", "")[:80])
+        y -= 5*mm
+        if data.get("diagnoza_dodatkowa"):
+            c.setFont(FN, 8)
+            c.setFillColorRGB(0.3, 0.3, 0.3)
+            c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')[:70]}")
+            y -= 5*mm
+        y -= 2*mm
+
+        # Zalecenia
+        y = check_page(y, 30*mm)
+        y = sekcja("Zalecenia Terapeutyczne", y)
+        for zal in data.get("zalecenia", []):
+            y = check_page(y)
+            c.setFont(FN, 8)
+            c.setFillColorRGB(0.2, 0.2, 0.2)
+            c.drawString(lm + 3*mm, y, f"→ {zal[:90]}")
+            y -= 5*mm
+        y -= 2*mm
+
+        # Rokowanie
+        y = check_page(y, 20*mm)
+        y = sekcja("Rokowanie", y)
+        c.setFont(FN, 8)
+        c.setFillColorRGB(0.6, 0.1, 0.1)
+        c.drawString(lm, y, data.get("rokowanie", "")[:90])
+        y -= 8*mm
+
+        # Podpis
+        y = check_page(y, 20*mm)
+        c.setStrokeColorRGB(0.3, 0.3, 0.3)
+        c.line(lm, y, lm+60*mm, y)
+        y -= 4*mm
+        c.setFont(FN, 8)
+        c.setFillColorRGB(0.3, 0.3, 0.3)
+        c.drawString(lm, y, data.get("podpis_lekarza", "Dr. T. Durden, MD"))
+        y -= 8*mm
+
+        # Notatka pielęgniarki
+        if data.get("notatka_oddzialu"):
+            c.setStrokeColorRGB(0.6, 0.6, 0.6)
+            c.line(lm, y, rm, y)
+            y -= 4*mm
+            c.setFont(FN, 7)
+            c.setFillColorRGB(0.5, 0.5, 0.5)
+            c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')[:100]}")
+
+        c.save()
+        pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        current_app.logger.info("[raport] OK")
+        return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"raport_psychiatryczny_{ts}.pdf"}
+
+    except Exception as e:
+        current_app.logger.error("[raport] Błąd PDF: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PLAKAT SVG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_plakat_svg(res_text: str, body: str) -> dict | None:
+    """Generuje plakat motywacyjny SVG."""
+    try:
+        with open(PLAKAT_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[plakat] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    user_msg = f"Odpowiedź Tylera:\n{res_text[:2000]}\n\nEmail:\n{body[:400]}"
+
+    raw = None
+    for name, key in _get_groq_keys():
+        result = _call_groq_single(key, system_msg, user_msg, 800)
+        if result and result != "RATE_LIMIT":
+            raw = result
+            break
+        elif result == "RATE_LIMIT":
+            continue
+    if not raw:
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    if not raw:
+        return None
+
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        data = json.loads(clean.strip())
+    except Exception as e:
+        current_app.logger.warning("[plakat] Błąd JSON: %s", e)
+        return None
+
+    glowne = data.get("glowne_zdanie", "Nie jesteś wyjątkowy.")
+    podtytul = data.get("podtytul", "")
+    autor = data.get("autor", "— Tyler Durden")
+    kolor_tlo = data.get("kolor_dominujacy", "#0a0a0a")
+    kolor_tekst = data.get("kolor_tekstu", "#ffffff")
+    slowo = data.get("slowo_klucz", "PUSTKA").upper()
+
+    # Zawijaj główne zdanie co ~30 znaków
+    words = glowne.split()
+    lines = []
+    current_line = ""
+    for w in words:
+        if len(current_line + " " + w) <= 28:
+            current_line = (current_line + " " + w).strip()
+        else:
+            if current_line:
+                lines.append(current_line)
+            current_line = w
+    if current_line:
+        lines.append(current_line)
+
+    line_height = 60
+    text_start_y = 400 - (len(lines) * line_height) // 2
+    text_lines_svg = ""
+    for i, line in enumerate(lines):
+        text_lines_svg += f'<text x="420" y="{text_start_y + i*line_height}" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle">{line}</text>\n'
+
+    svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="1188" viewBox="0 0 840 1188">
+  <!-- Tło -->
+  <rect width="840" height="1188" fill="{kolor_tlo}"/>
+  
+  <!-- Słowo klucz — watermark -->
+  <text x="420" y="594" font-family="Arial Black, sans-serif" font-size="200" font-weight="bold" 
+        fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle" 
+        opacity="0.04" transform="rotate(-30, 420, 594)">{slowo}</text>
+  
+  <!-- Linia górna dekoracyjna -->
+  <rect x="60" y="80" width="720" height="3" fill="#8b0000"/>
+  <rect x="60" y="87" width="720" height="1" fill="#8b0000" opacity="0.5"/>
+  
+  <!-- Główny tekst -->
+  {text_lines_svg}
+  
+  <!-- Podtytuł -->
+  <text x="420" y="{text_start_y + len(lines)*line_height + 40}" 
+        font-family="Georgia, serif" font-size="22" fill="{kolor_tekst}" 
+        text-anchor="middle" opacity="0.7">{podtytul}</text>
+  
+  <!-- Linia środkowa -->
+  <rect x="160" y="{text_start_y + len(lines)*line_height + 80}" width="520" height="1" fill="{kolor_tekst}" opacity="0.3"/>
+  
+  <!-- Autor -->
+  <text x="420" y="{text_start_y + len(lines)*line_height + 110}" 
+        font-family="Georgia, serif" font-size="20" font-style="italic" 
+        fill="#8b0000" text-anchor="middle">{autor}</text>
+  
+  <!-- Linia dolna dekoracyjna -->
+  <rect x="60" y="1100" width="720" height="1" fill="#8b0000" opacity="0.5"/>
+  <rect x="60" y="1104" width="720" height="3" fill="#8b0000"/>
+  
+  <!-- Małe logo projektu -->
+  <text x="420" y="1150" font-family="Arial, sans-serif" font-size="11" 
+        fill="{kolor_tekst}" text-anchor="middle" opacity="0.3" letter-spacing="3">PROJEKT TYLER DURDEN</text>
+</svg>"""
+
+    svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    current_app.logger.info("[plakat] OK")
+    return {"base64": svg_b64, "content_type": "image/svg+xml", "filename": f"plakat_{ts}.svg"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GRA HTML
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_gra_html(body: str, res_text: str) -> dict | None:
+    """Generuje grę interaktywną HTML z wyborami Tylera."""
+    try:
+        with open(GRA_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[gra] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    user_msg = f"Email:\n{body[:800]}\n\nOdpowiedź Tylera:\n{res_text[:1500]}"
+
+    raw = None
+    for name, key in _get_groq_keys():
+        result = _call_groq_single(key, system_msg, user_msg, 3000)
+        if result and result != "RATE_LIMIT":
+            raw = result
+            break
+        elif result == "RATE_LIMIT":
+            continue
+    if not raw:
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    if not raw:
+        return None
+
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        data = json.loads(clean.strip())
+    except Exception as e:
+        current_app.logger.warning("[gra] Błąd JSON: %s", e)
+        return None
+
+    tytul = data.get("tytul_gry", "Gra Tylera Durdena")
+    wstep = data.get("wstep", "")
+    pytania = data.get("pytania", [])
+    wyniki = data.get("wyniki", {})
+    zakonczenie = data.get("zakonczenie", "— Tyler Durden")
+
+    # Buduj komentarze JS
+    komentarze_b = {}
+    komentarze_inne = {}
+    for p in pytania:
+        nr = p.get("nr", 0)
+        komentarze_b[nr] = p.get("komentarz_po_wyborze_b", "Dobrze.")
+        komentarze_inne[nr] = p.get("komentarz_po_wyborze_innym", "Typowe.")
+
+    kb_js = json.dumps(komentarze_b)
+    ki_js = json.dumps(komentarze_inne)
+    w_js = json.dumps(wyniki)
+
+    pytania_html = ""
+    for p in pytania:
+        nr = p.get("nr", "?")
+        sytuacja = p.get("sytuacja", "")
+        pytanie_txt = p.get("pytanie", "")
+        odp = p.get("odpowiedzi", {})
+        pytania_html += f"""
+<div class="pytanie" id="p{nr}" style="display:none">
+  <div class="nr">Pytanie {nr} / {len(pytania)}</div>
+  <div class="sytuacja">{sytuacja}</div>
+  <div class="pytanie-txt">{pytanie_txt}</div>
+  <div class="opcje">
+    <button class="opcja" onclick="odpowiedz({nr},'a')">a) {odp.get('a','')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'b')">b) {odp.get('b','')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'c')">c) {odp.get('c','')}</button>
+  </div>
+  <div class="komentarz" id="k{nr}"></div>
+</div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>{tytul}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: 'Courier New', monospace; background: #050505; color: #d0c0a0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
+  h1 {{ color: #8b0000; text-align: center; font-size: 1.6em; margin: 30px 0 10px; border-bottom: 2px solid #8b0000; padding-bottom: 10px; width: 100%; max-width: 700px; }}
+  .wstep {{ color: #666; font-style: italic; text-align: center; margin: 15px 0 30px; max-width: 600px; }}
+  .pytanie {{ background: #0f0f0f; border: 1px solid #2a1a1a; border-left: 4px solid #8b0000; padding: 25px; max-width: 700px; width: 100%; border-radius: 0 4px 4px 0; }}
+  .nr {{ color: #8b0000; font-size: 0.8em; margin-bottom: 10px; letter-spacing: 2px; }}
+  .sytuacja {{ color: #888; font-style: italic; margin-bottom: 12px; font-size: 0.9em; line-height: 1.5; }}
+  .pytanie-txt {{ font-size: 1.1em; color: #c8b89a; margin-bottom: 20px; font-weight: bold; }}
+  .opcje {{ display: flex; flex-direction: column; gap: 10px; }}
+  .opcja {{ background: #1a1a1a; border: 1px solid #333; color: #c8b89a; padding: 12px 18px; text-align: left; cursor: pointer; font-family: 'Courier New', monospace; font-size: 0.9em; transition: all 0.2s; border-radius: 2px; }}
+  .opcja:hover {{ background: #2a1a1a; border-color: #8b0000; }}
+  .opcja:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+  .opcja.tyler {{ background: #1a0a0a; border-color: #8b0000; color: #ff6666; }}
+  .komentarz {{ margin-top: 15px; padding: 10px; background: #0a0a0a; border-left: 2px solid #8b0000; color: #8b0000; font-style: italic; display: none; font-size: 0.85em; }}
+  #wynik {{ display: none; background: #0f0f0f; border: 2px solid #8b0000; padding: 30px; max-width: 700px; width: 100%; text-align: center; margin-top: 20px; }}
+  #wynik h2 {{ color: #8b0000; margin-bottom: 15px; }}
+  #wynik .punkty {{ font-size: 2em; color: #c8b89a; margin: 10px 0; }}
+  #wynik .komentarz-wynik {{ color: #888; font-style: italic; }}
+  #start {{ background: #8b0000; color: white; border: none; padding: 15px 40px; font-size: 1.1em; cursor: pointer; font-family: 'Courier New', monospace; margin: 20px 0; letter-spacing: 1px; }}
+  #start:hover {{ background: #a00000; }}
+  .pasek {{ background: #1a1a1a; height: 4px; max-width: 700px; width: 100%; margin: 10px 0; }}
+  .pasek-fill {{ background: #8b0000; height: 100%; transition: width 0.3s; width: 0%; }}
+  footer {{ color: #333; font-size: 0.75em; margin-top: 40px; text-align: center; }}
+</style>
+</head>
+<body>
+<h1>{tytul}</h1>
+<p class="wstep">{wstep}</p>
+<div class="pasek"><div class="pasek-fill" id="pasek"></div></div>
+<button id="start" onclick="startGra()">ROZPOCZNIJ GRĘ</button>
+{pytania_html}
+<div id="wynik">
+  <h2>KONIEC GRY</h2>
+  <div class="punkty" id="punkty-wynik"></div>
+  <div class="komentarz-wynik" id="komentarz-wynik"></div>
+</div>
+<footer>{zakonczenie}</footer>
+<script>
+var bieżace = 0;
+var punkty = 0;
+var total = {len(pytania)};
+var kb = {kb_js};
+var ki = {ki_js};
+var wyniki = {w_js};
+
+function startGra() {{
+  document.getElementById('start').style.display = 'none';
+  pokazPytanie(1);
+}}
+
+function pokazPytanie(nr) {{
+  bieżace = nr;
+  var el = document.getElementById('p' + nr);
+  if (el) el.style.display = 'block';
+  document.getElementById('pasek').style.width = ((nr-1)/total*100) + '%';
+  window.scrollTo(0, document.body.scrollHeight);
+}}
+
+function odpowiedz(nr, wybor) {{
+  var btns = document.querySelectorAll('#p' + nr + ' .opcja');
+  btns.forEach(function(b) {{ b.disabled = true; }});
+  
+  if (wybor === 'b') {{
+    punkty++;
+    btns[1].classList.add('tyler');
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (kb[nr] || 'Dobrze.');
+    k.style.display = 'block';
+  }} else {{
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (ki[nr] || 'Typowe.');
+    k.style.display = 'block';
+    k.style.borderLeftColor = '#444';
+    k.style.color = '#555';
+  }}
+
+  setTimeout(function() {{
+    if (nr < total) {{
+      pokazPytanie(nr + 1);
+    }} else {{
+      pokazWynik();
+    }}
+  }}, 1800);
+}}
+
+function pokazWynik() {{
+  document.getElementById('pasek').style.width = '100%';
+  var wynikDiv = document.getElementById('wynik');
+  wynikDiv.style.display = 'block';
+  document.getElementById('punkty-wynik').innerHTML = punkty + ' / ' + total + ' punktów Tylera';
+  var komentarz = '';
+  if (punkty <= 3) komentarz = wyniki['0_3'] || 'Rozczarowujące.';
+  else if (punkty <= 6) komentarz = wyniki['4_6'] || 'Trochę lepiej.';
+  else if (punkty <= 9) komentarz = wyniki['7_9'] || 'Prawie.';
+  else komentarz = wyniki['10'] || 'Jesteś gotowy.';
+  document.getElementById('komentarz-wynik').innerHTML = komentarz;
+  window.scrollTo(0, document.body.scrollHeight);
+}}
+</script>
+</body>
+</html>"""
+
+    html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    current_app.logger.info("[gra] OK: %d pytań", len(pytania))
+    return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
+
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "") -> dict:
     """
     Buduje sekcję 'zwykly' odpowiedzi:
@@ -1781,7 +2992,21 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     # ── 9. Wyjaśnienie odpowiedzi ─────────────────────────────────────────────
     explanation_txt = _build_explanation_txt(res_text, body)
 
-    # ── 10. Zwróć wszystko ────────────────────────────────────────────────────
+    # ── 10. Nowe elementy (ankieta, horoskop, karta RPG, raport, plakat, gra) ─
+    ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
+    horoskop_pdf    = _build_horoskop(body, res_text)
+    karta_rpg_pdf   = _build_karta_rpg(body, res_text)
+    raport_pdf      = _build_raport_psychiatryczny(body, previous_body, res_text)
+    plakat_svg      = _build_plakat_svg(res_text, body)
+    gra_html        = _build_gra_html(body, res_text)
+
+    current_app.logger.info(
+        "[zwykly] Dodatkowe: ankieta=%s horoskop=%s karta=%s raport=%s plakat=%s gra=%s",
+        bool(ankieta_html), bool(horoskop_pdf), bool(karta_rpg_pdf),
+        bool(raport_pdf), bool(plakat_svg), bool(gra_html)
+    )
+
+    # ── 11. Zwróć wszystko ────────────────────────────────────────────────────
     imie_nazwisko = (cv_data.get("imie_nazwisko", "CV") if cv_data else "CV")
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', imie_nazwisko)[:30]
 
@@ -1797,10 +3022,17 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             "content_type": "application/pdf",
             "filename": f"CV_{safe_name}_Tyler.pdf",
         },
-        "detected_emotion": emotion_key,
-        "provider": provider,
-        "triptych": triptych_images,
+        "detected_emotion":   emotion_key,
+        "provider":           provider,
+        "triptych":           triptych_images,
         "triptych_for_drive": triptych_images,
-        "debug_txt": debug_txt,
-        "explanation_txt": explanation_txt,
+        "debug_txt":          debug_txt,
+        "explanation_txt":    explanation_txt,
+        "ankieta_html":       ankieta_html,
+        "ankieta_pdf":        ankieta_pdf,
+        "horoskop_pdf":       horoskop_pdf,
+        "karta_rpg_pdf":      karta_rpg_pdf,
+        "raport_pdf":         raport_pdf,
+        "plakat_svg":         plakat_svg,
+        "gra_html":           gra_html,
     }
