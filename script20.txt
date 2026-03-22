@@ -482,20 +482,143 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
         data.emoticon.filename     || "emotka.png"
       );
     } catch (e) {
-      console.error("[zwykly] Błąd emotki: " + e.message);
+      console.error("[zwykly] Błąd emotki inline: " + e.message);
     }
   }
 
-  // ── PDF emocji (załącznik) ──────────────────────────────────────────────────
-  if (data.pdf && data.pdf.base64) {
+  // ── Emotka PNG → Drive ─────────────────────────────────────────────────────
+  if (data.emoticon && data.emoticon.base64) {
+    try {
+      var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
+      if (folderId) {
+        DriveApp.getFolderById(folderId).createFile(Utilities.newBlob(
+          Utilities.base64Decode(data.emoticon.base64),
+          data.emoticon.content_type || "image/png",
+          data.emoticon.filename     || "emotka.png"
+        ));
+        console.log("[zwykly] Emotka zapisana na Drive: " + (data.emoticon.filename || "emotka.png"));
+      }
+    } catch (e) {
+      console.error("[zwykly] Błąd zapisu emotki na Drive: " + e.message);
+    }
+  }
+
+  // ── CV PDF Tyler (załącznik + Drive) ──────────────────────────────────────
+  if (data.cv_pdf && data.cv_pdf.base64) {
+    var cvFilename = data.cv_pdf.filename || "CV_Tyler.pdf";
     try {
       attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.pdf.base64),
+        Utilities.base64Decode(data.cv_pdf.base64),
         "application/pdf",
-        data.pdf.filename || "dokument.pdf"
+        cvFilename
       ));
+      console.log("[zwykly] CV PDF dołączony: " + cvFilename);
     } catch (e) {
-      console.error("[zwykly] Błąd PDF: " + e.message);
+      console.error("[zwykly] Błąd CV PDF załącznik: " + e.message);
+    }
+    try {
+      var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
+      if (folderId) {
+        DriveApp.getFolderById(folderId).createFile(Utilities.newBlob(
+          Utilities.base64Decode(data.cv_pdf.base64),
+          "application/pdf",
+          cvFilename
+        ));
+        console.log("[zwykly] CV PDF zapisany na Drive: " + cvFilename);
+      }
+    } catch (e) {
+      console.error("[zwykly] Błąd zapisu CV PDF na Drive: " + e.message);
+    }
+  }
+
+  // ── Ankieta HTML (załącznik) ─────────────────────────────────────────────
+  if (data.ankieta_html && data.ankieta_html.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.ankieta_html.base64),
+        "text/html", data.ankieta_html.filename || "ankieta.html"
+      ));
+      console.log("[zwykly] Ankieta HTML dołączona");
+    } catch(e) { console.error("[zwykly] Błąd ankieta HTML: " + e.message); }
+  }
+
+  // ── Ankieta PDF (załącznik) ──────────────────────────────────────────────
+  if (data.ankieta_pdf && data.ankieta_pdf.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.ankieta_pdf.base64),
+        "application/pdf", data.ankieta_pdf.filename || "ankieta.pdf"
+      ));
+      console.log("[zwykly] Ankieta PDF dołączona");
+    } catch(e) { console.error("[zwykly] Błąd ankieta PDF: " + e.message); }
+  }
+
+  // ── Horoskop PDF (załącznik) ─────────────────────────────────────────────
+  if (data.horoskop_pdf && data.horoskop_pdf.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.horoskop_pdf.base64),
+        "application/pdf", data.horoskop_pdf.filename || "horoskop.pdf"
+      ));
+      console.log("[zwykly] Horoskop PDF dołączony");
+    } catch(e) { console.error("[zwykly] Błąd horoskop PDF: " + e.message); }
+  }
+
+  // ── Karta RPG PDF (załącznik) ────────────────────────────────────────────
+  if (data.karta_rpg_pdf && data.karta_rpg_pdf.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.karta_rpg_pdf.base64),
+        "application/pdf", data.karta_rpg_pdf.filename || "karta_rpg.pdf"
+      ));
+      console.log("[zwykly] Karta RPG PDF dołączona");
+    } catch(e) { console.error("[zwykly] Błąd karta RPG: " + e.message); }
+  }
+
+  // ── Raport psychiatryczny PDF (załącznik) ────────────────────────────────
+  if (data.raport_pdf && data.raport_pdf.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.raport_pdf.base64),
+        "application/pdf", data.raport_pdf.filename || "raport_psychiatryczny.pdf"
+      ));
+      console.log("[zwykly] Raport psychiatryczny dołączony");
+    } catch(e) { console.error("[zwykly] Błąd raport: " + e.message); }
+  }
+
+  // ── Plakat SVG (załącznik) ───────────────────────────────────────────────
+  if (data.plakat_svg && data.plakat_svg.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.plakat_svg.base64),
+        "image/svg+xml", data.plakat_svg.filename || "plakat.svg"
+      ));
+      console.log("[zwykly] Plakat SVG dołączony");
+    } catch(e) { console.error("[zwykly] Błąd plakat SVG: " + e.message); }
+  }
+
+  // ── Gra HTML (załącznik) ─────────────────────────────────────────────────
+  if (data.gra_html && data.gra_html.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.gra_html.base64),
+        "text/html", data.gra_html.filename || "gra.html"
+      ));
+      console.log("[zwykly] Gra HTML dołączona");
+    } catch(e) { console.error("[zwykly] Błąd gra HTML: " + e.message); }
+  }
+
+  // ── Wyjaśnienie TXT (załącznik) ───────────────────────────────────────────────
+  if (data.explanation_txt && data.explanation_txt.base64) {
+    try {
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.explanation_txt.base64),
+        "text/plain",
+        data.explanation_txt.filename || "wyjasnienie.txt"
+      ));
+      console.log("[zwykly] Wyjaśnienie TXT dołączone: " + (data.explanation_txt.filename || "wyjasnienie.txt"));
+    } catch (e) {
+      console.error("[zwykly] Błąd wyjaśnienia TXT: " + e.message);
     }
   }
 
