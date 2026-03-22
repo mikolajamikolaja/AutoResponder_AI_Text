@@ -1185,10 +1185,11 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     fallbacks = icon_cfg.get("fallback_prompts", {})
 
     icon_prompt = None
-    for _name, _key in _get_groq_keys():
-        try:
+    try:
+        groq_key = os.getenv("API_KEY_GROQ", "")
+        if groq_key:
             headers = {
-                "Authorization": f"Bearer {_key}",
+                "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -1203,13 +1204,9 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
             resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 icon_prompt = resp.json()["choices"][0]["message"]["content"].strip()
-                current_app.logger.info("[icon-flux] Groq prompt (klucz=%s): %.100s", _name, icon_prompt)
-                break
-            elif resp.status_code == 429:
-                current_app.logger.warning("[icon-flux] 429 klucz=%s → następny", _name)
-                continue
-        except Exception as e:
-            current_app.logger.warning("[icon-flux] Groq błąd klucz=%s: %s", _name, e)
+                current_app.logger.info("[icon-flux] Groq prompt: %.100s", icon_prompt)
+    except Exception as e:
+        current_app.logger.warning("[icon-flux] Groq błąd: %s", e)
 
     if not icon_prompt:
         icon_prompt = call_deepseek(
@@ -1316,10 +1313,11 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
     )
 
     photo_prompt = None
-    for _name, _key in _get_groq_keys():
-        try:
+    try:
+        groq_key = os.getenv("API_KEY_GROQ", "")
+        if groq_key:
             headers = {
-                "Authorization": f"Bearer {_key}",
+                "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json",
             }
             payload = {
@@ -1334,13 +1332,8 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
             resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 photo_prompt = resp.json()["choices"][0]["message"]["content"].strip()
-                current_app.logger.info("[cv-photo] Groq prompt (klucz=%s)", _name)
-                break
-            elif resp.status_code == 429:
-                current_app.logger.warning("[cv-photo] 429 klucz=%s → następny", _name)
-                continue
-        except Exception as e:
-            current_app.logger.warning("[cv-photo] Groq błąd klucz=%s: %s", _name, e)
+    except Exception as e:
+        current_app.logger.warning("[cv-photo] Groq błąd: %s", e)
 
     if not photo_prompt:
         photo_prompt = call_deepseek(system_groq, user_msg, MODEL_TYLER, timeout=20)
@@ -1776,15 +1769,15 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
-        f"Email nadawcy (kontekst):\n{body[:500]}\n\n"
+        f"Odpowiedź Tylera do nadawcy:\n{res_text[:2000]}\n\n"
+        f"Email nadawcy (kontekst):\n{body[:300]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+        f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
     raw = None
     for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 3000)
+        result = _call_groq_single(key, system_msg, user_msg, 4000)
         if result and result != "RATE_LIMIT":
             raw = result
             current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
@@ -1804,11 +1797,20 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        # wytnij JSON z ewentualnego otoczenia tekstowego
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
-        data = json.loads(clean.strip())
+        # Próba naprawy uciętego JSON — obetnij do ostatniego kompletnego ]
+        try:
+            data = json.loads(clean.strip())
+        except json.JSONDecodeError:
+            last_bracket = clean.rfind('"}')
+            if last_bracket > 0:
+                clean = clean[:last_bracket + 2] + ']}'  # zamknij pytania i root
+                current_app.logger.warning("[ankieta] JSON ucięty — próba naprawy")
+                data = json.loads(clean)
+            else:
+                raise
         if not isinstance(data, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
@@ -1984,14 +1986,14 @@ function sprawdz() {{
             c.setFont(FN, 9)
             for key, val in odp.items():
                 c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm + 5 * mm, y, f"{key}) {val[:90]}")
+                c.drawString(lm + 5 * mm, y, f"{key}) {val}")
                 y -= 4.5 * mm
                 y = new_page_if_needed(y)
 
             # Wyjaśnienie
             c.setFont(FN, 8)
             c.setFillColorRGB(0.5, 0.1, 0.1)
-            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie[:100]}")
+            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie}")
             y -= 7 * mm
 
         c.save()

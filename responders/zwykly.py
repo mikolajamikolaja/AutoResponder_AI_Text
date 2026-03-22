@@ -2184,7 +2184,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             # Rada Tylera
             c.setFont(FN, 8)
             c.setFillColorRGB(0.6, 0.1, 0.1)
-            c.drawString(lm, y, f"Rada Tylera: {rada[:90]}")
+            c.drawString(lm, y, f"Rada Tylera: {rada}")
             y -= 4 * mm
 
             # Separator
@@ -2397,7 +2397,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for um in data.get("umiejetnosci_specjalne", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"◆ {um[:80]}")
+            c.drawString(lm + 3 * mm, y, f"◆ {um}")
             y -= 5 * mm
 
         y -= 3 * mm
@@ -2411,7 +2411,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for item in data.get("ekwipunek", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"⚔ {item[:80]}")
+            c.drawString(lm + 3 * mm, y, f"⚔ {item}")
             y -= 5 * mm
 
         y -= 3 * mm
@@ -2422,7 +2422,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawString(lm, y, "QUEST GŁÓWNY:")
         c.setFont(FN, 8)
         c.setFillColorRGB(*DARK)
-        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", "")[:70])
+        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", ""))
         y -= 8 * mm
 
         # Cytat na dole
@@ -2632,7 +2632,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
                 c.setFillColorRGB(0.2, 0.2, 0.2)
                 c.drawString(lm, y, f"{label}:")
                 c.setFont(FN, 8)
-                c.drawString(lm + 40 * mm, y, str(val)[:60])
+                c.drawString(lm + 40 * mm, y, str(val))
                 y -= 5 * mm
         y -= 3 * mm
 
@@ -2655,7 +2655,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"• {ob[:90]}")
+            c.drawString(lm + 3 * mm, y, f"• {ob}")
             y -= 5 * mm
         y -= 2 * mm
 
@@ -2664,12 +2664,12 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         y = sekcja("Diagnoza", y)
         c.setFont(FB, 9)
         c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("diagnoza_wstepna", "")[:80])
+        c.drawString(lm, y, data.get("diagnoza_wstepna", ""))
         y -= 5 * mm
         if data.get("diagnoza_dodatkowa"):
             c.setFont(FN, 8)
             c.setFillColorRGB(0.3, 0.3, 0.3)
-            c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')[:70]}")
+            c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')}")
             y -= 5 * mm
         y -= 2 * mm
 
@@ -2680,7 +2680,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"→ {zal[:90]}")
+            c.drawString(lm + 3 * mm, y, f"→ {zal}")
             y -= 5 * mm
         y -= 2 * mm
 
@@ -2689,7 +2689,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         y = sekcja("Rokowanie", y)
         c.setFont(FN, 8)
         c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("rokowanie", "")[:90])
+        c.drawString(lm, y, data.get("rokowanie", ""))
         y -= 8 * mm
 
         # Podpis
@@ -2709,7 +2709,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             y -= 4 * mm
             c.setFont(FN, 7)
             c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')[:100]}")
+            c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')}")
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
