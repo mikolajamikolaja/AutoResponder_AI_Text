@@ -1986,14 +1986,14 @@ function sprawdz() {{
             c.setFont(FN, 9)
             for key, val in odp.items():
                 c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm + 5 * mm, y, f"{key}) {val[:90]}")
+                c.drawString(lm + 5 * mm, y, f"{key}) {val}")
                 y -= 4.5 * mm
                 y = new_page_if_needed(y)
 
             # Wyjaśnienie
             c.setFont(FN, 8)
             c.setFillColorRGB(0.5, 0.1, 0.1)
-            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie[:100]}")
+            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie}")
             y -= 7 * mm
 
         c.save()
