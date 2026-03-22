@@ -55,13 +55,13 @@ PROMPT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_prompt.json")
 CV_CONTENT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_cv_content.json")
 CV_PHOTO_FLUX_PATH = os.path.join(PROMPTS_DIR, "zwykly_cv_photo_flux.json")
 ICON_FLUX_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_icon_flux.json")
-STYLE_JS_PATH        = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
-ANKIETA_JSON_PATH    = os.path.join(PROMPTS_DIR, "zwykly_ankieta.json")
-HOROSKOP_JSON_PATH   = os.path.join(PROMPTS_DIR, "zwykly_horoskop.json")
-KARTA_RPG_JSON_PATH  = os.path.join(PROMPTS_DIR, "zwykly_karta_rpg.json")
-RAPORT_JSON_PATH     = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
-PLAKAT_JSON_PATH     = os.path.join(PROMPTS_DIR, "zwykly_plakat.json")
-GRA_JSON_PATH        = os.path.join(PROMPTS_DIR, "zwykly_gra.json")
+STYLE_JS_PATH = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
+ANKIETA_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_ankieta.json")
+HOROSKOP_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_horoskop.json")
+KARTA_RPG_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_karta_rpg.json")
+RAPORT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
+PLAKAT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_plakat.json")
+GRA_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_gra.json")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STAŁE API
@@ -316,7 +316,6 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tu
         return result, "deepseek"
     current_app.logger.error("[zwykly] Groq i DeepSeek zawiodły!")
     return None, "none"
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -991,10 +990,10 @@ def _generate_raw_email_image(body: str) -> dict | None:
         current_app.logger.info("[raw-img] OK: %s (%dKB)", filename, len(buf.getvalue()) // 1024)
 
         return {
-            "base64":       jpg_b64,
+            "base64": jpg_b64,
             "content_type": "image/jpeg",
-            "filename":     filename,
-            "size_jpg":     f"{len(buf.getvalue()) // 1024}KB",
+            "filename": filename,
+            "size_jpg": f"{len(buf.getvalue()) // 1024}KB",
         }
 
     except Exception as e:
@@ -1656,7 +1655,6 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
     }
 
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROTACJA KLUCZY GROQ
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1687,9 +1685,9 @@ def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> 
         "model": GROQ_MODEL,
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user",   "content": user}
+            {"role": "user", "content": user}
         ],
-        "max_tokens":  max_tokens,
+        "max_tokens": max_tokens,
         "temperature": 0.9,
     }
     try:
@@ -1705,57 +1703,58 @@ def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> 
         current_app.logger.warning("[groq] Wyjątek: %s", str(e)[:80])
         return None
 
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # ANKIETA HTML + PDF
+    # ═══════════════════════════════════════════════════════════════════════════════
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# ANKIETA HTML + PDF
-# ═══════════════════════════════════════════════════════════════════════════════
+    def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
+        """
+        Generuje ankietę wiedzy o odpowiedzi Tylera.
+        Zwraca (html_dict, pdf_dict) lub (None, None) przy błędzie.
+        """
+        try:
+            with open(ANKIETA_JSON_PATH, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception as e:
+            current_app.logger.warning("[ankieta] Brak JSON: %s", e)
+            return None, None
 
-def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
-    """
-    Generuje ankietę wiedzy o odpowiedzi Tylera.
-    Zwraca (html_dict, pdf_dict) lub (None, None) przy błędzie.
-    """
-    try:
-        with open(ANKIETA_JSON_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except Exception as e:
-        current_app.logger.warning("[ankieta] Brak JSON: %s", e)
-        return None, None
+        system_msg = cfg.get("system", "")
+        user_msg = (
+            f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
+            f"Email nadawcy (kontekst):\n{body[:500]}"
+        )
 
-    system_msg = cfg.get("system", "")
-    user_msg = (
-        f"Odpowiedź Tylera do nadawcy:\n{res_text[:3000]}\n\n"
-        f"Email nadawcy (kontekst):\n{body[:500]}"
-    )
+        raw = None
+        for name, key in _get_groq_keys():
+            result = _call_groq_single(key, system_msg, user_msg, 3000)
+            if result and result != "RATE_LIMIT":
+                raw = result
+                current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
+                break
+            elif result == "RATE_LIMIT":
+                continue
 
-    raw = None
-    for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 3000)
-        if result and result != "RATE_LIMIT":
-            raw = result
-            current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
-            break
-        elif result == "RATE_LIMIT":
-            continue
+        if not raw:
+            raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
 
-    if not raw:
-        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+        if not raw:
+            current_app.logger.warning("[ankieta] Brak danych od AI")
+            return None, None
 
-    if not raw:
-        current_app.logger.warning("[ankieta] Brak danych od AI")
-        return None, None
+        try:
+            clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+            clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+            data = json.loads(clean.strip())
+            if not isinstance(data, dict):
+                raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
+        except Exception as e:
+            current_app.logger.warning("[ankieta] Błąd JSON: %s", e)
+            return None, None
 
-    try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        data = json.loads(clean.strip())
-    except Exception as e:
-        current_app.logger.warning("[ankieta] Błąd JSON: %s", e)
-        return None, None
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    tytul = data.get("tytul", "Test Tylera Durdena")
-    pytania = data.get("pytania", [])
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tytul = data.get("tytul", "Test Tylera Durdena")
+        pytania = data.get("pytania", [])
 
     # ── Buduj HTML ────────────────────────────────────────────────────────────
     html = f"""<!DOCTYPE html>
@@ -1864,26 +1863,26 @@ function sprawdz() {{
         buf = io.BytesIO()
         W, H = A4
         c = rl_canvas.Canvas(buf, pagesize=A4)
-        lm, rm = 15*mm, W - 15*mm
+        lm, rm = 15 * mm, W - 15 * mm
         cw = rm - lm
 
-        def new_page_if_needed(y, needed=25*mm):
+        def new_page_if_needed(y, needed=25 * mm):
             if y < needed:
                 c.showPage()
-                return H - 20*mm
+                return H - 20 * mm
             return y
 
         # Nagłówek
         c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.rect(0, H - 30*mm, W, 30*mm, fill=1, stroke=0)
+        c.rect(0, H - 30 * mm, W, 30 * mm, fill=1, stroke=0)
         c.setFont(FB, 14)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W/2, H - 15*mm, tytul)
+        c.drawCentredString(W / 2, H - 15 * mm, tytul)
         c.setFont(FN, 9)
         c.setFillColorRGB(0.7, 0.7, 0.7)
-        c.drawCentredString(W/2, H - 23*mm, data.get("wprowadzenie", "")[:80])
+        c.drawCentredString(W / 2, H - 23 * mm, data.get("wprowadzenie", "")[:80])
 
-        y = H - 40*mm
+        y = H - 40 * mm
 
         for p in pytania:
             nr = p.get("nr", "?")
@@ -1891,13 +1890,13 @@ function sprawdz() {{
             odp = p.get("odpowiedzi", {})
             wyjasnienie = p.get("wyjasnienie", "")
 
-            y = new_page_if_needed(y, 45*mm)
+            y = new_page_if_needed(y, 45 * mm)
 
             # Numer pytania
             c.setFont(FB, 10)
             c.setFillColorRGB(0.7, 0.1, 0.1)
             c.drawString(lm, y, f"Pytanie {nr}:")
-            y -= 5*mm
+            y -= 5 * mm
 
             # Treść pytania
             c.setFont(FN, 10)
@@ -1910,26 +1909,26 @@ function sprawdz() {{
                     line = test
                 else:
                     c.drawString(lm, y, line)
-                    y -= 5*mm
+                    y -= 5 * mm
                     line = w
                     y = new_page_if_needed(y)
             if line:
                 c.drawString(lm, y, line)
-                y -= 6*mm
+                y -= 6 * mm
 
             # Odpowiedzi
             c.setFont(FN, 9)
             for key, val in odp.items():
                 c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm + 5*mm, y, f"{key}) {val[:90]}")
-                y -= 4.5*mm
+                c.drawString(lm + 5 * mm, y, f"{key}) {val[:90]}")
+                y -= 4.5 * mm
                 y = new_page_if_needed(y)
 
             # Wyjaśnienie
             c.setFont(FN, 8)
             c.setFillColorRGB(0.5, 0.1, 0.1)
-            c.drawString(lm + 5*mm, y, f"► {wyjasnienie[:100]}")
-            y -= 7*mm
+            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie[:100]}")
+            y -= 7 * mm
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -1961,7 +1960,8 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
 
     # Oblicz daty
     today = datetime.now()
-    daty = [(today.replace(day=today.day) + __import__("datetime").timedelta(days=i)).strftime("%d.%m.%Y") for i in range(7)]
+    daty = [(today.replace(day=today.day) + __import__("datetime").timedelta(days=i)).strftime("%d.%m.%Y") for i in
+            range(7)]
 
     system_msg = cfg.get("system", "")
     user_msg = (
@@ -2016,10 +2016,10 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         buf = io.BytesIO()
         W, H = A4
         c = rl_canvas.Canvas(buf, pagesize=A4)
-        lm, rm = 12*mm, W - 12*mm
+        lm, rm = 12 * mm, W - 12 * mm
         cw = rm - lm
 
-        def wrap_draw(txt, x, y, font, size, max_w, color=(0.1,0.1,0.1)):
+        def wrap_draw(txt, x, y, font, size, max_w, color=(0.1, 0.1, 0.1)):
             c.setFont(font, size)
             c.setFillColorRGB(*color)
             words = str(txt).split()
@@ -2030,52 +2030,53 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
                 if c.stringWidth(test, font, size) <= max_w:
                     line = test
                 else:
-                    c.drawString(x, y - lines_drawn*(size+2), line)
+                    c.drawString(x, y - lines_drawn * (size + 2), line)
                     lines_drawn += 1
                     line = w
             if line:
-                c.drawString(x, y - lines_drawn*(size+2), line)
+                c.drawString(x, y - lines_drawn * (size + 2), line)
                 lines_drawn += 1
             return lines_drawn * (size + 2)
 
         # ── NAGŁÓWEK gazety ───────────────────────────────────────────────────
         c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.rect(0, H-28*mm, W, 28*mm, fill=1, stroke=0)
+        c.rect(0, H - 28 * mm, W, 28 * mm, fill=1, stroke=0)
 
         c.setFont(FB, 20)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W/2, H-14*mm, "GAZETA NIHILISTYCZNA")
+        c.drawCentredString(W / 2, H - 14 * mm, "GAZETA NIHILISTYCZNA")
 
         c.setFont(FN, 8)
         c.setFillColorRGB(0.7, 0.7, 0.7)
-        c.drawCentredString(W/2, H-21*mm, f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia")
+        c.drawCentredString(W / 2, H - 21 * mm,
+                            f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia")
 
         # Linia dekoracyjna
         c.setStrokeColorRGB(0.7, 0.1, 0.1)
         c.setLineWidth(2)
-        c.line(lm, H-30*mm, rm, H-30*mm)
+        c.line(lm, H - 30 * mm, rm, H - 30 * mm)
 
         # Tytuł horoskopu
         znak = data.get("znak_zodiaku", "Nieznany")
         motto = data.get("motto", "")
         c.setFont(FB, 13)
         c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawCentredString(W/2, H-37*mm, f"HOROSKOP: {znak.upper()}")
+        c.drawCentredString(W / 2, H - 37 * mm, f"HOROSKOP: {znak.upper()}")
         c.setFont(FN, 9)
         c.setFillColorRGB(0.3, 0.3, 0.3)
-        c.drawCentredString(W/2, H-43*mm, motto[:80])
+        c.drawCentredString(W / 2, H - 43 * mm, motto[:80])
 
         c.setStrokeColorRGB(0.3, 0.3, 0.3)
         c.setLineWidth(0.5)
-        c.line(lm, H-46*mm, rm, H-46*mm)
+        c.line(lm, H - 46 * mm, rm, H - 46 * mm)
 
-        y = H - 52*mm
+        y = H - 52 * mm
         dni = data.get("dni", [])
 
         for dzien in dni:
-            if y < 30*mm:
+            if y < 30 * mm:
                 c.showPage()
-                y = H - 20*mm
+                y = H - 20 * mm
 
             naglowek = dzien.get("naglowek", "").upper()
             data_dnia = dzien.get("data", "")
@@ -2086,45 +2087,45 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             c.setFont(FB, 8)
             c.setFillColorRGB(0.5, 0.5, 0.5)
             c.drawString(lm, y, data_dnia)
-            y -= 4*mm
+            y -= 4 * mm
 
             # Nagłówek dnia — styl tabloidu
             c.setFont(FB, 11)
             c.setFillColorRGB(0.05, 0.05, 0.05)
-            h = wrap_draw(naglowek, lm, y, FB, 11, cw, (0.05,0.05,0.05))
-            y -= h + 1*mm
+            h = wrap_draw(naglowek, lm, y, FB, 11, cw, (0.05, 0.05, 0.05))
+            y -= h + 1 * mm
 
             # Treść
-            h = wrap_draw(tresc, lm, y, FN, 9, cw, (0.2,0.2,0.2))
-            y -= h + 1*mm
+            h = wrap_draw(tresc, lm, y, FN, 9, cw, (0.2, 0.2, 0.2))
+            y -= h + 1 * mm
 
             # Rada Tylera
             c.setFont(FN, 8)
             c.setFillColorRGB(0.6, 0.1, 0.1)
             c.drawString(lm, y, f"Rada Tylera: {rada[:90]}")
-            y -= 4*mm
+            y -= 4 * mm
 
             # Separator
             c.setStrokeColorRGB(0.8, 0.8, 0.8)
             c.setLineWidth(0.3)
             c.line(lm, y, rm, y)
-            y -= 4*mm
+            y -= 4 * mm
 
         # Przepowiednia ogólna
-        if y < 30*mm:
+        if y < 30 * mm:
             c.showPage()
-            y = H - 20*mm
+            y = H - 20 * mm
 
         c.setStrokeColorRGB(0.6, 0.1, 0.1)
         c.setLineWidth(1)
-        c.line(lm, y+2*mm, rm, y+2*mm)
-        y -= 4*mm
+        c.line(lm, y + 2 * mm, rm, y + 2 * mm)
+        y -= 4 * mm
         c.setFont(FB, 10)
         c.setFillColorRGB(0.6, 0.1, 0.1)
         c.drawString(lm, y, "PRZEPOWIEDNIA TYGODNIA:")
-        y -= 5*mm
+        y -= 5 * mm
         prz = data.get("przepowiednia_ogolna", "")
-        wrap_draw(prz, lm, y, FN, 9, cw, (0.1,0.1,0.1))
+        wrap_draw(prz, lm, y, FN, 9, cw, (0.1, 0.1, 0.1))
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -2198,7 +2199,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         buf = io.BytesIO()
         W, H = A4
         c = rl_canvas.Canvas(buf, pagesize=A4)
-        lm, rm = 15*mm, W - 15*mm
+        lm, rm = 15 * mm, W - 15 * mm
         cw = rm - lm
         RED = (0.6, 0.1, 0.1)
         DARK = (0.1, 0.1, 0.1)
@@ -2207,24 +2208,24 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         # Obramowanie karty
         c.setStrokeColorRGB(*RED)
         c.setLineWidth(3)
-        c.rect(8*mm, 8*mm, W-16*mm, H-16*mm, fill=0, stroke=1)
+        c.rect(8 * mm, 8 * mm, W - 16 * mm, H - 16 * mm, fill=0, stroke=1)
         c.setLineWidth(1)
-        c.rect(10*mm, 10*mm, W-20*mm, H-20*mm, fill=0, stroke=1)
+        c.rect(10 * mm, 10 * mm, W - 20 * mm, H - 20 * mm, fill=0, stroke=1)
 
         # Nagłówek
         c.setFillColorRGB(*DARK)
-        c.rect(10*mm, H-40*mm, W-20*mm, 30*mm, fill=1, stroke=0)
+        c.rect(10 * mm, H - 40 * mm, W - 20 * mm, 30 * mm, fill=1, stroke=0)
         c.setFont(FB, 8)
         c.setFillColorRGB(0.6, 0.6, 0.6)
-        c.drawCentredString(W/2, H-18*mm, "KARTA POSTACI — PROJEKT TYLER DURDEN")
+        c.drawCentredString(W / 2, H - 18 * mm, "KARTA POSTACI — PROJEKT TYLER DURDEN")
         c.setFont(FB, 18)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W/2, H-28*mm, data.get("nazwa_postaci", "ANONIM")[:30])
+        c.drawCentredString(W / 2, H - 28 * mm, data.get("nazwa_postaci", "ANONIM")[:30])
         c.setFont(FN, 10)
         c.setFillColorRGB(0.7, 0.5, 0.5)
-        c.drawCentredString(W/2, H-35*mm, data.get("klasa_postaci", "")[:50])
+        c.drawCentredString(W / 2, H - 35 * mm, data.get("klasa_postaci", "")[:50])
 
-        y = H - 50*mm
+        y = H - 50 * mm
 
         # Poziom
         poziom = data.get("poziom", "?")
@@ -2233,8 +2234,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawString(lm, y, f"POZIOM: {poziom}")
         c.setStrokeColorRGB(*RED)
         c.setLineWidth(0.5)
-        c.line(lm, y-2, rm, y-2)
-        y -= 8*mm
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 8 * mm
 
         # Statystyki — 2 kolumny
         stats = data.get("statystyki", {})
@@ -2242,12 +2243,12 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         half = len(stat_list) // 2 + len(stat_list) % 2
         col1 = stat_list[:half]
         col2 = stat_list[half:]
-        col_w = cw / 2 - 5*mm
+        col_w = cw / 2 - 5 * mm
 
         c.setFont(FB, 9)
         c.setFillColorRGB(*RED)
         c.drawString(lm, y, "STATYSTYKI")
-        y -= 5*mm
+        y -= 5 * mm
 
         y_stat = y
         c.setFont(FN, 8)
@@ -2255,49 +2256,49 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
             c.setFillColorRGB(*DARK)
             label = k.replace("_", " ").upper()
             c.setFont(FB, 7)
-            c.drawString(lm, y_stat - i*9, label + ":")
+            c.drawString(lm, y_stat - i * 9, label + ":")
             c.setFont(FN, 7)
             c.setFillColorRGB(*GRAY)
-            c.drawString(lm, y_stat - i*9 - 4, str(v)[:50])
+            c.drawString(lm, y_stat - i * 9 - 4, str(v)[:50])
 
         for i, (k, v) in enumerate(col2):
             c.setFillColorRGB(*DARK)
             label = k.replace("_", " ").upper()
             c.setFont(FB, 7)
-            c.drawString(lm + cw/2, y_stat - i*9, label + ":")
+            c.drawString(lm + cw / 2, y_stat - i * 9, label + ":")
             c.setFont(FN, 7)
             c.setFillColorRGB(*GRAY)
-            c.drawString(lm + cw/2, y_stat - i*9 - 4, str(v)[:50])
+            c.drawString(lm + cw / 2, y_stat - i * 9 - 4, str(v)[:50])
 
-        y = y_stat - max(len(col1), len(col2)) * 9 - 8*mm
+        y = y_stat - max(len(col1), len(col2)) * 9 - 8 * mm
 
         # Umiejętności
         c.setFont(FB, 9)
         c.setFillColorRGB(*RED)
         c.drawString(lm, y, "UMIEJĘTNOŚCI SPECJALNE")
-        c.line(lm, y-2, rm, y-2)
-        y -= 6*mm
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 6 * mm
         for um in data.get("umiejetnosci_specjalne", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3*mm, y, f"◆ {um[:80]}")
-            y -= 5*mm
+            c.drawString(lm + 3 * mm, y, f"◆ {um[:80]}")
+            y -= 5 * mm
 
-        y -= 3*mm
+        y -= 3 * mm
 
         # Ekwipunek
         c.setFont(FB, 9)
         c.setFillColorRGB(*RED)
         c.drawString(lm, y, "EKWIPUNEK")
-        c.line(lm, y-2, rm, y-2)
-        y -= 6*mm
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 6 * mm
         for item in data.get("ekwipunek", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3*mm, y, f"⚔ {item[:80]}")
-            y -= 5*mm
+            c.drawString(lm + 3 * mm, y, f"⚔ {item[:80]}")
+            y -= 5 * mm
 
-        y -= 3*mm
+        y -= 3 * mm
 
         # Quest + cytat
         c.setFont(FB, 9)
@@ -2305,13 +2306,13 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawString(lm, y, "QUEST GŁÓWNY:")
         c.setFont(FN, 8)
         c.setFillColorRGB(*DARK)
-        c.drawString(lm + 30*mm, y, data.get("quest_glowny", "")[:70])
-        y -= 8*mm
+        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", "")[:70])
+        y -= 8 * mm
 
         # Cytat na dole
         c.setStrokeColorRGB(0.7, 0.7, 0.7)
         c.line(lm, y, rm, y)
-        y -= 5*mm
+        y -= 5 * mm
         c.setFont(FN, 8)
         c.setFillColorRGB(*RED)
         cytat = data.get("cytat_postaci", "")
@@ -2322,11 +2323,11 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
             if c.stringWidth(f'"{test}"', FN, 8) <= cw:
                 line = test
             else:
-                c.drawCentredString(W/2, y, f'"{line}"')
-                y -= 4*mm
+                c.drawCentredString(W / 2, y, f'"{line}"')
+                y -= 4 * mm
                 line = w
         if line:
-            c.drawCentredString(W/2, y, f'"{line}"')
+            c.drawCentredString(W / 2, y, f'"{line}"')
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -2404,10 +2405,10 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         buf = io.BytesIO()
         W, H = A4
         c = rl_canvas.Canvas(buf, pagesize=A4)
-        lm, rm = 20*mm, W - 20*mm
+        lm, rm = 20 * mm, W - 20 * mm
         cw = rm - lm
 
-        def draw_wrap(txt, x, y, font=FN, size=9, color=(0.1,0.1,0.1), max_w=None):
+        def draw_wrap(txt, x, y, font=FN, size=9, color=(0.1, 0.1, 0.1), max_w=None):
             if max_w is None:
                 max_w = cw
             c.setFont(font, size)
@@ -2433,30 +2434,31 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         # Nagłówek szpitala
         c.setFont(FB, 12)
         c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.drawCentredString(W/2, H-20*mm, szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"))
+        c.drawCentredString(W / 2, H - 20 * mm, szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"))
         c.setFont(FN, 8)
         c.setFillColorRGB(0.4, 0.4, 0.4)
-        c.drawCentredString(W/2, H-25*mm, szpital_cfg.get("adres", "New York, NY"))
-        c.drawCentredString(W/2, H-29*mm, szpital_cfg.get("oddzial", ""))
+        c.drawCentredString(W / 2, H - 25 * mm, szpital_cfg.get("adres", "New York, NY"))
+        c.drawCentredString(W / 2, H - 29 * mm, szpital_cfg.get("oddzial", ""))
 
         c.setStrokeColorRGB(0.1, 0.1, 0.1)
         c.setLineWidth(1.5)
-        c.line(lm, H-32*mm, rm, H-32*mm)
-        c.line(lm, H-33.5*mm, rm, H-33.5*mm)
+        c.line(lm, H - 32 * mm, rm, H - 32 * mm)
+        c.line(lm, H - 33.5 * mm, rm, H - 33.5 * mm)
 
         # Tytuł dokumentu
         c.setFont(FB, 11)
         c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.drawCentredString(W/2, H-40*mm, "HISTORIA CHOROBY — KARTA PRZYJĘCIA")
+        c.drawCentredString(W / 2, H - 40 * mm, "HISTORIA CHOROBY — KARTA PRZYJĘCIA")
         c.setFont(FN, 8)
         c.setFillColorRGB(0.4, 0.4, 0.4)
         nr = data.get("numer_historii_choroby", "NY-2026-00000")
-        c.drawCentredString(W/2, H-45*mm, f"Nr: {nr}  |  Data: {data.get('data_przyjecia', datetime.now().strftime('%d.%m.%Y'))}")
+        c.drawCentredString(W / 2, H - 45 * mm,
+                            f"Nr: {nr}  |  Data: {data.get('data_przyjecia', datetime.now().strftime('%d.%m.%Y'))}")
 
         c.setLineWidth(0.5)
-        c.line(lm, H-48*mm, rm, H-48*mm)
+        c.line(lm, H - 48 * mm, rm, H - 48 * mm)
 
-        y = H - 55*mm
+        y = H - 55 * mm
 
         def sekcja(tytul, y):
             c.setFont(FB, 9)
@@ -2464,13 +2466,13 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
             c.drawString(lm, y, tytul.upper())
             c.setStrokeColorRGB(0.3, 0.3, 0.3)
             c.setLineWidth(0.3)
-            c.line(lm, y-2, rm, y-2)
-            return y - 6*mm
+            c.line(lm, y - 2, rm, y - 2)
+            return y - 6 * mm
 
-        def check_page(y, needed=25*mm):
+        def check_page(y, needed=25 * mm):
             if y < needed:
                 c.showPage()
-                return H - 20*mm
+                return H - 20 * mm
             return y
 
         # Dane pacjenta
@@ -2489,81 +2491,81 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
                 c.setFillColorRGB(0.2, 0.2, 0.2)
                 c.drawString(lm, y, f"{label}:")
                 c.setFont(FN, 8)
-                c.drawString(lm + 40*mm, y, str(val)[:60])
-                y -= 5*mm
-        y -= 3*mm
+                c.drawString(lm + 40 * mm, y, str(val)[:60])
+                y -= 5 * mm
+        y -= 3 * mm
 
         # Powód przyjęcia
-        y = check_page(y, 30*mm)
+        y = check_page(y, 30 * mm)
         y = sekcja("Powód Przyjęcia", y)
         used = draw_wrap(data.get("powod_przyjecia", ""), lm, y)
-        y -= used + 4*mm
+        y -= used + 4 * mm
 
         # Wywiad
-        y = check_page(y, 35*mm)
+        y = check_page(y, 35 * mm)
         y = sekcja("Wywiad z Pacjentem", y)
         used = draw_wrap(data.get("wywiad", ""), lm, y)
-        y -= used + 4*mm
+        y -= used + 4 * mm
 
         # Objawy
-        y = check_page(y, 30*mm)
+        y = check_page(y, 30 * mm)
         y = sekcja("Objawy", y)
         for ob in data.get("objawy", []):
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3*mm, y, f"• {ob[:90]}")
-            y -= 5*mm
-        y -= 2*mm
+            c.drawString(lm + 3 * mm, y, f"• {ob[:90]}")
+            y -= 5 * mm
+        y -= 2 * mm
 
         # Diagnoza
-        y = check_page(y, 25*mm)
+        y = check_page(y, 25 * mm)
         y = sekcja("Diagnoza", y)
         c.setFont(FB, 9)
         c.setFillColorRGB(0.6, 0.1, 0.1)
         c.drawString(lm, y, data.get("diagnoza_wstepna", "")[:80])
-        y -= 5*mm
+        y -= 5 * mm
         if data.get("diagnoza_dodatkowa"):
             c.setFont(FN, 8)
             c.setFillColorRGB(0.3, 0.3, 0.3)
             c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')[:70]}")
-            y -= 5*mm
-        y -= 2*mm
+            y -= 5 * mm
+        y -= 2 * mm
 
         # Zalecenia
-        y = check_page(y, 30*mm)
+        y = check_page(y, 30 * mm)
         y = sekcja("Zalecenia Terapeutyczne", y)
         for zal in data.get("zalecenia", []):
             y = check_page(y)
             c.setFont(FN, 8)
             c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3*mm, y, f"→ {zal[:90]}")
-            y -= 5*mm
-        y -= 2*mm
+            c.drawString(lm + 3 * mm, y, f"→ {zal[:90]}")
+            y -= 5 * mm
+        y -= 2 * mm
 
         # Rokowanie
-        y = check_page(y, 20*mm)
+        y = check_page(y, 20 * mm)
         y = sekcja("Rokowanie", y)
         c.setFont(FN, 8)
         c.setFillColorRGB(0.6, 0.1, 0.1)
         c.drawString(lm, y, data.get("rokowanie", "")[:90])
-        y -= 8*mm
+        y -= 8 * mm
 
         # Podpis
-        y = check_page(y, 20*mm)
+        y = check_page(y, 20 * mm)
         c.setStrokeColorRGB(0.3, 0.3, 0.3)
-        c.line(lm, y, lm+60*mm, y)
-        y -= 4*mm
+        c.line(lm, y, lm + 60 * mm, y)
+        y -= 4 * mm
         c.setFont(FN, 8)
         c.setFillColorRGB(0.3, 0.3, 0.3)
         c.drawString(lm, y, data.get("podpis_lekarza", "Dr. T. Durden, MD"))
-        y -= 8*mm
+        y -= 8 * mm
 
         # Notatka pielęgniarki
         if data.get("notatka_oddzialu"):
             c.setStrokeColorRGB(0.6, 0.6, 0.6)
             c.line(lm, y, rm, y)
-            y -= 4*mm
+            y -= 4 * mm
             c.setFont(FN, 7)
             c.setFillColorRGB(0.5, 0.5, 0.5)
             c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')[:100]}")
@@ -2641,7 +2643,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     text_start_y = 400 - (len(lines) * line_height) // 2
     text_lines_svg = ""
     for i, line in enumerate(lines):
-        text_lines_svg += f'<text x="420" y="{text_start_y + i*line_height}" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle">{line}</text>\n'
+        text_lines_svg += f'<text x="420" y="{text_start_y + i * line_height}" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="{kolor_tekst}" text-anchor="middle" dominant-baseline="middle">{line}</text>\n'
 
     svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="840" height="1188" viewBox="0 0 840 1188">
@@ -2661,15 +2663,15 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
   {text_lines_svg}
   
   <!-- Podtytuł -->
-  <text x="420" y="{text_start_y + len(lines)*line_height + 40}" 
+  <text x="420" y="{text_start_y + len(lines) * line_height + 40}" 
         font-family="Georgia, serif" font-size="22" fill="{kolor_tekst}" 
         text-anchor="middle" opacity="0.7">{podtytul}</text>
   
   <!-- Linia środkowa -->
-  <rect x="160" y="{text_start_y + len(lines)*line_height + 80}" width="520" height="1" fill="{kolor_tekst}" opacity="0.3"/>
+  <rect x="160" y="{text_start_y + len(lines) * line_height + 80}" width="520" height="1" fill="{kolor_tekst}" opacity="0.3"/>
   
   <!-- Autor -->
-  <text x="420" y="{text_start_y + len(lines)*line_height + 110}" 
+  <text x="420" y="{text_start_y + len(lines) * line_height + 110}" 
         font-family="Georgia, serif" font-size="20" font-style="italic" 
         fill="#8b0000" text-anchor="middle">{autor}</text>
   
@@ -2755,9 +2757,9 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
   <div class="sytuacja">{sytuacja}</div>
   <div class="pytanie-txt">{pytanie_txt}</div>
   <div class="opcje">
-    <button class="opcja" onclick="odpowiedz({nr},'a')">a) {odp.get('a','')}</button>
-    <button class="opcja" onclick="odpowiedz({nr},'b')">b) {odp.get('b','')}</button>
-    <button class="opcja" onclick="odpowiedz({nr},'c')">c) {odp.get('c','')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'a')">a) {odp.get('a', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'b')">b) {odp.get('b', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'c')">c) {odp.get('c', '')}</button>
   </div>
   <div class="komentarz" id="k{nr}"></div>
 </div>"""
@@ -2874,6 +2876,7 @@ function pokazWynik() {{
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     current_app.logger.info("[gra] OK: %d pytań", len(pytania))
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
+
 
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "") -> dict:
     """
@@ -3003,11 +3006,11 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
 
     # ── 10. Nowe elementy (ankieta, horoskop, karta RPG, raport, plakat, gra) ─
     ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
-    horoskop_pdf    = _build_horoskop(body, res_text)
-    karta_rpg_pdf   = _build_karta_rpg(body, res_text)
-    raport_pdf      = _build_raport_psychiatryczny(body, previous_body, res_text)
-    plakat_svg      = _build_plakat_svg(res_text, body)
-    gra_html        = _build_gra_html(body, res_text)
+    horoskop_pdf = _build_horoskop(body, res_text)
+    karta_rpg_pdf = _build_karta_rpg(body, res_text)
+    raport_pdf = _build_raport_psychiatryczny(body, previous_body, res_text)
+    plakat_svg = _build_plakat_svg(res_text, body)
+    gra_html = _build_gra_html(body, res_text)
 
     current_app.logger.info(
         "[zwykly] Dodatkowe: ankieta=%s horoskop=%s karta=%s raport=%s plakat=%s gra=%s",
@@ -3034,17 +3037,17 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             "content_type": "application/pdf",
             "filename": f"CV_{safe_name}_Tyler.pdf",
         },
-        "detected_emotion":   emotion_key,
-        "provider":           provider,
-        "triptych":           triptych_images,
+        "detected_emotion": emotion_key,
+        "provider": provider,
+        "triptych": triptych_images,
         "triptych_for_drive": triptych_images,
-        "debug_txt":          debug_txt,
-        "explanation_txt":    explanation_txt,
-        "ankieta_html":       ankieta_html,
-        "ankieta_pdf":        ankieta_pdf,
-        "horoskop_pdf":       horoskop_pdf,
-        "karta_rpg_pdf":      karta_rpg_pdf,
-        "raport_pdf":         raport_pdf,
-        "plakat_svg":         plakat_svg,
-        "gra_html":           gra_html,
+        "debug_txt": debug_txt,
+        "explanation_txt": explanation_txt,
+        "ankieta_html": ankieta_html,
+        "ankieta_pdf": ankieta_pdf,
+        "horoskop_pdf": horoskop_pdf,
+        "karta_rpg_pdf": karta_rpg_pdf,
+        "raport_pdf": raport_pdf,
+        "plakat_svg": plakat_svg,
+        "gra_html": gra_html,
     }
