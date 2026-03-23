@@ -849,50 +849,261 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     return {"panel1": panel1, "panel2": panel2, "panel3": panel3}
 
 
+def _detect_city(body: str) -> str:
+    """
+    Wykrywa miasto/miejscowość z treści emaila.
+    Szuka znanych polskich miast oraz słów 'w [Miasto]', 'z [Miasto]'.
+    """
+    if not body:
+        return ""
+    known = [
+        "Warszawa", "Kraków", "Wrocław", "Poznań", "Gdańsk", "Łódź", "Szczecin",
+        "Bydgoszcz", "Lublin", "Katowice", "Białystok", "Gdynia", "Częstochowa",
+        "Radom", "Sosnowiec", "Toruń", "Kielce", "Rzeszów", "Gliwice", "Zabrze",
+        "Bogatynia", "Legnica", "Opole", "Zielona Góra", "Olsztyn", "Płock",
+    ]
+    for city in known:
+        if city.lower() in body.lower():
+            return city
+    m = re.search(
+        r'\b(?:w|z|do|ze|pod|nad|koło|przy)\s+([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{3,})',
+        body
+    )
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _detect_job(body: str) -> str:
+    """
+    Wykrywa zawód/profesję z treści emaila.
+    Szuka typowych słów kluczowych.
+    """
+    if not body:
+        return ""
+    patterns = [
+        r'\bpracuję\s+(?:jako|na\s+stanowisku)\s+([a-złżźćńóęąś\s]{3,30})',
+        r'\bjeste[mś]\s+([a-złżźćńóęąś]{4,20}(?:em|iem|ą)?)\b',
+        r'\bzawód[:\s]+([a-złżźćńóęąś\s]{3,25})',
+        r'\binspektor\b', r'\binżynier\b', r'\bnauczyciel\b', r'\blekarz\b',
+        r'\bkierowca\b', r'\bprogramista\b', r'\bksięgow\w+\b', r'\bsprzedaw\w+\b',
+        r'\bpielęgniark\w+\b', r'\bstrażak\b', r'\bpolicjant\b', r'\bgórnik\b',
+        r'\bdyrektor\b', r'\bprezes\b', r'\bmenedżer\b', r'\barchitekt\b',
+    ]
+    for p in patterns:
+        m = re.search(p, body, re.IGNORECASE)
+        if m:
+            if m.lastindex:
+                return m.group(1).strip()
+            return m.group(0).strip()
+    return ""
+
+
+def _split_into_sentences(text: str) -> list:
+    """
+    Dzieli tekst na zdania. Pomija nagłówki (###), separatory (---),
+    podpisy (— Sokrates) i linie krótsze niż 20 znaków.
+    Zwraca listę zdań jako stringów.
+    """
+    if not text:
+        return []
+    sentences = []
+    # Podziel po . ! ? ale nie po skrótach
+    raw = re.split(r'(?<=[.!?])\s+', text)
+    for s in raw:
+        s = s.strip()
+        if not s:
+            continue
+        if s.startswith('#') or s.startswith('—') or s.startswith('-'):
+            continue
+        if len(s) < 20:
+            continue
+        sentences.append(s)
+    return sentences
+
+
+def _build_session_vars(
+        body: str,
+        sender_email: str,
+        sender_name: str,
+        previous_body: str,
+        res_text: str,
+        emotion_key: str,
+        provider: str,
+        panel_assignments: list = None,
+) -> dict:
+    """
+    Buduje słownik WSZYSTKICH zmiennych globalnych sesji.
+    Klucze = nazwy zmiennych bez nawiasów kwadratowych.
+    Wartości = stringi gotowe do podstawienia.
+
+    Zmienne z GAS/webhook:
+      SENDER, SENDER_NAME, BODY, PREVIOUS_BODY
+
+    Wykryte z emaila:
+      USER_PERSON, USER_OBJECTS, USER_GENDER, USER_CITY, USER_JOB, USER_EMOTION, USER_PROVIDER
+
+    Ze zdań Tylera:
+      TEXT_1 .. TEXT_N
+
+    Ze zdań Sokratesa:
+      SOKRATES_1 .. SOKRATES_N
+    """
+    vars_dict = {}
+
+    # ── Zmienne z webhook / GAS ───────────────────────────────────────────────
+    vars_dict["SENDER"]        = sender_email or ""
+    vars_dict["SENDER_NAME"]   = sender_name or ""
+    vars_dict["BODY"]          = body or ""
+    vars_dict["PREVIOUS_BODY"] = previous_body or ""
+
+    # ── Wykryte z emaila ──────────────────────────────────────────────────────
+    nouns = _extract_nouns_from_body(body)
+    vars_dict["USER_OBJECTS"] = ", ".join(nouns[:6]) if nouns else ""
+    vars_dict["USER_PERSON"]  = _detect_sender_name(body) or sender_name or ""
+    vars_dict["USER_GENDER"]  = _detect_gender(body)
+    vars_dict["USER_CITY"]    = _detect_city(body)
+    vars_dict["USER_JOB"]     = _detect_job(body)
+    vars_dict["USER_EMOTION"] = emotion_key or ""
+    vars_dict["USER_PROVIDER"]= provider or ""
+
+    # ── Zdania Tylera → TEXT_1 .. TEXT_N ─────────────────────────────────────
+    tyler_text = ""
+    if res_text and "### TYLER DURDEN" in res_text:
+        tyler_text = res_text.split("### TYLER DURDEN", 1)[1]
+    elif res_text:
+        tyler_text = res_text
+
+    tyler_sentences = _split_into_sentences(tyler_text)
+    for i, s in enumerate(tyler_sentences, 1):
+        vars_dict[f"TEXT_{i}"] = s
+
+    # ── Zdania Sokratesa → SOKRATES_1 .. SOKRATES_N ──────────────────────────
+    sokrates_text = ""
+    if res_text and "### SOKRATES" in res_text:
+        part = res_text.split("### SOKRATES", 1)[1]
+        if "---" in part:
+            sokrates_text = part.split("---")[0]
+        else:
+            sokrates_text = part
+
+    sokrates_sentences = _split_into_sentences(sokrates_text)
+    for i, s in enumerate(sokrates_sentences, 1):
+        vars_dict[f"SOKRATES_{i}"] = s
+
+    return vars_dict
+
+
+def _render_template(text: str, vars_dict: dict) -> tuple:
+    """
+    Podstawia wszystkie [ZMIENNA] w tekście na wartości ze słownika.
+    Zwraca (tekst_po_podstawieniu, lista_użytych_zmiennych).
+    Jeśli [TEXT_N] nie istnieje w słowniku — losuje z dostępnych TEXT_*.
+    """
+    if not text or not vars_dict:
+        return text, []
+
+    used = []
+
+    # Znajdź wszystkie placeholdery w tekście
+    placeholders = re.findall(r'\[([A-Z_0-9]+)\]', text)
+
+    # Zbierz dostępne TEXT_* i SOKRATES_* do losowania fallback
+    text_keys     = sorted([k for k in vars_dict if re.match(r'^TEXT_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+    sokrates_keys = sorted([k for k in vars_dict if re.match(r'^SOKRATES_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+
+    result = text
+    for ph in placeholders:
+        if ph in vars_dict:
+            result = result.replace(f"[{ph}]", vars_dict[ph], 1)
+            used.append(ph)
+        elif re.match(r'^TEXT_\d+$', ph) and text_keys:
+            # fallback — losuj z dostępnych TEXT_*
+            fallback_key = random.choice(text_keys)
+            result = result.replace(f"[{ph}]", vars_dict[fallback_key], 1)
+            used.append(f"{ph}→{fallback_key}(losowy)")
+        elif re.match(r'^SOKRATES_\d+$', ph) and sokrates_keys:
+            fallback_key = random.choice(sokrates_keys)
+            result = result.replace(f"[{ph}]", vars_dict[fallback_key], 1)
+            used.append(f"{ph}→{fallback_key}(losowy)")
+        # jeśli zmienna nieznana — zostawiamy [ZMIENNA] bez zmian
+
+    return result, used
+
+
 def _generate_panel_prompt(
         panel_index: int,
         panel_config: dict,
         style_config: dict,
         response_text: str,
         prompt_data: dict,
-        body: str
+        body: str,
+        session_vars: dict = None,
 ) -> str:
     """
     Generuje angielski prompt FLUX dla jednego panelu tryptyku.
+    - Używa session_vars do podstawiania [TEXT_N], [USER_OBJECTS] itd. w szablonie z JS
     - Losuje postać Fight Club per panel
-    - Wykrywa imię nadawcy i wplata jako postać drugoplanową
-    - Wyciąga rzeczowniki z emaila jako obiekty w scenie
     - Losuje styl wizualny i akcję
     - Bez dymków — tekst dopisuje Pillow osobno
     """
+    if session_vars is None:
+        session_vars = {}
+
     base_style = style_config.get("base_style", "cinematic film still, Fight Club 1999 aesthetic")
-    quality = style_config.get("quality_tags", "photorealistic, raw, gritty")
+    quality    = style_config.get("quality_tags", "photorealistic, raw, gritty")
     neg_prompt = style_config.get("negative_prompt",
                                   "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark")
 
     # ── Losuj postać, styl, akcję ─────────────────────────────────────────────
-    character = random.choice(FIGHT_CLUB_CHARACTERS)
+    character   = random.choice(FIGHT_CLUB_CHARACTERS)
     panel_style = random.choice(PANEL_STYLES)
-    action = random.choice(PANEL_ACTIONS)
+    action      = random.choice(PANEL_ACTIONS)
+
+    # ── Pobierz szablon panelu z JS i podstaw zmienne ─────────────────────────
+    panel_template_str = ""
+    panel_used_vars = []
+    panels_list = style_config.get("triptych", {}).get("panels", [])
+
+    # Znajdź config dla tego panelu (szukamy po kluczu panel_1, panel_2 itd.)
+    panel_key = f"panel_{panel_index}"
+    for p in panels_list:
+        # panels_list to lista dictów, każdy ma jeden klucz panel_N
+        if panel_key in p:
+            panel_template_str = p[panel_key]
+            break
+        # fallback — może być dict z kluczem "index"
+        if p.get("index") == panel_index:
+            panel_template_str = p.get(panel_key, p.get("description", ""))
+            break
+
+    if panel_template_str:
+        panel_template_str, panel_used_vars = _render_template(panel_template_str, session_vars)
+
+    # ── Cytat Tylera dla podpisu pod obrazkiem ────────────────────────────────
+    # Priorytet: TEXT_{panel_index} z session_vars, fallback: _extract_tyler_sentences
+    caption_key = f"TEXT_{panel_index}"
+    if caption_key in session_vars and session_vars[caption_key]:
+        caption = session_vars[caption_key]
+    else:
+        tyler_sentences = _extract_tyler_sentences(response_text)
+        quote_map = {"1": "panel1", "2": "panel2", "3": "panel3"}
+        caption = tyler_sentences.get(quote_map.get(str(panel_index), "panel1"), "")
 
     # ── Rzeczowniki z emaila ──────────────────────────────────────────────────
-    nouns = _extract_nouns_from_body(body)
-    nouns_str = ", ".join(nouns[:4]) if nouns else "debris, trash, broken furniture"
+    nouns_str = session_vars.get("USER_OBJECTS", "") or "debris, trash, broken furniture"
 
-    # ── Imię nadawcy → postać drugoplanowa ───────────────────────────────────
-    sender_name = _detect_sender_name(body)
-    if sender_name:
+    # ── Imię nadawcy ──────────────────────────────────────────────────────────
+    sender_name_val = session_vars.get("USER_PERSON", "")
+    if sender_name_val:
         sender_char = (
-            f"A Polish woman named {sender_name} is also in the scene — "
+            f"A Polish person named {sender_name_val} is also in the scene — "
             f"ordinary clothes, overwhelmed expression, reacting to the chaos."
         )
     else:
         sender_char = ""
-
-    # ── Cytat Tylera (bez dymka — tylko jako kontekst dla sceny) ─────────────
-    tyler_sentences = _extract_tyler_sentences(response_text)
-    quote_map = {"1": "panel1", "2": "panel2", "3": "panel3"}
-    caption = tyler_sentences.get(quote_map.get(str(panel_index), "panel1"), "")
 
     system_for_flux = (
         "You are a cinematic visual prompt engineer for FLUX image generation. "
@@ -903,20 +1114,36 @@ def _generate_panel_prompt(
         "Output: ONE paragraph, max 120 words, no bullet points. Only the prompt."
     )
 
-    user_for_flux = (
-        f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
-        f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are having fun, they are slim and well-groomed, their hair is gray dressed for hot summer weather, light casual clothes..\n\n"
-        f"Main character: {character}\n"
-        f"Action: {action}\n"
-        f"Objects in scene (from sender email context): {nouns_str}\n"
-        f"Visual style: {panel_style}, {base_style}\n"
-        f"{sender_char}\n"
-        f"Negative: {neg_prompt}\n\n"
-        f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
-        "Write the FLUX prompt now:"
-    )
+    # Jeśli jest szablon z JS — wyślij go jako główny kontekst
+    if panel_template_str:
+        user_for_flux = (
+            f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
+            f"BASE SCENE (from style config):\n{panel_template_str}\n\n"
+            f"Main character: {character}\n"
+            f"Action: {action}\n"
+            f"Objects in scene: {nouns_str}\n"
+            f"Visual style: {panel_style}, {base_style}\n"
+            f"{sender_char}\n"
+            f"Negative: {neg_prompt}\n\n"
+            f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
+            "Write the FLUX prompt now:"
+        )
+    else:
+        user_for_flux = (
+            f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
+            f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are having fun, "
+            f"they are slim and well-groomed, light casual clothes.\n\n"
+            f"Main character: {character}\n"
+            f"Action: {action}\n"
+            f"Objects in scene (from sender email context): {nouns_str}\n"
+            f"Visual style: {panel_style}, {base_style}\n"
+            f"{sender_char}\n"
+            f"Negative: {neg_prompt}\n\n"
+            f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
+            "Write the FLUX prompt now:"
+        )
 
-    flux_prompt, provider = _call_ai_with_fallback(system_for_flux, user_for_flux, max_tokens=300)
+    flux_prompt, prov = _call_ai_with_fallback(system_for_flux, user_for_flux, max_tokens=300)
 
     if not flux_prompt:
         flux_prompt = (
@@ -925,8 +1152,8 @@ def _generate_panel_prompt(
         )
 
     current_app.logger.info("[zwykly-img] Panel %d prompt (%s): %.120s",
-                            panel_index, provider, flux_prompt)
-    return flux_prompt, caption
+                            panel_index, prov, flux_prompt)
+    return flux_prompt, caption, panel_used_vars
 
 
 def _get_hf_tokens() -> list:
@@ -1110,51 +1337,65 @@ def _generate_raw_email_image(body: str) -> dict | None:
 def _generate_triptych(
         response_text: str,
         prompt_data: dict,
-        body: str
-) -> list:
+        body: str,
+        session_vars: dict = None,
+) -> tuple:
     """
     Generuje listę obrazków PNG tryptyku (max 3 panele).
     Jeśli tokeny HF wyczerpią się przed końcem — zwraca tyle ile wygenerowano.
-    Zwraca listę dict [{base64, content_type, filename, ...}, ...]
+    Zwraca (images, panel_prompts, panel_assignments)
+      images           — lista dict [{base64, content_type, filename, ...}]
+      panel_prompts    — lista stringów promptów FLUX
+      panel_assignments— lista dict {panel, caption, used_vars} do logu
     """
+    if session_vars is None:
+        session_vars = {}
+
     style_config = _load_style_config()
     if not style_config:
         current_app.logger.warning("[zwykly-img] Brak STYLE_CONFIG — pomijam generowanie tryptyku")
-        return [], []
+        return [], [], []
 
     panels_config = style_config.get("triptych", {}).get("panels", [])
     if not panels_config:
         current_app.logger.warning("[zwykly-img] Brak konfiguracji paneli w STYLE_CONFIG")
-        return [], []
+        return [], [], []
 
     images = []
     panel_prompts = []
+    panel_assignments = []
+
     for panel in panels_config:
         idx = panel.get("index", len(images) + 1)
 
-        # Generuj prompt dla panelu (zwraca tuple: prompt + cytat)
-        flux_prompt, caption = _generate_panel_prompt(
+        flux_prompt, caption, used_vars = _generate_panel_prompt(
             panel_index=idx,
             panel_config=panel,
             style_config=style_config,
             response_text=response_text,
             prompt_data=prompt_data,
-            body=body
+            body=body,
+            session_vars=session_vars,
         )
         panel_prompts.append(flux_prompt)
+        panel_assignments.append({
+            "panel": idx,
+            "caption": caption,
+            "used_vars": used_vars,
+            "prompt_preview": flux_prompt[:120],
+        })
 
-        # Generuj obrazek
         image = _generate_flux_image(flux_prompt, panel_index=idx)
 
         if image:
-            image = _png_to_jpg(image, panel_index=idx)  # PNG → JPG 95%
-            image = _add_text_below_image(image, caption, idx)  # dopisz tekst pod obrazkiem
+            image = _png_to_jpg(image, panel_index=idx)
+            image = _add_text_below_image(image, caption, idx)
             images.append(image)
             current_app.logger.info("[zwykly-img] Panel %d/%d: OK (%s)",
                                     idx, len(panels_config), image.get("filename", "?"))
         else:
             current_app.logger.warning(
-                "[zwykly-img] Panel %d/%d: brak — tokeny wyczerpane lub błąd. "
+                "[zwykly-img] Panel %d/%d: brak — tokeny wyczerpane lub blad. "
                 "Zwracam %d wygenerowanych paneli.",
                 idx, len(panels_config), len(images)
             )
@@ -1162,7 +1403,7 @@ def _generate_triptych(
 
     current_app.logger.info("[zwykly-img] Tryptyk: wygenerowano %d/%d paneli",
                             len(images), len(panels_config))
-    return images, panel_prompts
+    return images, panel_prompts, panel_assignments
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1179,13 +1420,20 @@ def _build_debug_txt(
         panel_prompts: list,
         system_msg: str = "",
         user_msg: str = "",
+        session_vars: dict = None,
+        panel_assignments: list = None,
 ) -> dict:
     """
     Buduje pełny log debug TXT do zapisu na Google Drive.
     Zawiera: statystyki długości, wszystkie prompty, odpowiedź AI,
-    info o obrazkach, zestawienie końcowe co nadawca otrzyma.
+    info o obrazkach, WSZYSTKIE zmienne sesji, przyporządkowania paneli,
+    zestawienie końcowe co nadawca otrzyma.
     """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if session_vars is None:
+        session_vars = {}
+    if panel_assignments is None:
+        panel_assignments = []
 
     body_len       = len(body or "")
     user_msg_len   = len(user_msg or "")
@@ -1277,6 +1525,64 @@ def _build_debug_txt(
     else:
         lines.append("  (brak obrazkow)")
 
+    # ── ZMIENNE GLOBALNE SESJI ────────────────────────────────────────────────
+    lines += [
+        "",
+        "---------------------------------------------",
+        "ZMIENNE GLOBALNE SESJI (dostepne jako [ZMIENNA] w plikach JSON)",
+        "---------------------------------------------",
+    ]
+
+    # Grupuj: najpierw webhook/wykryte, potem TEXT_*, potem SOKRATES_*
+    webhook_keys  = ["SENDER", "SENDER_NAME", "BODY", "PREVIOUS_BODY"]
+    detected_keys = ["USER_PERSON", "USER_OBJECTS", "USER_GENDER", "USER_CITY",
+                     "USER_JOB", "USER_EMOTION", "USER_PROVIDER"]
+    text_keys     = sorted([k for k in session_vars if re.match(r'^TEXT_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+    sokr_keys     = sorted([k for k in session_vars if re.match(r'^SOKRATES_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+
+    lines.append("-- Z Google Apps Script / webhook:")
+    for k in webhook_keys:
+        v = session_vars.get(k, "")
+        preview = str(v)[:120].replace("\n", " ")
+        lines.append(f"  [{k}] = \"{preview}\"")
+
+    lines.append("")
+    lines.append("-- Wykryte z emaila:")
+    for k in detected_keys:
+        v = session_vars.get(k, "")
+        lines.append(f"  [{k}] = \"{v}\"")
+
+    lines.append("")
+    lines.append(f"-- Zdania Tylera ({len(text_keys)} zdań):")
+    for k in text_keys:
+        v = session_vars.get(k, "")
+        lines.append(f"  [{k}] = \"{v}\"")
+
+    lines.append("")
+    lines.append(f"-- Zdania Sokratesa ({len(sokr_keys)} zdań):")
+    for k in sokr_keys:
+        v = session_vars.get(k, "")
+        lines.append(f"  [{k}] = \"{v}\"")
+
+    # ── PRZYPORZĄDKOWANIA PANELI ──────────────────────────────────────────────
+    lines += [
+        "",
+        "---------------------------------------------",
+        "PRZYPORZĄDKOWANIE ZMIENNYCH DO PANELI",
+        "---------------------------------------------",
+    ]
+    if panel_assignments:
+        for pa in panel_assignments:
+            used = ", ".join(pa.get("used_vars", [])) or "(brak podstawien)"
+            lines.append(f"  Panel {pa['panel']}: uzyte zmienne: {used}")
+            lines.append(f"    caption: \"{pa.get('caption', '')}\"")
+            lines.append(f"    prompt (poczatek): \"{pa.get('prompt_preview', '')}\"")
+            lines.append("")
+    else:
+        lines.append("  (brak danych o przyporządkowaniu)")
+
     lines += [
         "",
         "---------------------------------------------",
@@ -1294,8 +1600,8 @@ def _build_debug_txt(
     return {
         "base64":         b64,
         "content_type":   "text/plain",
-        "filename":       "_.txt",  # stala nazwa — GAS szuka tego pliku po nazwie
-        "filename_drive": f"zwykly_debug_{ts}.txt",  # na Drive uzywa znacznika czasu
+        "filename":       "_.txt",
+        "filename_drive": f"zwykly_debug_{ts}.txt",
     }
 
 def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
@@ -3363,73 +3669,86 @@ function pokazWynik() {{
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
 
-def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "") -> dict:
+def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "") -> dict:
     """
     Buduje sekcję 'zwykly' odpowiedzi:
 
     1. Wczytuje zwykly_prompt.json i renderuje prompt programowo
     2. Groq PIERWSZY → DeepSeek FALLBACK — generuje odpowiedź Tyler+Sokrates
     3. Parsuje JSON z odpowiedzi: tekst + emocja
-    4. Generuje emotkę PNG przez FLUX (zastępuje pliki z dysku)
-    5. Generuje CV PDF z zdjęciem FLUX
-    6. Generuje tryptyk PNG (3 panele FLUX Fight Club)
-    7. Zwraca dict ze wszystkimi elementami
-
-    Nadawca dostaje:
-      - reply_html  (HTML z odpowiedzią)
-      - emoticon    (PNG emotki generowanej przez FLUX — inline)
-      - cv_pdf      (PDF CV w stylu Tylera — załącznik)
-      - triptych    (lista max 3 JPG — jeśli tokeny HF dostępne)
+    4. Buduje session_vars — słownik wszystkich zmiennych globalnych sesji
+    5. Generuje emotkę PNG przez FLUX
+    6. Generuje CV PDF z zdjęciem FLUX
+    7. Generuje tryptyk PNG (3 panele FLUX Fight Club) z podstawianiem zmiennych
+    8. Zwraca dict ze wszystkimi elementami
     """
     current_app.logger.info("[zwykly] VERSION_CHECK: isinstance_fix=True file=%s", __file__)
 
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────
     prompt_data = _load_prompt_json()
-    prompt_str = _render_prompt(prompt_data, body, previous_body)
+    prompt_str  = _render_prompt(prompt_data, body, previous_body)
 
-    system_msg = prompt_data.get("system", "Odpowiadaj wyłącznie w formacie JSON.")
-    user_msg = prompt_str
+    system_msg = prompt_data.get("system", "Odpowiadaj wylacznie w formacie JSON.")
+    user_msg   = prompt_str
 
     # ── 2. Wywołaj model (Groq → DeepSeek) ───────────────────────────────────
     res_raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=6000)
-    current_app.logger.info("[zwykly] Provider użyty: %s", provider)
+    current_app.logger.info("[zwykly] Provider uzyty: %s", provider)
 
     # ── 3. Parsuj odpowiedź ───────────────────────────────────────────────────
     res_text, emotion_key = _parse_response(res_raw)
 
     # ── 3b. Retry z DeepSeek jeśli odpowiedź niekompletna ────────────────────
     if not res_text and provider == "groq":
-        current_app.logger.warning("[zwykly] Groq zwrócił niekompletną odpowiedź — retry DeepSeek")
+        current_app.logger.warning("[zwykly] Groq zwrocil niekompletna odpowiedz — retry DeepSeek")
         res_raw_retry = call_deepseek(system_msg, user_msg, MODEL_TYLER)
         if res_raw_retry:
             res_text, emotion_key = _parse_response(res_raw_retry)
             if res_text:
                 provider = "deepseek-retry"
-                res_raw = res_raw_retry
+                res_raw  = res_raw_retry
                 current_app.logger.info("[zwykly] DeepSeek retry OK")
 
     if not res_text:
         res_text = (
-            "### SOKRATES\n\nPrzepraszam, tym razem słowa do mnie nie przyszły.\n\n"
+            "### SOKRATES\n\nPrzepraszam, tym razem slowa do mnie nie przyszly.\n\n"
             "— Sokrates\n\n---\n\n### TYLER DURDEN\n\n"
-            "System zawiódł. Ale to i tak lepiej — maszyny nie powinny za nas myśleć.\n\n"
+            "System zawiodl. Ale to i tak lepiej — maszyny nie powinny za nas myslec.\n\n"
             "— Tyler Durden"
         )
 
-    # ── 4. Emotka FLUX (zastępuje pliki z dysku) ──────────────────────────────
-    # PDF emocji wyłączony — zastąpiony przez cv_pdf generowany dynamicznie
+    # ── 4. Buduj session_vars ─────────────────────────────────────────────────
+    session_vars = _build_session_vars(
+        body=body,
+        sender_email=sender_email,
+        sender_name=sender_name,
+        previous_body=previous_body or "",
+        res_text=res_text,
+        emotion_key=emotion_key,
+        provider=provider,
+    )
+    current_app.logger.info(
+        "[zwykly] session_vars: %d zmiennych (TEXT_*=%d, SOKRATES_*=%d)",
+        len(session_vars),
+        len([k for k in session_vars if k.startswith("TEXT_")]),
+        len([k for k in session_vars if k.startswith("SOKRATES_")]),
+    )
+
+    # ── 5. Emotka FLUX ────────────────────────────────────────────────────────
     png_b64 = _generate_icon_flux(body, emotion_key)
     if not png_b64:
-        current_app.logger.warning("[zwykly] FLUX emotka zawiodła — fallback na plik")
+        current_app.logger.warning("[zwykly] FLUX emotka zawiodla — fallback na plik")
         png_b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
         if not png_b64:
             png_b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{FALLBACK_EMOT}.png"))
 
-    # ── 5. Buduj HTML reply ───────────────────────────────────────────────────
+    # ── 6. Buduj HTML reply ───────────────────────────────────────────────────
     reply_html = build_html_reply(res_text)
 
-    # ── 6. Tryptyk FLUX ───────────────────────────────────────────────────────
-    triptych_images, panel_prompts = _generate_triptych(res_text, prompt_data, body)
+    # ── 7. Tryptyk FLUX z session_vars ───────────────────────────────────────
+    triptych_images, panel_prompts, panel_assignments = _generate_triptych(
+        res_text, prompt_data, body, session_vars=session_vars
+    )
 
     # ── Czwarty obrazek — surowa treść emaila bez AI ──────────────────────────
     raw_email_image = _generate_raw_email_image(body)
@@ -3437,9 +3756,9 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         triptych_images.append(raw_email_image)
         current_app.logger.info("[raw-img] Dodano czwarty obrazek do tryptyku")
 
-    # ── 7. Generuj CV (treść + zdjęcie + PDF) ─────────────────────────────────
-    cv_pdf_b64 = None
-    cv_data = None
+    # ── 8. Generuj CV (treść + zdjęcie + PDF) ─────────────────────────────────
+    cv_pdf_b64  = None
+    cv_data     = None
     cv_photo_b64 = None
 
     try:
@@ -3468,14 +3787,14 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo_b64)
 
     except Exception as e:
-        current_app.logger.error("[zwykly] Błąd generowania CV: %s", e)
+        current_app.logger.error("[zwykly] Blad generowania CV: %s", e)
 
     current_app.logger.info(
         "[zwykly] OK provider=%s emotion=%s png=%s cv_pdf=%s tryptyk=%d paneli",
         provider, emotion_key, bool(png_b64), bool(cv_pdf_b64), len(triptych_images)
     )
 
-    # ── 8. Debug TXT do Google Drive ─────────────────────────────────────────
+    # ── 9. Debug TXT do Google Drive ─────────────────────────────────────────
     debug_txt = _build_debug_txt(
         body=body,
         provider=provider,
@@ -3486,18 +3805,20 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         panel_prompts=panel_prompts,
         system_msg=system_msg,
         user_msg=user_msg,
+        session_vars=session_vars,
+        panel_assignments=panel_assignments,
     )
 
-    # ── 9. Wyjaśnienie odpowiedzi ─────────────────────────────────────────────
+    # ── 10. Wyjaśnienie odpowiedzi ────────────────────────────────────────────
     explanation_txt = _build_explanation_txt(res_text, body)
 
-    # ── 10. Nowe elementy (ankieta, horoskop, karta RPG, raport, plakat, gra) ─
+    # ── 11. Nowe elementy (ankieta, horoskop, karta RPG, raport, plakat, gra) ─
     ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
-    horoskop_pdf = _build_horoskop(body, res_text)
+    horoskop_pdf  = _build_horoskop(body, res_text)
     karta_rpg_pdf = _build_karta_rpg(body, res_text)
-    raport_pdf = _build_raport_psychiatryczny(body, previous_body, res_text)
-    plakat_svg = _build_plakat_svg(res_text, body)
-    gra_html = _build_gra_html(body, res_text)
+    raport_pdf    = _build_raport_psychiatryczny(body, previous_body, res_text)
+    plakat_svg    = _build_plakat_svg(res_text, body)
+    gra_html      = _build_gra_html(body, res_text)
 
     current_app.logger.info(
         "[zwykly] Dodatkowe: ankieta=%s horoskop=%s karta=%s raport=%s plakat=%s gra=%s",
@@ -3505,7 +3826,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         bool(raport_pdf), bool(plakat_svg), bool(gra_html)
     )
 
-    # ── 11. Zwróć wszystko ────────────────────────────────────────────────────
+    # ── 12. Zwróć wszystko ────────────────────────────────────────────────────
     if isinstance(cv_data, dict):
         imie_nazwisko = cv_data.get("imie_nazwisko", "CV")
     else:
@@ -3515,26 +3836,26 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     return {
         "reply_html": reply_html,
         "emoticon": {
-            "base64": png_b64,
+            "base64":       png_b64,
             "content_type": "image/png",
-            "filename": f"emotka_{emotion_key}.png",
+            "filename":     f"emotka_{emotion_key}.png",
         },
         "cv_pdf": {
-            "base64": cv_pdf_b64,
+            "base64":       cv_pdf_b64,
             "content_type": "application/pdf",
-            "filename": f"CV_{safe_name}_Tyler.pdf",
+            "filename":     f"CV_{safe_name}_Tyler.pdf",
         },
-        "detected_emotion": emotion_key,
-        "provider": provider,
-        "triptych": triptych_images,
+        "detected_emotion":  emotion_key,
+        "provider":          provider,
+        "triptych":          triptych_images,
         "triptych_for_drive": triptych_images,
-        "debug_txt": debug_txt,
-        "explanation_txt": explanation_txt,
-        "ankieta_html": ankieta_html,
-        "ankieta_pdf": ankieta_pdf,
-        "horoskop_pdf": horoskop_pdf,
-        "karta_rpg_pdf": karta_rpg_pdf,
-        "raport_pdf": raport_pdf,
-        "plakat_svg": plakat_svg,
-        "gra_html": gra_html,
+        "debug_txt":         debug_txt,
+        "explanation_txt":   explanation_txt,
+        "ankieta_html":      ankieta_html,
+        "ankieta_pdf":       ankieta_pdf,
+        "horoskop_pdf":      horoskop_pdf,
+        "karta_rpg_pdf":     karta_rpg_pdf,
+        "raport_pdf":        raport_pdf,
+        "plakat_svg":        plakat_svg,
+        "gra_html":          gra_html,
     }
