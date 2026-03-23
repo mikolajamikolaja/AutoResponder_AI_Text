@@ -117,29 +117,20 @@ def _register_fonts() -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAŁE API
+# STAŁE — przeniesione do core/config.py
 # ─────────────────────────────────────────────────────────────────────────────
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
-
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-HF_STEPS = 2
-HF_GUIDANCE = 2
-HF_TIMEOUT = 55
-TYLER_JPG_QUALITY = 95  # Kompresja JPG dla paneli tryptyku (95% = minimalna strata)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAPOWANIE EMOCJI → PLIKI
-# ─────────────────────────────────────────────────────────────────────────────
-EMOCJA_MAP = {
-    "radosc": "twarz_radosc",
-    "smutek": "twarz_smutek",
-    "zlosc": "twarz_zlosc",
-    "lek": "twarz_lek",
-    "nuda": "twarz_nuda",
-    "spokoj": "twarz_spokoj",
-}
-FALLBACK_EMOT = "error"
+from core.config import (
+    MAX_DLUGOSC_EMAIL,
+    GROQ_API_URL,
+    GROQ_MODEL,
+    HF_API_URL,
+    HF_STEPS,
+    HF_GUIDANCE,
+    HF_TIMEOUT,
+    TYLER_JPG_QUALITY,
+    EMOCJA_MAP,
+    FALLBACK_EMOT,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -612,6 +603,67 @@ def _detect_sender_name(body: str) -> str | None:
         return m.group(1)
 
     return None
+
+
+def _detect_gender(body: str) -> str:
+    """
+    Wykrywa płeć nadawcy na podstawie treści AKTUALNEGO emaila.
+    Zwraca 'kobieta', 'mezczyzna' lub 'nieznana'.
+    Analizuje końcówki czasowników i przymiotników w pierwszej osobie.
+    """
+    if not body:
+        return "nieznana"
+
+    text = body.lower()
+
+    # Końcówki żeńskie — czasowniki i przymiotniki w 1. osobie
+    zenskie = [
+        r'\bjeste[mś]\s+\w*a\b',
+        r'\bby[łl]am\b',
+        r'\bposz[łl]am\b',
+        r'\bpracowa[łl]am\b',
+        r'\bchcia[łl]am\b',
+        r'\bpisa[łl]am\b',
+        r'\bzrobi[łl]am\b',
+        r'\bprzysz[łl]am\b',
+        r'\bmia[łl]am\b',
+        r'\bdosta[łl]am\b',
+        r'\bwysz[łl]am\b',
+        r'\bzmęczona\b',
+        r'\bszczęśliwa\b',
+        r'\bzdenerwowana\b',
+        r'\bprzejęta\b',
+        r'\bpoczułam\b',
+        r'\bpani\b',
+    ]
+
+    # Końcówki męskie
+    meskie = [
+        r'\bby[łl]em\b',
+        r'\bposzed[łl]em\b',
+        r'\bpracowa[łl]em\b',
+        r'\bchcia[łl]em\b',
+        r'\bpisa[łl]em\b',
+        r'\bzrobi[łl]em\b',
+        r'\bprzysz[łl]em\b',
+        r'\bmia[łl]em\b',
+        r'\bdosta[łl]em\b',
+        r'\bwysz[łl]em\b',
+        r'\bzmęczony\b',
+        r'\bszczęśliwy\b',
+        r'\bzdenerwowany\b',
+        r'\bpoczułem\b',
+        r'\bpan\b',
+    ]
+
+    score_k = sum(1 for p in zenskie if re.search(p, text))
+    score_m = sum(1 for p in meskie if re.search(p, text))
+
+    if score_k > score_m:
+        return "kobieta"
+    elif score_m > score_k:
+        return "mezczyzna"
+    return "nieznana"
 
 
 def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
@@ -1125,46 +1177,126 @@ def _build_debug_txt(
         res_text: str,
         triptych_images: list,
         panel_prompts: list,
+        system_msg: str = "",
+        user_msg: str = "",
 ) -> dict:
     """
-    Buduje plik debug_txt (base64 TXT) do zapisu na Google Drive.
-    Zawiera: timestamp, provider, emocja, email nadawcy (fragment),
-             surowa odpowiedź modelu, tekstowa odpowiedź, prompty paneli.
-    Zwraca dict zgodny z _saveTylerDebugTxt() w GAS:
-      {"base64": ..., "content_type": "text/plain", "filename": "..."}
+    Buduje pełny log debug TXT do zapisu na Google Drive.
+    Zawiera: statystyki długości, wszystkie prompty, odpowiedź AI,
+    info o obrazkach, zestawienie końcowe co nadawca otrzyma.
     """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    body_len       = len(body or "")
+    user_msg_len   = len(user_msg or "")
+    res_raw_len    = len(res_raw or "")
+    res_text_len   = len(res_text or "")
+    system_msg_len = len(system_msg or "")
+
+    # Zestawienie obrazków
+    img_lines = []
+    for i, img in enumerate(triptych_images or [], 1):
+        fn   = img.get("filename", "?")
+        ct   = img.get("content_type", "?")
+        size = img.get("size_jpg", img.get("size_png_orig", "?"))
+        img_lines.append(f"  Obrazek {i}: {fn} | format: {ct} | rozmiar: {size}")
+
+    # Zestawienie "nadawca otrzyma"
+    otrzyma = []
+    if res_text:
+        otrzyma.append("  v reply_html — odpowiedz Tylera i Sokratesa (HTML)")
+    if triptych_images:
+        otrzyma.append(f"  v triptych — {len(triptych_images)} obrazek(ow) JPG Fight Club")
+    otrzyma.append("  v emoticon — emotka PNG (FLUX)")
+    otrzyma.append("  v cv_pdf — CV w stylu Tylera (PDF)")
+    otrzyma.append("  v horoskop_pdf — Horoskop nihilistyczny (PDF)")
+    otrzyma.append("  v karta_rpg_pdf — Karta postaci RPG (PDF)")
+    otrzyma.append("  v raport_pdf — Raport psychiatryczny (PDF)")
+    otrzyma.append("  v ankieta_pdf — Ankieta interaktywna AcroForm (PDF)")
+    otrzyma.append("  v plakat_svg — Plakat Tyler Durden (SVG)")
+    otrzyma.append("  v gra_html — Gra interaktywna (HTML)")
+    otrzyma.append("  v wyjasnienie.txt — Wyjasnienie odpowiedzi (TXT)")
+    otrzyma.append("  v _.txt — Ten log debugowania (TXT)")
+
     lines = [
         f"=== ZWYKLY DEBUG {ts} ===",
-        f"provider:   {provider}",
-        f"emocja:     {emotion_key}",
-        f"panele:     {len(triptych_images)}",
+        f"provider:              {provider}",
+        f"emocja:                {emotion_key}",
+        f"panele wygenerowane:   {len(triptych_images)}",
         "",
-        "--- BODY (pierwsze 500 znaków) ---",
-        (body or "")[:500],
+        "---------------------------------------------",
+        "STATYSTYKI DLUGOSCI",
+        "---------------------------------------------",
+        f"Email otrzymany:        {body_len} znakow",
+        f"System prompt:          {system_msg_len} znakow",
+        f"User prompt (do AI):    {user_msg_len} znakow (email + instrukcje)",
+        f"Odpowiedz surowa (AI):  {res_raw_len} znakow",
+        f"Odpowiedz tekstowa:     {res_text_len} znakow",
         "",
-        "--- RAW MODEL OUTPUT ---",
-        (res_raw or "(brak)")[:3000],
+        "---------------------------------------------",
+        "TRESC EMAILA (pelna)",
+        "---------------------------------------------",
+        (body or "(brak)"),
         "",
-        "--- ODPOWIEDZ TEKSTOWA ---",
-        (res_text or "(brak)")[:2000],
+        "---------------------------------------------",
+        "SYSTEM PROMPT (pelny)",
+        "---------------------------------------------",
+        (system_msg or "(brak)"),
         "",
-        "--- PROMPTY PANELI ---",
+        "---------------------------------------------",
+        "USER PROMPT WYSLANY DO AI (pelny)",
+        "---------------------------------------------",
+        (user_msg or "(brak)"),
+        "",
+        "---------------------------------------------",
+        "SUROWA ODPOWIEDZ AI (pelna)",
+        "---------------------------------------------",
+        (res_raw or "(brak)"),
+        "",
+        "---------------------------------------------",
+        "ODPOWIEDZ TEKSTOWA (pelna)",
+        "---------------------------------------------",
+        (res_text or "(brak)"),
+        "",
+        "---------------------------------------------",
+        "PROMPTY PANELI FLUX (pelne)",
+        "---------------------------------------------",
     ]
-    for i, p in enumerate(panel_prompts, 1):
-        lines.append(f"Panel {i}: {p[:300]}")
-    lines.append("")
-    lines.append("=== KONIEC ===")
+    for i, p in enumerate(panel_prompts or [], 1):
+        lines.append(f"Panel {i}:")
+        lines.append(p)
+        lines.append("")
+
+    lines += [
+        "---------------------------------------------",
+        "OBRAZKI WYGENEROWANE",
+        "---------------------------------------------",
+    ]
+    if img_lines:
+        lines += img_lines
+    else:
+        lines.append("  (brak obrazkow)")
+
+    lines += [
+        "",
+        "---------------------------------------------",
+        "NADAWCA POWINIEN OTRZYMAC:",
+        "---------------------------------------------",
+    ]
+    lines += otrzyma
+    lines += [
+        "",
+        "=== KONIEC ===",
+    ]
 
     content = "\n".join(lines)
     b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
     return {
-        "base64": b64,
-        "content_type": "text/plain",
-        "filename": "_.txt",  # stała nazwa — GAS szuka tego pliku po nazwie
-        "filename_drive": f"zwykly_debug_{ts}.txt",  # na Drive używa znacznika czasu
+        "base64":         b64,
+        "content_type":   "text/plain",
+        "filename":       "_.txt",  # stala nazwa — GAS szuka tego pliku po nazwie
+        "filename_drive": f"zwykly_debug_{ts}.txt",  # na Drive uzywa znacznika czasu
     }
-
 
 def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     """
@@ -1196,7 +1328,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
                 "model": GROQ_MODEL,
                 "messages": [
                     {"role": "system", "content": system_groq},
-                    {"role": "user", "content": f"Email:\n{body[:800]}\nEmocja: {emotion_key}"},
+                    {"role": "user", "content": f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}"},
                 ],
                 "max_tokens": 150,
                 "temperature": 0.7,
@@ -1211,7 +1343,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     if not icon_prompt:
         icon_prompt = call_deepseek(
             system_groq,
-            f"Email:\n{body[:800]}\nEmocja: {emotion_key}",
+            f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}",
             MODEL_TYLER,
             timeout=20,
         )
@@ -1255,9 +1387,9 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
     schema = cv_cfg.get("output_schema", {})
     instrukcje = cv_cfg.get("instrukcje_dodatkowe", [])
 
-    context_parts = [f"EMAIL:\n{body[:1500]}"]
+    context_parts = [f"EMAIL:\n{body[:MAX_DLUGOSC_EMAIL]}"]
     if previous_body and previous_body.strip():
-        context_parts.append(f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:500]}")
+        context_parts.append(f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:MAX_DLUGOSC_EMAIL]}")
     if sender_email:
         context_parts.append(f"\nEMAIL NADAWCY: {sender_email}")
     context_parts.append(f"\nSCHEMAT JSON DO WYPEŁNIENIA:\n{json.dumps(schema, ensure_ascii=False, indent=2)}")
@@ -1306,10 +1438,13 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
 
     imie = cv_data.get("imie_nazwisko", "unknown person") if cv_data else "unknown person"
     tytul = cv_data.get("tytul_zawodowy", "") if cv_data else ""
+    plec = _detect_gender(body)
+    plec_en = {"kobieta": "woman", "mezczyzna": "man"}.get(plec, "person")
     user_msg = (
         f"Person: {imie}\n"
+        f"Gender: {plec_en}\n"
         f"Job title: {tytul}\n"
-        f"Email content (for context on objects to include):\n{body[:600]}"
+        f"Email content (for context):\n{body[:MAX_DLUGOSC_EMAIL]}"
     )
 
     photo_prompt = None
@@ -1534,8 +1669,21 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
             c.setFillColorRGB(*DARK)
             for ob in obowiazki:
                 y = check_page_break(y)
-                c.drawString(left_margin + 4 * mm, y, f"• {ob}")
-                y -= 4.5 * mm
+                words_ob = f"• {ob}".split()
+                line_ob = ""
+                for w in words_ob:
+                    test = (line_ob + " " + w).strip()
+                    if c.stringWidth(test, FN, 9) <= col_width - 4 * mm:
+                        line_ob = test
+                    else:
+                        if line_ob:
+                            c.drawString(left_margin + 4 * mm, y, line_ob)
+                            y -= 4.5 * mm
+                            y = check_page_break(y)
+                        line_ob = w
+                if line_ob:
+                    c.drawString(left_margin + 4 * mm, y, line_ob)
+                    y -= 4.5 * mm
             y -= 3 * mm
 
     wyksztalcenie = cv_data.get("wyksztalcenie", [])
@@ -1593,8 +1741,20 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         c.setFont(FN, 9)
         c.setFillColorRGB(*DARK)
         line_z = " | ".join(zainteresowania)
-        c.drawString(left_margin, y, line_z)
-        y -= 8 * mm
+        words_z = line_z.split()
+        cur_z = ""
+        for w in words_z:
+            test = (cur_z + " " + w).strip()
+            if c.stringWidth(test, FN, 9) <= col_width:
+                cur_z = test
+            else:
+                c.drawString(left_margin, y, cur_z)
+                y -= 4.5 * mm
+                y = check_page_break(y)
+                cur_z = w
+        if cur_z:
+            c.drawString(left_margin, y, cur_z)
+            y -= 8 * mm
 
     # ── ŻYCIORYS ──────────────────────────────────────────────────────────────────
     zyciorys = cv_data.get("zyciorys", "")
@@ -1669,8 +1829,8 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
     )
 
     user_msg = (
-        f"Email który otrzymał program (kontekst):\n{body[:500]}\n\n"
-        f"Odpowiedź do wyjaśnienia:\n{res_text[:3000]}"
+        f"Email który otrzymał program (kontekst):\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź do wyjaśnienia:\n{res_text}"
     )
 
     raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=3000)
@@ -1769,8 +1929,8 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Odpowiedź Tylera do nadawcy:\n{res_text[:2000]}\n\n"
-        f"Email nadawcy (kontekst):\n{body[:300]}\n\n"
+        f"Odpowiedź Tylera do nadawcy:\n{res_text}\n\n"
+        f"Email nadawcy (kontekst):\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
@@ -1914,24 +2074,42 @@ function sprawdz() {{
         "filename": f"ankieta_{ts}.html",
     }
 
-    # ── Buduj PDF ─────────────────────────────────────────────────────────────
+    # ── Buduj PDF AcroForm (interaktywny z checkboxami) ──────────────────────
     try:
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.units import mm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
 
         FN, FB = _register_fonts()
 
         buf = io.BytesIO()
         W, H = A4
         c = rl_canvas.Canvas(buf, pagesize=A4)
+        c.setTitle(tytul)
         lm, rm = 15 * mm, W - 15 * mm
         cw = rm - lm
 
-        def new_page_if_needed(y, needed=25 * mm):
-            if y < needed:
+        def wrap_draw_a(txt, x, y, font, size, max_w, color=(0.1, 0.1, 0.1)):
+            c.setFont(font, size)
+            c.setFillColorRGB(*color)
+            words = str(txt).split()
+            line = ""
+            used = 0
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_w:
+                    line = test
+                else:
+                    c.drawString(x, y - used, line)
+                    used += size + 3
+                    line = w
+            if line:
+                c.drawString(x, y - used, line)
+                used += size + 3
+            return used
+
+        def new_page_if_needed(y, need=30 * mm):
+            if y < need:
                 c.showPage()
                 return H - 20 * mm
             return y
@@ -1941,69 +2119,137 @@ function sprawdz() {{
         c.rect(0, H - 30 * mm, W, 30 * mm, fill=1, stroke=0)
         c.setFont(FB, 14)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W / 2, H - 15 * mm, tytul)
-        c.setFont(FN, 9)
+        c.drawCentredString(W / 2, H - 14 * mm, tytul[:60])
+        c.setFont(FN, 8)
         c.setFillColorRGB(0.7, 0.7, 0.7)
-        c.drawCentredString(W / 2, H - 23 * mm, data.get("wprowadzenie", "")[:80])
+        c.drawCentredString(W / 2, H - 22 * mm, data.get("wprowadzenie", "")[:100])
 
-        y = H - 40 * mm
+        y = H - 38 * mm
+        form = c.acroForm
 
-        for p in pytania:
-            nr = p.get("nr", "?")
+        correct_answers = {}  # nr → poprawna litera
+
+        for p in pytania[:5]:
+            nr      = str(p.get("nr", "?"))
+            cytat   = p.get("cytat_tylera", "")
             pytanie_txt = p.get("pytanie", "")
-            odp = p.get("odpowiedzi", {})
-            if not isinstance(odp, dict):
+            odp     = p.get("odpowiedzi", {})
+            if isinstance(odp, list):
+                odp = {
+                    str(item.get("klucz", item.get("key", chr(97 + i)))): str(item.get("tresc", item.get("text", "")))
+                    for i, item in enumerate(odp)
+                }
+            elif not isinstance(odp, dict):
                 odp = {}
-            wyjasnienie = p.get("wyjasnienie", "")
 
-            y = new_page_if_needed(y, 45 * mm)
+            correct_answers[nr] = "b"  # zawsze b — jak w oryginalnym HTML
 
-            # Numer pytania
-            c.setFont(FB, 10)
-            c.setFillColorRGB(0.7, 0.1, 0.1)
+            y = new_page_if_needed(y, 60 * mm)
+
+            # Numer i pytanie
+            c.setFont(FB, 9)
+            c.setFillColorRGB(0.6, 0.1, 0.1)
             c.drawString(lm, y, f"Pytanie {nr}:")
             y -= 5 * mm
+            used = wrap_draw_a(pytanie_txt, lm, y, FN, 9, cw, (0.1, 0.1, 0.1))
+            y -= used + 2 * mm
 
-            # Treść pytania
-            c.setFont(FN, 10)
-            c.setFillColorRGB(0.1, 0.1, 0.1)
-            words = pytanie_txt.split()
-            line = ""
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, FN, 10) <= cw:
-                    line = test
-                else:
-                    c.drawString(lm, y, line)
-                    y -= 5 * mm
-                    line = w
-                    y = new_page_if_needed(y)
-            if line:
-                c.drawString(lm, y, line)
-                y -= 6 * mm
+            # Cytat
+            if cytat:
+                used = wrap_draw_a(f'"{cytat}"', lm + 3 * mm, y, FN, 8, cw - 6 * mm, (0.4, 0.4, 0.4))
+                y -= used + 2 * mm
 
-            # Odpowiedzi
-            c.setFont(FN, 9)
-            for key, val in odp.items():
-                c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm + 5 * mm, y, f"{key}) {val}")
-                y -= 4.5 * mm
-                y = new_page_if_needed(y)
+            # Odpowiedzi z checkboxami AcroForm
+            for key in ["a", "b", "c"]:
+                val = odp.get(key, "")
+                if not val:
+                    continue
+                y = new_page_if_needed(y, 12 * mm)
 
-            # Wyjaśnienie
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.5, 0.1, 0.1)
-            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie}")
-            y -= 7 * mm
+                field_name = f"q{nr}_{key}"
+                form.checkbox(
+                    name=field_name,
+                    tooltip=f"Pytanie {nr}, odpowiedz {key}",
+                    x=lm,
+                    y=y - 3 * mm,
+                    buttonStyle="check",
+                    borderColor=(0.5, 0.1, 0.1),
+                    fillColor=(1, 1, 1),
+                    textColor=(0.5, 0.1, 0.1),
+                    forceBorder=True,
+                    size=10,
+                )
+
+                used = wrap_draw_a(f"{key}) {val}", lm + 7 * mm, y, FN, 9, cw - 7 * mm, (0.15, 0.15, 0.15))
+                y -= max(used, 6 * mm) + 1 * mm
+
+            y -= 4 * mm
+            c.setStrokeColorRGB(0.7, 0.7, 0.7)
+            c.setLineWidth(0.3)
+            c.line(lm, y, rm, y)
+            y -= 4 * mm
+
+        # Pole na wynik i przycisk Podlicz
+        y = new_page_if_needed(y, 25 * mm)
+        y -= 5 * mm
+
+        form.textfield(
+            name="wynik",
+            tooltip="Wynik",
+            x=lm,
+            y=y - 8 * mm,
+            width=80 * mm,
+            height=8 * mm,
+            fontSize=10,
+            borderColor=(0.5, 0.1, 0.1),
+            fillColor=(0.98, 0.95, 0.95),
+            textColor=(0.1, 0.1, 0.1),
+            value="Nacisnij Podlicz...",
+            fieldFlags="readOnly",
+        )
+
+        correct_js = ", ".join(f'"{nr}": "{ans}"' for nr, ans in correct_answers.items())
+        total_pytań = len(pytania[:5])
+        js_code = (
+            f"var poprawne = {{{correct_js}}};\n"
+            f"var wynik = 0;\n"
+            f"var total = {total_pytań};\n"
+            "for (var nr in poprawne) {\n"
+            "    var checked_field = this.getField(\"q\" + nr + \"_\" + poprawne[nr]);\n"
+            "    if (checked_field && checked_field.value === \"Yes\") { wynik++; }\n"
+            "}\n"
+            "var komentarz = wynik >= total * 0.8 ? \"Jestes gotowy.\" : wynik >= total * 0.5 ? \"Prawie.\" : \"Rozczarowujace.\";\n"
+            "this.getField(\"wynik\").value = \"Wynik: \" + wynik + \" / \" + total + \" — \" + komentarz;"
+        )
+
+        form.button(
+            name="btn_podlicz",
+            tooltip="Podlicz wynik",
+            x=lm + 85 * mm,
+            y=y - 8 * mm,
+            width=40 * mm,
+            height=8 * mm,
+            label="PODLICZ",
+            fontSize=9,
+            borderColor=(0.5, 0.1, 0.1),
+            fillColor=(0.5, 0.1, 0.1),
+            textColor=(1, 1, 1),
+            action=js_code,
+        )
+
+        y -= 15 * mm
+        c.setFont(FN, 8)
+        c.setFillColorRGB(0.4, 0.4, 0.4)
+        c.drawCentredString(W / 2, y, data.get("zakonczenie", "— Tyler Durden"))
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         pdf_dict = {
-            "base64": pdf_b64,
+            "base64":       pdf_b64,
             "content_type": "application/pdf",
-            "filename": f"ankieta_{ts}.pdf",
+            "filename":     f"ankieta_{ts}.pdf",
         }
-        current_app.logger.info("[ankieta] OK: %d pytań", len(pytania))
+        current_app.logger.info("[ankieta] OK AcroForm: %d pytan", len(pytania[:5]))
         return html_dict, pdf_dict
 
     except Exception as e:
@@ -2033,8 +2279,8 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
     schema = cfg.get("output_schema", {})
     daty_str = "\n".join(f"Dzień {i+1} ({d})" for i, d in enumerate(daty))
     user_msg = (
-        f"Email nadawcy:\n{body[:800]}\n\n"
-        f"Odpowiedź Tylera (kontekst):\n{res_text[:1000]}\n\n"
+        f"Email nadawcy:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera (kontekst):\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"WAŻNE: W polu 'data' każdego dnia użyj DOKŁADNIE tych dat:\n{daty_str}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
@@ -2236,8 +2482,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Email:\n{body[:800]}\n\n"
-        f"Odpowiedź Tylera:\n{res_text[:800]}\n\n"
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych polskich kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
@@ -2471,10 +2717,10 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
 
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
-    context = f"EMAIL PACJENTA:\n{body[:1500]}"
+    context = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}"
     if previous_body:
-        context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:500]}"
-    context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:800]}"
+        context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:MAX_DLUGOSC_EMAIL]}"
+    context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:MAX_DLUGOSC_EMAIL]}"
     context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}"
     context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
@@ -2738,7 +2984,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Odpowiedź Tylera:\n{res_text[:2000]}\n\nEmail:\n{body[:400]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\nEmail:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy na GÓRNYM POZIOMIE:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj w 'plakat'."
     )
@@ -2921,8 +3167,8 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Email:\n{body[:800]}\n\n"
-        f"Odpowiedź Tylera:\n{res_text[:1500]}\n\n"
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
@@ -3238,6 +3484,8 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         res_text=res_text,
         triptych_images=triptych_images,
         panel_prompts=panel_prompts,
+        system_msg=system_msg,
+        user_msg=user_msg,
     )
 
     # ── 9. Wyjaśnienie odpowiedzi ─────────────────────────────────────────────
