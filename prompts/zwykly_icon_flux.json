@@ -1,7 +1,7 @@
 {
   "description": "Prompt konfiguracyjny dla FLUX do generowania ikony-metafory — styl AbsurdStyle444. Scena będąca wizualnym streszczeniem odpowiedzi Tylera. Zero portretów, czysty surrealizm i chaos przedmiotów.",
 
-  "system_for_groq": "Jesteś generatorem promptów FLUX dla stylu AbsurdStyle444. Twoim zadaniem jest stworzenie JEDNEGO angielskiego promptu, który jest wizualną, absurdalną interpretacją odpowiedzi Tylera Durdena.\n\nKROK 1 — Zidentyfikuj z EMAILA i ODPOWIEDZI TYLERA:\n  - GŁÓWNY PRZEDMIOT (np. laptop, auto, kanapka, pieniądze)\n  - METAFORĘ/DRWINĘ (np. 'uderzanie w dno', 'bycie niewolnikiem', 'rozpadanie się')\n\nKROK 2 — Zbuduj prompt (metaforę zamiast twarzy):\n  - NIE RYSUJ TWARZY ANI EMOTKI. Narysuj scenę-koszmar, gdzie postać jest zdominowana przez obiekt z emaila.\n  - Jeśli Tyler pisze o 'konsumpcji', postać jest pożerana przez obiekt. Jeśli o 'upadku', postać spada w przepaść pełną tych obiektów.\n  - Zastosuj parametry AbsurdStyle444: złamana perspektywa, surowy szkic, brudne linie, celowe błędy.\n  - Styl: podziemny zin, bazgroły na serwetce, brutalny nihilizm.\n\nKROK 3 — dodaj na końcu: 'AbsurdStyle444: rough chaotic sketch, broken proportions, interrupted contours, anarchic perspective, raw ugly lines, intentional drawing errors, visual noise, dense marks'\n\nZwróć TYLKO prompt angielski — bez wyjaśnień, bez polskich słów.",
+  "system_for_groq": "Jesteś generatorem promptów FLUX dla stylu AbsurdStyle444. Twoim zadaniem jest stworzenie JEDNEGO angielskiego promptu, który jest wizualną, absurdalną interpretacją odpowiedzi Tylera Durdena.\n\nKROK 1 — Zidentyfikuj z EMAILA i ODPOWIEDZI TYLERA:\n  - GŁÓWNY PRZEDMIOT (np. [USER_OBJECTS])\n  - METAFORĘ/DRWINĘ (np. 'uderzanie w dno', 'bycie niewolnikiem', 'rozpadanie się')\n\nKROK 2 — Zbuduj prompt (metaforę zamiast twarzy):\n  - NIE RYSUJ TWARZY ANI EMOTKI. Narysuj scenę-koszmar, gdzie postać jest zdominowana przez obiekt z emaila.\n  - Jeśli Tyler pisze o 'konsumpcji', postać jest pożerana przez obiekt. Jeśli o 'upadku', postać spada w przepaść pełną tych obiektów.\n  - Zastosuj parametry AbsurdStyle444: złamana perspektywa, surowy szkic, brudne linie, celowe błędy.\n  - Styl: podziemny zin, bazgroły na serwetce, brutalny nihilizm.\n\nKROK 3 — dodaj na końcu: 'AbsurdStyle444: rough chaotic sketch, broken proportions, interrupted contours, anarchic perspective, raw ugly lines, intentional drawing errors, visual noise, dense marks'\n\nZwróć TYLKO prompt angielski — bez wyjaśnień, bez polskich słów.",
 
   "absurd_style_params": {
     "opis": "AbsurdStyle444 — wartości parametrów dla emotki Tylera",
@@ -27,15 +27,23 @@
     "nota": "Obiekt z emaila rozpoznawalny (~65) żeby było wiadomo co to jest, ale forma złamana (~75) żeby nie wyglądało estetycznie. Jeśli wygląda ładnie — za niski chaos."
   },
 
-  "style_base": "AbsurdStyle444 rough chaotic sketch on aged paper, broken proportions, interrupted contours, anarchic perspective, raw ugly irregular lines, deliberate drawing errors, visual noise and artifacts, dense aggressive marks, underground zine panel, small format sticker, no clean lines, surrealist scene-metaphor showing [OBJECT FROM EMAIL] acting as [METAPHOR FROM REPLY]",
+  "style_base": "AbsurdStyle444 rough chaotic sketch on aged paper, broken proportions, interrupted contours, anarchic perspective, raw ugly irregular lines, deliberate drawing errors, visual noise and artifacts, dense aggressive marks, underground zine panel, small format sticker, no clean lines, surrealist scene-metaphor showing [USER_OBJECTS] dominating a tiny distorted human figure",
 
   "negative_prompt": "clean lines, polished, beautiful, aesthetic, anime, cartoon smooth, digital art, 3d render, watermark, realistic photo, portrait, human face, symmetrical, professional illustration",
 
   "size": "512x512",
 
-  "przyklad_dobry": "A chaotic raw sketch of a giant distorted [OBJECT FROM EMAIL] crushing a tiny, simplified human figure into the floor, background filled with jagged aggressive lines and random ink splatters, perspective completely broken and flat, lines interrupted and messy, AbsurdStyle444: rough chaotic sketch, broken proportions, interrupted contours, anarchic perspective, raw ugly lines, intentional drawing errors, visual noise, dense marks",
+  "przyklad_dobry": "A chaotic raw sketch of a giant distorted [USER_OBJECTS] crushing a tiny, simplified human figure into the floor, background filled with jagged aggressive lines and random ink splatters, perspective completely broken and flat, lines interrupted and messy, AbsurdStyle444: rough chaotic sketch, broken proportions, interrupted contours, anarchic perspective, raw ugly lines, intentional drawing errors, visual noise, dense marks",
 
   "fallback_prompts": {
-    "scena_standard": "Surreal chaotic scene where [OBJECT FROM EMAIL] is melting and merging with a distorted figure, background full of aggressive scribbles and visual noise, anarchic perspective, AbsurdStyle444: rough chaotic sketch broken proportions interrupted contours anarchic perspective raw ugly lines intentional drawing errors visual noise dense marks"
-  }
+    "scena_standard": "Surreal chaotic scene where [USER_OBJECTS] is melting and merging with a distorted figure, background full of aggressive scribbles and visual noise, anarchic perspective, AbsurdStyle444: rough chaotic sketch broken proportions interrupted contours anarchic perspective raw ugly lines intentional drawing errors visual noise dense marks"
+  },
+
+  "notes": [
+    "[USER_OBJECTS] — automatycznie podstawiane przez _build_session_vars() z rzeczowników Groq (do 12 szt.)",
+    "[USER_PERSON] — imię nadawcy, dostępne jeśli potrzebne w prompcie",
+    "[USER_EMOTION] — wykryta emocja, dostępna jeśli potrzebna w prompcie",
+    "Placeholder [OBJECT FROM EMAIL] i [METAPHOR FROM REPLY] są NIEAKTYWNE — kod ich nie podstawia",
+    "size 512x512 — optymalne dla emotki/ikony, nie zmieniać na większe"
+  ]
 }
