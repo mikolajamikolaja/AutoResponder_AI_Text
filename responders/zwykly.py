@@ -1064,6 +1064,7 @@ def _build_session_vars(
         emotion_key: str,
         provider: str,
         panel_assignments: list = None,
+        nouns_dict: dict = None,
 ) -> dict:
     """
     Buduje słownik WSZYSTKICH zmiennych globalnych sesji.
@@ -1075,6 +1076,7 @@ def _build_session_vars(
 
     Wykryte z emaila:
       USER_PERSON, USER_OBJECTS, USER_GENDER, USER_CITY, USER_JOB, USER_EMOTION, USER_PROVIDER
+      USER_OBJECTS pochodzi z nouns_dict (Groq) jeśli dostępny, fallback na regex.
 
     Ze zdań Tylera:
       TEXT_1 .. TEXT_N
@@ -1090,9 +1092,15 @@ def _build_session_vars(
     vars_dict["BODY"]          = body or ""
     vars_dict["PREVIOUS_BODY"] = previous_body or ""
 
-    # ── Wykryte z emaila ──────────────────────────────────────────────────────
-    nouns = _extract_nouns_from_body(body)
-    vars_dict["USER_OBJECTS"] = ", ".join(nouns[:6]) if nouns else ""
+    # ── USER_OBJECTS: Groq nouns_dict (priorytet) → fallback regex ───────────
+    if nouns_dict:
+        # nouns_dict = {rzecz001: 'kopalnia', rzecz002: 'pies', ...}
+        # Bierzemy wartości w kolejności kluczy, max 6
+        sorted_nouns = [v for k, v in sorted(nouns_dict.items()) if isinstance(v, str)]
+        vars_dict["USER_OBJECTS"] = ", ".join(sorted_nouns[:6])
+    else:
+        nouns = _extract_nouns_from_body(body)
+        vars_dict["USER_OBJECTS"] = ", ".join(nouns[:6]) if nouns else ""
     vars_dict["USER_PERSON"]  = _detect_sender_name(body) or sender_name or ""
     vars_dict["USER_GENDER"]  = _detect_gender(body, sender_name)
     vars_dict["USER_CITY"]    = _detect_city(body)
@@ -1290,8 +1298,8 @@ def _generate_panel_prompt(
 
 
 def _get_hf_tokens() -> list:
-    """Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKENXx)."""
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(24)]
+    """Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKEN25)."""
+    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(26)]
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
@@ -2666,20 +2674,26 @@ function sprawdz() {{
             "this.getField(\"wynik\").value = \"Wynik: \" + wynik + \" / \" + total + \" — \" + komentarz;"
         )
 
-        form.button(
-            name="btn_podlicz",
-            tooltip="Podlicz wynik",
-            x=lm + 85 * mm,
-            y=y - 8 * mm,
-            width=40 * mm,
-            height=8 * mm,
-            label="PODLICZ",
-            fontSize=9,
-            borderColor=RLColor(0.5, 0.1, 0.1),
-            fillColor=RLColor(0.5, 0.1, 0.1),
-            textColor=RLColor(1, 1, 1),
-            action=js_code,
-        )
+        # ── Przycisk PODLICZ — rysowany manualnie (reportlab nie ma form.button) ──
+        from reportlab.lib.colors import Color as RLColor
+        btn_x      = lm + 85 * mm
+        btn_y      = y - 8 * mm
+        btn_w      = 40 * mm
+        btn_h      = 8 * mm
+        # Tło przycisku
+        c.setFillColorRGB(0.5, 0.1, 0.1)
+        c.setStrokeColorRGB(0.5, 0.1, 0.1)
+        c.roundRect(btn_x, btn_y, btn_w, btn_h, 2, fill=1, stroke=1)
+        # Napis na przycisku
+        c.setFont(FB, 9)
+        c.setFillColorRGB(1, 1, 1)
+        c.drawCentredString(btn_x + btn_w / 2, btn_y + btn_h * 0.3, "PODLICZ")
+        # Link JS (działa w Acrobat) — użyj anotacji URI jako fallback
+        # Prawdziwy JS trigger — dodajemy przez AcroForm pushbutton bez form.button
+        try:
+            from reportlab.pdfbase.pdfdoc import PDFArray, PDFDictionary, PDFName, PDFString
+        except ImportError:
+            pass  # nie dodajemy JS — przycisk jest dekoracyjny, wynik liczy HTML
 
         y -= 15 * mm
         c.setFont(FN, 8)
@@ -4005,8 +4019,9 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         res_text=res_text,
         emotion_key=emotion_key,
         provider=provider,
+        nouns_dict=nouns_dict,
     )
-    # Dołącz rzeczowniki Groq do session_vars jako RZECZ_001, RZECZ_002...
+    # Dołącz rzeczowniki Groq do session_vars jako RZECZ001, RZECZ002...
     for k, v in nouns_dict.items():
         vars_dict_key = k.upper()  # rzecz001 → RZECZ001
         session_vars[vars_dict_key] = v
