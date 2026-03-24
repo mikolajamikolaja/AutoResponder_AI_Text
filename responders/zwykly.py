@@ -62,6 +62,8 @@ KARTA_RPG_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_karta_rpg.json")
 RAPORT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 PLAKAT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_plakat.json")
 GRA_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_gra.json")
+PSYCHIATRYCZNY_OBRAZEK_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_psychiatryczny_obrazek.json")
+NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POMOCNIK: rejestracja czcionek z polskimi znakami
@@ -576,6 +578,109 @@ def _extract_nouns_from_body(body: str) -> list:
     return nouns
 
 
+def _extract_nouns_groq(body: str) -> dict:
+    """
+    Wysyła email do Groq (rotacja kluczy) z promptem z zwykly_znajdz_rzeczowniki.json.
+    Zwraca dict {rzecz001: 'kopalnia', rzecz002: 'pies', ...} lub {} przy błędzie.
+    Fallback: DeepSeek.
+    """
+    NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
+    try:
+        with open(NOUNS_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[rzeczowniki] Brak zwykly_znajdz_rzeczowniki.json: %s", e)
+        return {}
+
+    system_msg  = cfg.get("system", "")
+    user_prefix = cfg.get("user_prefix", "Wypisz WSZYSTKIE rzeczowniki z tekstu:\n")
+    max_tokens  = cfg.get("max_tokens", 2000)
+    temperature = cfg.get("temperature", 0.1)
+    user_msg    = user_prefix + (body or "")
+
+    raw = None
+
+    # Groq rotacja kluczy
+    groq_keys = _get_groq_keys()
+    for name, key in groq_keys:
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        payload = {
+            "model": cfg.get("model", GROQ_MODEL),
+            "messages": [
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": user_msg},
+            ],
+            "max_tokens":  max_tokens,
+            "temperature": temperature,
+        }
+        try:
+            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+            if resp.status_code == 200:
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+                current_app.logger.info("[rzeczowniki] Groq OK klucz=%s (%d znaków)", name, len(raw))
+                break
+            elif resp.status_code == 429:
+                current_app.logger.warning("[rzeczowniki] 429 klucz=%s → następny", name)
+                continue
+            else:
+                current_app.logger.warning("[rzeczowniki] HTTP %s klucz=%s", resp.status_code, name)
+        except Exception as e:
+            current_app.logger.warning("[rzeczowniki] Wyjątek klucz=%s: %s", name, e)
+
+    # Fallback DeepSeek
+    if not raw:
+        current_app.logger.warning("[rzeczowniki] Groq zawiodło → DeepSeek")
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+
+    if not raw:
+        current_app.logger.error("[rzeczowniki] Brak odpowiedzi od AI")
+        return {}
+
+    # Parsuj JSON
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        m = re.search(r'\{.*\}', clean, re.DOTALL)
+        if m:
+            clean = m.group(0)
+        result = json.loads(clean.strip())
+        if not isinstance(result, dict):
+            raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
+        # Filtruj — tylko klucze rzecz001, rzecz002 itd.
+        nouns_dict = {k: v for k, v in result.items() if re.match(r'^rzecz\d+$', k) and isinstance(v, str)}
+        current_app.logger.info("[rzeczowniki] OK — %d rzeczowników", len(nouns_dict))
+        return nouns_dict
+    except Exception as e:
+        current_app.logger.warning("[rzeczowniki] Błąd JSON: %s | raw: %.200s", e, raw)
+        return {}
+
+
+def _append_nouns_to_debug_txt(debug_txt_dict: dict, nouns_dict: dict) -> dict:
+    """
+    Dopisuje listę rzeczowników na końcu pliku _.txt (base64).
+    Zwraca zaktualizowany dict debug_txt.
+    """
+    if not debug_txt_dict or not nouns_dict:
+        return debug_txt_dict
+    try:
+        existing = base64.b64decode(debug_txt_dict["base64"]).decode("utf-8")
+        lines = [
+            "",
+            "---------------------------------------------",
+            "RZECZOWNIKI Z EMAILA (zwykly_znajdz_rzeczowniki.json)",
+            "---------------------------------------------",
+        ]
+        for k in sorted(nouns_dict.keys()):
+            lines.append(f"  {k} = {nouns_dict[k]}")
+        lines.append("")
+        appended = existing + "\n".join(lines)
+        debug_txt_dict["base64"] = base64.b64encode(appended.encode("utf-8")).decode("ascii")
+        current_app.logger.info("[rzeczowniki] Dopisano %d rzeczowników do _.txt", len(nouns_dict))
+    except Exception as e:
+        current_app.logger.warning("[rzeczowniki] Błąd dopisywania do _.txt: %s", e)
+    return debug_txt_dict
+
+
 def _detect_sender_name(body: str) -> str | None:
     """
     Próbuje wykryć imię nadawcy z treści emaila.
@@ -605,18 +710,21 @@ def _detect_sender_name(body: str) -> str | None:
     return None
 
 
-def _detect_gender(body: str) -> str:
+def _detect_gender(body: str, sender_name: str = "") -> str:
     """
-    Wykrywa płeć nadawcy na podstawie treści AKTUALNEGO emaila.
+    Wykrywa płeć nadawcy na podstawie treści emaila i sender_name.
+    Kolejność:
+      1. Regex na końcówkach czasowników/przymiotników w body
+      2. Groq — zapytanie o płeć na podstawie body + sender_name
+      3. Fallback: 'nieznana'
     Zwraca 'kobieta', 'mezczyzna' lub 'nieznana'.
-    Analizuje końcówki czasowników i przymiotników w pierwszej osobie.
     """
-    if not body:
+    if not body and not sender_name:
         return "nieznana"
 
-    text = body.lower()
+    text = (body or "").lower()
 
-    # Końcówki żeńskie — czasowniki i przymiotniki w 1. osobie
+    # ── 1. Regex na końcówkach gramatycznych ─────────────────────────────────
     zenskie = [
         r'\bjeste[mś]\s+\w*a\b',
         r'\bby[łl]am\b',
@@ -636,8 +744,6 @@ def _detect_gender(body: str) -> str:
         r'\bpoczułam\b',
         r'\bpani\b',
     ]
-
-    # Końcówki męskie
     meskie = [
         r'\bby[łl]em\b',
         r'\bposzed[łl]em\b',
@@ -663,6 +769,33 @@ def _detect_gender(body: str) -> str:
         return "kobieta"
     elif score_m > score_k:
         return "mezczyzna"
+
+    # ── 2. Groq — płeć z imienia i fragmentu emaila ───────────────────────────
+    try:
+        groq_keys = _get_groq_keys()
+        if groq_keys:
+            system_gender = (
+                "Jesteś lingwistą. Na podstawie imienia i/lub fragmentu emaila określ płeć osoby. "
+                "Odpowiedz WYŁĄCZNIE jednym słowem: kobieta, mezczyzna lub nieznana."
+            )
+            user_gender = (
+                f"Imię osoby (sender_name): {sender_name or '(nieznane)'}\n"
+                f"Fragment emaila: {(body or '')[:400]}"
+            )
+            for name, key in groq_keys:
+                result = _call_groq_single(key, system_gender, user_gender, 10)
+                if result and result != "RATE_LIMIT":
+                    result_clean = result.strip().lower().replace(".", "")
+                    if "kobieta" in result_clean:
+                        current_app.logger.info("[gender] Groq → kobieta (imie=%s)", sender_name)
+                        return "kobieta"
+                    elif "mezczyzna" in result_clean or "mężczyzna" in result_clean:
+                        current_app.logger.info("[gender] Groq → mezczyzna (imie=%s)", sender_name)
+                        return "mezczyzna"
+                    break
+    except Exception as e:
+        current_app.logger.warning("[gender] Groq błąd: %s", e)
+
     return "nieznana"
 
 
@@ -961,7 +1094,7 @@ def _build_session_vars(
     nouns = _extract_nouns_from_body(body)
     vars_dict["USER_OBJECTS"] = ", ".join(nouns[:6]) if nouns else ""
     vars_dict["USER_PERSON"]  = _detect_sender_name(body) or sender_name or ""
-    vars_dict["USER_GENDER"]  = _detect_gender(body)
+    vars_dict["USER_GENDER"]  = _detect_gender(body, sender_name)
     vars_dict["USER_CITY"]    = _detect_city(body)
     vars_dict["USER_JOB"]     = _detect_job(body)
     vars_dict["USER_EMOTION"] = emotion_key or ""
@@ -1744,7 +1877,7 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
 
     imie = cv_data.get("imie_nazwisko", "unknown person") if cv_data else "unknown person"
     tytul = cv_data.get("tytul_zawodowy", "") if cv_data else ""
-    plec = _detect_gender(body)
+    plec = _detect_gender(body, imie)
     plec_en = {"kobieta": "woman", "mezczyzna": "man"}.get(plec, "person")
     user_msg = (
         f"Person: {imie}\n"
@@ -1843,26 +1976,26 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     def draw_text(txt, x, y, font=FN, size=10, color=BLACK, max_width=None):
         set_color(color)
         c.setFont(font, size)
-        if max_width:
-            words = str(txt).split()
-            line = ""
-            lines = []
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, font, size) <= max_width:
-                    line = test
-                else:
-                    if line:
-                        lines.append(line)
-                    line = w
-            if line:
-                lines.append(line)
-            for i, ln in enumerate(lines):
-                c.drawString(x, y - i * (size + 2), ln)
-            return len(lines) * (size + 2)
-        else:
-            c.drawString(x, y, str(txt))
-            return size + 2
+        effective_width = max_width if max_width is not None else col_width
+        if effective_width and effective_width < (right_margin - x):
+            # Zawijanie — zawsze tnij do szerokości strony
+            effective_width = min(effective_width, right_margin - x)
+        words = str(txt).split()
+        line = ""
+        lines = []
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(test, font, size) <= effective_width:
+                line = test
+            else:
+                if line:
+                    lines.append(line)
+                line = w
+        if line:
+            lines.append(line)
+        for i, ln in enumerate(lines):
+            c.drawString(x, y - i * (size + 2), ln)
+        return len(lines) * (size + 2)
 
     c.setFillColorRGB(*BLACK)
     c.rect(0, H - 45 * mm, W, 45 * mm, fill=1, stroke=0)
@@ -1909,7 +2042,10 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     y = H - 58 * mm
     left_margin = 15 * mm
     right_margin = W - 15 * mm
-    col_width = right_margin - left_margin
+    # Jeśli jest zdjęcie, tekst nie może wchodzić pod zdjęcie w nagłówku
+    # Zdjęcie zajmuje 38mm + 10mm margines = 48mm od prawej krawędzi
+    photo_col_width = (W - (38 * mm + 10 * mm + 15 * mm)) - left_margin if photo_b64 else (right_margin - left_margin)
+    col_width = right_margin - left_margin  # pełna szerokość dla sekcji pod nagłówkiem
 
     def section_header(title, ypos):
         c.setFont(FB, 11)
@@ -2473,15 +2609,16 @@ function sprawdz() {{
                 y = new_page_if_needed(y, 12 * mm)
 
                 field_name = f"q{nr}_{key}"
+                from reportlab.lib.colors import Color as RLColor
                 form.checkbox(
                     name=field_name,
                     tooltip=f"Pytanie {nr}, odpowiedz {key}",
                     x=lm,
                     y=y - 3 * mm,
                     buttonStyle="check",
-                    borderColor=(0.5, 0.1, 0.1),
-                    fillColor=(1, 1, 1),
-                    textColor=(0.5, 0.1, 0.1),
+                    borderColor=RLColor(0.5, 0.1, 0.1),
+                    fillColor=RLColor(1, 1, 1),
+                    textColor=RLColor(0.5, 0.1, 0.1),
                     forceBorder=True,
                     size=10,
                 )
@@ -2499,6 +2636,7 @@ function sprawdz() {{
         y = new_page_if_needed(y, 25 * mm)
         y -= 5 * mm
 
+        from reportlab.lib.colors import Color as RLColor
         form.textfield(
             name="wynik",
             tooltip="Wynik",
@@ -2507,9 +2645,9 @@ function sprawdz() {{
             width=80 * mm,
             height=8 * mm,
             fontSize=10,
-            borderColor=(0.5, 0.1, 0.1),
-            fillColor=(0.98, 0.95, 0.95),
-            textColor=(0.1, 0.1, 0.1),
+            borderColor=RLColor(0.5, 0.1, 0.1),
+            fillColor=RLColor(0.98, 0.95, 0.95),
+            textColor=RLColor(0.1, 0.1, 0.1),
             value="Nacisnij Podlicz...",
             fieldFlags="readOnly",
         )
@@ -2537,9 +2675,9 @@ function sprawdz() {{
             height=8 * mm,
             label="PODLICZ",
             fontSize=9,
-            borderColor=(0.5, 0.1, 0.1),
-            fillColor=(0.5, 0.1, 0.1),
-            textColor=(1, 1, 1),
+            borderColor=RLColor(0.5, 0.1, 0.1),
+            fillColor=RLColor(0.5, 0.1, 0.1),
+            textColor=RLColor(1, 1, 1),
             action=js_code,
         )
 
@@ -3008,12 +3146,134 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         return None
 
 
+def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = "") -> str | None:
+    """
+    Generuje zdjęcie pacjenta psychiatrycznego w kaftanie bezpieczeństwa przez FLUX.
+    Używa promptu z zwykly_psychiatryczny_obrazek.json.
+    Podmienia {{OBJECTS}} na rzeczowniki z emaila.
+    Zwraca base64 JPG lub None.
+    """
+    try:
+        with open(PSYCHIATRYCZNY_OBRAZEK_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[psych-photo] Brak zwykly_psychiatryczny_obrazek.json: %s", e)
+        return None
+
+    prompt_template = cfg.get("prompt_template", "")
+    fallback_objects = cfg.get("fallback_objects", "everyday objects, papers, worn shoes")
+    hf_params = cfg.get("hf_parameters", {})
+
+    # ── Buduj listę obiektów z rzeczowników ──────────────────────────────────
+    if nouns_dict:
+        objects_list = list(nouns_dict.values())[:8]  # max 8 rzeczowników
+        objects_str = ", ".join(objects_list)
+    else:
+        # fallback: wyciągnij z body regexem
+        nouns_fallback = _extract_nouns_from_body(body)
+        objects_str = ", ".join(nouns_fallback[:6]) if nouns_fallback else fallback_objects
+
+    # ── Płeć — do opisu pacjenta ─────────────────────────────────────────────
+    gender = _detect_gender(body, sender_name)
+    gender_desc = {
+        "kobieta": "female patient, woman",
+        "mezczyzna": "male patient, man",
+    }.get(gender, "patient")
+
+    # ── Podmień {{OBJECTS}} w szablonie promptu ───────────────────────────────
+    prompt = prompt_template.replace("{{OBJECTS}}", objects_str)
+    # Podmień opcjonalne zmienne jeśli są w szablonie
+    prompt = prompt.replace("{{GENDER}}", gender_desc)
+    prompt = prompt.replace("{{NAME}}", sender_name or "unknown")
+
+    current_app.logger.info(
+        "[psych-photo] Prompt (pierwsze 200 znaków): %.200s", prompt
+    )
+    current_app.logger.info(
+        "[psych-photo] Obiekty: %s | Płeć: %s", objects_str, gender
+    )
+
+    # ── Wywołaj FLUX z parametrami z JSON ────────────────────────────────────
+    tokens = _get_hf_tokens()
+    if not tokens:
+        current_app.logger.error("[psych-photo] Brak tokenów HF")
+        return None
+
+    seed = random.randint(0, 2 ** 32 - 1)
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "num_inference_steps": hf_params.get("num_inference_steps", 4),
+            "guidance_scale": hf_params.get("guidance_scale", 3.0),
+            "width": hf_params.get("width", 768),
+            "height": hf_params.get("height", 1024),
+            "seed": seed,
+        }
+    }
+
+    raw_img = None
+    for name, token in tokens:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "image/png"
+        }
+        try:
+            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
+            if resp.status_code == 200:
+                raw_img = resp.content
+                current_app.logger.info("[psych-photo] FLUX OK token=%s (%d B)", name, len(raw_img))
+                break
+            elif resp.status_code == 429:
+                current_app.logger.warning("[psych-photo] 429 token=%s → następny", name)
+            else:
+                current_app.logger.warning("[psych-photo] HTTP %d token=%s", resp.status_code, name)
+        except Exception as e:
+            current_app.logger.warning("[psych-photo] Wyjątek token=%s: %s", name, e)
+
+    if not raw_img:
+        current_app.logger.error("[psych-photo] Wszystkie tokeny HF zawiodły")
+        return None
+
+    # ── Konwertuj PNG → JPG, zachowaj proporcje polaroid ─────────────────────
+    try:
+        from PIL import Image as PILImage
+        pil = PILImage.open(io.BytesIO(raw_img)).convert("RGB")
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=92, optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        current_app.logger.info("[psych-photo] Konwersja JPG OK (%dKB)", len(buf.getvalue()) // 1024)
+        return b64
+    except Exception as e:
+        current_app.logger.warning("[psych-photo] Błąd konwersji: %s — zwracam PNG b64", e)
+        return base64.b64encode(raw_img).decode("ascii")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# RAPORT PSYCHIATRYCZNY PDF
+# RAPORT PSYCHIATRYCZNY DOCX (zastępuje PDF)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text: str) -> dict | None:
-    """Generuje raport psychiatryczny w stylu przyjęcia do szpitala — DeepSeek pierwszy."""
+def _build_raport_psychiatryczny(
+        body: str,
+        previous_body: str | None,
+        res_text: str,
+        nouns_dict: dict = None,
+        sender_name: str = "",
+) -> dict | None:
+    """
+    Generuje raport psychiatryczny jako DOCX (python-docx).
+    Na końcu dokumentu wkleja zdjęcie FLUX pacjenta w kaftanie bezpieczeństwa.
+    Zwraca dict {base64, content_type, filename} lub None.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt, Cm, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+    except ImportError as e:
+        current_app.logger.error("[raport] Brak python-docx: %s", e)
+        return None
+
     try:
         with open(RAPORT_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -3027,7 +3287,7 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
     if previous_body:
         context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:MAX_DLUGOSC_EMAIL]}"
     context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:MAX_DLUGOSC_EMAIL]}"
-    context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}"
+    context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
     context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
     # DeepSeek PIERWSZY dla raportu
@@ -3071,7 +3331,6 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         for wrong, right in KEY_MAP_RAPORT.items():
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
-                current_app.logger.info("[raport] znormalizowano '%s' → '%s'", wrong, right)
         if isinstance(data.get("dane_pacjenta"), str):
             data["dane_pacjenta"] = {"imie_nazwisko": data["dane_pacjenta"]}
         if not data.get("dane_pacjenta"):
@@ -3086,191 +3345,207 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         current_app.logger.warning("[raport] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
+    # ── Buduj DOCX ────────────────────────────────────────────────────────────
     try:
-        from reportlab.pdfgen import canvas as rl_canvas
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.units import mm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
+        doc = Document()
 
-        FN, FB = _register_fonts()
-
-        buf = io.BytesIO()
-        W, H = A4
-        c = rl_canvas.Canvas(buf, pagesize=A4)
-        lm, rm = 20 * mm, W - 20 * mm
-        cw = rm - lm
-
-        def draw_wrap(txt, x, y, font=FN, size=9, color=(0.1, 0.1, 0.1), max_w=None):
-            if max_w is None:
-                max_w = cw
-            c.setFont(font, size)
-            c.setFillColorRGB(*color)
-            words = str(txt).split()
-            line = ""
-            used = 0
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, font, size) <= max_w:
-                    line = test
-                else:
-                    c.drawString(x, y - used, line)
-                    used += size + 2
-                    line = w
-            if line:
-                c.drawString(x, y - used, line)
-                used += size + 2
-            return used
+        # Marginesy
+        for section in doc.sections:
+            section.top_margin    = Cm(2)
+            section.bottom_margin = Cm(2)
+            section.left_margin   = Cm(2.5)
+            section.right_margin  = Cm(2.5)
 
         szpital_cfg = cfg.get("szpital", {})
 
-        # Nagłówek szpitala
-        c.setFont(FB, 12)
-        c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.drawCentredString(W / 2, H - 20 * mm, szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"))
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.4, 0.4, 0.4)
-        c.drawCentredString(W / 2, H - 25 * mm, szpital_cfg.get("adres", "New York, NY"))
-        c.drawCentredString(W / 2, H - 29 * mm, szpital_cfg.get("oddzial", ""))
+        # ── Nagłówek szpitala ─────────────────────────────────────────────────
+        h = doc.add_heading(
+            szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"), level=1
+        )
+        h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in h.runs:
+            run.font.size = Pt(14)
+            run.font.color.rgb = RGBColor(0x0D, 0x0D, 0x0D)
 
-        c.setStrokeColorRGB(0.1, 0.1, 0.1)
-        c.setLineWidth(1.5)
-        c.line(lm, H - 32 * mm, rm, H - 32 * mm)
-        c.line(lm, H - 33.5 * mm, rm, H - 33.5 * mm)
+        sub = doc.add_paragraph(szpital_cfg.get("adres", ""))
+        sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sub.runs[0].font.size = Pt(9)
+        sub.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
-        # Tytuł dokumentu
-        c.setFont(FB, 11)
-        c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.drawCentredString(W / 2, H - 40 * mm, "HISTORIA CHOROBY — KARTA PRZYJĘCIA")
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.4, 0.4, 0.4)
+        if szpital_cfg.get("oddzial"):
+            od = doc.add_paragraph(szpital_cfg["oddzial"])
+            od.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            od.runs[0].font.size = Pt(9)
+            od.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+        doc.add_paragraph()  # odstęp
+
+        # ── Tytuł dokumentu ───────────────────────────────────────────────────
+        tyt = doc.add_heading("HISTORIA CHOROBY — KARTA PRZYJĘCIA", level=2)
+        tyt.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in tyt.runs:
+            run.font.size = Pt(12)
+
         nr = data.get("numer_historii_choroby", "NY-2026-00000")
-        c.drawCentredString(W / 2, H - 45 * mm,
-                            f"Nr: {nr}  |  Data: {data.get('data_przyjecia', datetime.now().strftime('%d.%m.%Y'))}")
+        data_przyjecia = data.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
+        nr_par = doc.add_paragraph(f"Nr: {nr}  |  Data: {data_przyjecia}")
+        nr_par.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        nr_par.runs[0].font.size = Pt(9)
+        nr_par.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
-        c.setLineWidth(0.5)
-        c.line(lm, H - 48 * mm, rm, H - 48 * mm)
+        doc.add_paragraph()
 
-        y = H - 55 * mm
+        def sekcja(tytul_sek):
+            p = doc.add_heading(tytul_sek.upper(), level=3)
+            for run in p.runs:
+                run.font.size = Pt(10)
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(0x0D, 0x0D, 0x0D)
+            return p
 
-        def sekcja(tytul, y):
-            c.setFont(FB, 9)
-            c.setFillColorRGB(0.05, 0.05, 0.05)
-            c.drawString(lm, y, tytul.upper())
-            c.setStrokeColorRGB(0.3, 0.3, 0.3)
-            c.setLineWidth(0.3)
-            c.line(lm, y - 2, rm, y - 2)
-            return y - 6 * mm
+        def pole(label, wartosc):
+            if not wartosc:
+                return
+            p = doc.add_paragraph()
+            run_label = p.add_run(f"{label}: ")
+            run_label.bold = True
+            run_label.font.size = Pt(10)
+            run_val = p.add_run(str(wartosc))
+            run_val.font.size = Pt(10)
 
-        def check_page(y, needed=25 * mm):
-            if y < needed:
-                c.showPage()
-                return H - 20 * mm
-            return y
+        def tekst_blok(zawartosc):
+            if not zawartosc:
+                return
+            p = doc.add_paragraph(str(zawartosc))
+            p.runs[0].font.size = Pt(10)
+            p.paragraph_format.space_after = Pt(4)
 
-        # Dane pacjenta
-        y = sekcja("Dane Pacjenta", y)
+        def lista_punktow(items):
+            for item in (items or []):
+                p = doc.add_paragraph(style="List Bullet")
+                run = p.add_run(str(item))
+                run.font.size = Pt(10)
+
+        # ── Dane pacjenta ─────────────────────────────────────────────────────
+        sekcja("Dane Pacjenta")
         dp = data.get("dane_pacjenta", {})
-        pairs = [
-            ("Imię i nazwisko", dp.get("imie_nazwisko", "")),
-            ("Wiek", dp.get("wiek", "")),
-            ("Adres", dp.get("adres", "")),
-            ("Zawód", dp.get("zawod", "")),
-            ("Stan cywilny", dp.get("stan_cywilny", "")),
-        ]
-        for label, val in pairs:
-            if val:
-                c.setFont(FB, 8)
-                c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm, y, f"{label}:")
-                c.setFont(FN, 8)
-                c.drawString(lm + 40 * mm, y, str(val))
-                y -= 5 * mm
-        y -= 3 * mm
+        pole("Imię i nazwisko", dp.get("imie_nazwisko", ""))
+        pole("Wiek", dp.get("wiek", ""))
+        pole("Adres", dp.get("adres", ""))
+        pole("Zawód", dp.get("zawod", ""))
+        pole("Stan cywilny", dp.get("stan_cywilny", ""))
+        doc.add_paragraph()
 
-        # Powód przyjęcia
-        y = check_page(y, 30 * mm)
-        y = sekcja("Powód Przyjęcia", y)
-        used = draw_wrap(data.get("powod_przyjecia", ""), lm, y)
-        y -= used + 4 * mm
+        # ── Powód przyjęcia ───────────────────────────────────────────────────
+        sekcja("Powód Przyjęcia")
+        tekst_blok(data.get("powod_przyjecia", ""))
+        doc.add_paragraph()
 
-        # Wywiad
-        y = check_page(y, 35 * mm)
-        y = sekcja("Wywiad z Pacjentem", y)
-        used = draw_wrap(data.get("wywiad", ""), lm, y)
-        y -= used + 4 * mm
+        # ── Wywiad ────────────────────────────────────────────────────────────
+        sekcja("Wywiad z Pacjentem")
+        tekst_blok(data.get("wywiad", ""))
+        doc.add_paragraph()
 
-        # Objawy
-        y = check_page(y, 30 * mm)
-        y = sekcja("Objawy", y)
-        for ob in data.get("objawy", []):
-            y = check_page(y)
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"• {ob}")
-            y -= 5 * mm
-        y -= 2 * mm
+        # ── Objawy ────────────────────────────────────────────────────────────
+        sekcja("Objawy")
+        lista_punktow(data.get("objawy", []))
+        doc.add_paragraph()
 
-        # Diagnoza
-        y = check_page(y, 25 * mm)
-        y = sekcja("Diagnoza", y)
-        c.setFont(FB, 9)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("diagnoza_wstepna", ""))
-        y -= 5 * mm
+        # ── Diagnoza ──────────────────────────────────────────────────────────
+        sekcja("Diagnoza")
+        p_diag = doc.add_paragraph()
+        run_diag = p_diag.add_run(data.get("diagnoza_wstepna", ""))
+        run_diag.bold = True
+        run_diag.font.size = Pt(11)
+        run_diag.font.color.rgb = RGBColor(0x99, 0x1A, 0x1A)
         if data.get("diagnoza_dodatkowa"):
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.3, 0.3, 0.3)
-            c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')}")
-            y -= 5 * mm
-        y -= 2 * mm
+            p_dd = doc.add_paragraph()
+            run_dd = p_dd.add_run(f"Diagnoza dodatkowa: {data['diagnoza_dodatkowa']}")
+            run_dd.font.size = Pt(10)
+            run_dd.font.color.rgb = RGBColor(0x4D, 0x4D, 0x4D)
+        doc.add_paragraph()
 
-        # Zalecenia
-        y = check_page(y, 30 * mm)
-        y = sekcja("Zalecenia Terapeutyczne", y)
-        for zal in data.get("zalecenia", []):
-            y = check_page(y)
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"→ {zal}")
-            y -= 5 * mm
-        y -= 2 * mm
+        # ── Zalecenia ─────────────────────────────────────────────────────────
+        sekcja("Zalecenia Terapeutyczne")
+        lista_punktow(data.get("zalecenia", []))
+        doc.add_paragraph()
 
-        # Rokowanie
-        y = check_page(y, 20 * mm)
-        y = sekcja("Rokowanie", y)
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("rokowanie", ""))
-        y -= 8 * mm
+        # ── Rokowanie ─────────────────────────────────────────────────────────
+        sekcja("Rokowanie")
+        p_rok = doc.add_paragraph()
+        run_rok = p_rok.add_run(data.get("rokowanie", ""))
+        run_rok.font.size = Pt(10)
+        run_rok.font.color.rgb = RGBColor(0x99, 0x1A, 0x1A)
+        doc.add_paragraph()
 
-        # Podpis
-        y = check_page(y, 20 * mm)
-        c.setStrokeColorRGB(0.3, 0.3, 0.3)
-        c.line(lm, y, lm + 60 * mm, y)
-        y -= 4 * mm
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.3, 0.3, 0.3)
-        c.drawString(lm, y, data.get("podpis_lekarza", "Dr. T. Durden, MD"))
-        y -= 8 * mm
+        # ── Podpis ────────────────────────────────────────────────────────────
+        p_podpis = doc.add_paragraph()
+        run_podpis = p_podpis.add_run(data.get("podpis_lekarza", "Dr. T. Durden, MD"))
+        run_podpis.font.size = Pt(10)
+        run_podpis.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
 
-        # Notatka pielęgniarki
         if data.get("notatka_oddzialu"):
-            c.setStrokeColorRGB(0.6, 0.6, 0.6)
-            c.line(lm, y, rm, y)
-            y -= 4 * mm
-            c.setFont(FN, 7)
-            c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')}")
+            p_not = doc.add_paragraph()
+            run_not = p_not.add_run(f"Notatka pielęgniarki: {data['notatka_oddzialu']}")
+            run_not.font.size = Pt(9)
+            run_not.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
 
-        c.save()
-        pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        # ── Zdjęcie psychiatryczne na końcu ───────────────────────────────────
+        doc.add_paragraph()
+        doc.add_page_break()
+
+        photo_title = doc.add_heading("DOKUMENTACJA FOTOGRAFICZNA PACJENTA", level=2)
+        photo_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in photo_title.runs:
+            run.font.size = Pt(11)
+            run.font.color.rgb = RGBColor(0x0D, 0x0D, 0x0D)
+
+        photo_sub = doc.add_paragraph("Zdjęcie wykonane przy przyjęciu — Oddział B")
+        photo_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        photo_sub.runs[0].font.size = Pt(9)
+        photo_sub.runs[0].font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+
+        doc.add_paragraph()
+
+        # Generuj zdjęcie przez FLUX
+        photo_b64 = _generate_psychiatric_photo(
+            body=body,
+            nouns_dict=nouns_dict or {},
+            sender_name=sender_name,
+        )
+
+        if photo_b64:
+            try:
+                photo_bytes = base64.b64decode(photo_b64)
+                photo_stream = io.BytesIO(photo_bytes)
+                p_img = doc.add_paragraph()
+                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run_img = p_img.add_run()
+                run_img.add_picture(photo_stream, width=Cm(12))
+                current_app.logger.info("[raport] Zdjęcie wklejone do DOCX OK")
+            except Exception as e:
+                current_app.logger.warning("[raport] Błąd wklejania zdjęcia do DOCX: %s", e)
+                p_no_img = doc.add_paragraph("[Zdjęcie niedostępne]")
+                p_no_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        else:
+            current_app.logger.warning("[raport] Brak zdjęcia psychiatrycznego — pomijam")
+            p_no_img = doc.add_paragraph("[Zdjęcie niewygenertowane — błąd FLUX]")
+            p_no_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # ── Zapisz DOCX do BytesIO ────────────────────────────────────────────
+        buf = io.BytesIO()
+        doc.save(buf)
+        docx_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        current_app.logger.info("[raport] OK")
-        return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"raport_psychiatryczny_{ts}.pdf"}
+        current_app.logger.info("[raport] DOCX OK")
+        return {
+            "base64":       docx_b64,
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "filename":     f"raport_psychiatryczny_{ts}.docx",
+        }
 
     except Exception as e:
-        current_app.logger.error("[raport] Błąd PDF: %s", e)
+        current_app.logger.error("[raport] Błąd DOCX: %s", e)
         return None
 
 
@@ -3684,6 +3959,10 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     """
     current_app.logger.info("[zwykly] VERSION_CHECK: isinstance_fix=True file=%s", __file__)
 
+    # ── 0. Rzeczowniki przez Groq — raz na początku, używane wszędzie ─────────
+    nouns_dict = _extract_nouns_groq(body)
+    current_app.logger.info("[zwykly] rzeczowniki Groq: %d słów", len(nouns_dict))
+
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────
     prompt_data = _load_prompt_json()
     prompt_str  = _render_prompt(prompt_data, body, previous_body)
@@ -3727,6 +4006,10 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         emotion_key=emotion_key,
         provider=provider,
     )
+    # Dołącz rzeczowniki Groq do session_vars jako RZECZ_001, RZECZ_002...
+    for k, v in nouns_dict.items():
+        vars_dict_key = k.upper()  # rzecz001 → RZECZ001
+        session_vars[vars_dict_key] = v
     current_app.logger.info(
         "[zwykly] session_vars: %d zmiennych (TEXT_*=%d, SOKRATES_*=%d)",
         len(session_vars),
@@ -3808,6 +4091,9 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         session_vars=session_vars,
         panel_assignments=panel_assignments,
     )
+    # Dopisz rzeczowniki na końcu _.txt
+    if nouns_dict:
+        debug_txt = _append_nouns_to_debug_txt(debug_txt, nouns_dict)
 
     # ── 10. Wyjaśnienie odpowiedzi ────────────────────────────────────────────
     explanation_txt = _build_explanation_txt(res_text, body)
@@ -3816,7 +4102,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
     horoskop_pdf  = _build_horoskop(body, res_text)
     karta_rpg_pdf = _build_karta_rpg(body, res_text)
-    raport_pdf    = _build_raport_psychiatryczny(body, previous_body, res_text)
+    raport_pdf    = _build_raport_psychiatryczny(body, previous_body, res_text, nouns_dict=nouns_dict, sender_name=sender_name)
     plakat_svg    = _build_plakat_svg(res_text, body)
     gra_html      = _build_gra_html(body, res_text)
 
