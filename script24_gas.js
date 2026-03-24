@@ -575,14 +575,18 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     } catch(e) { console.error("[zwykly] Błąd karta RPG: " + e.message); }
   }
 
-  // ── Raport psychiatryczny PDF (załącznik) ────────────────────────────────
+  // ── Raport psychiatryczny (PDF lub DOCX — content_type z backendu) ─────────
   if (data.raport_pdf && data.raport_pdf.base64) {
     try {
+      var raportContentType = data.raport_pdf.content_type ||
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      var raportFilename = data.raport_pdf.filename || "raport_psychiatryczny.docx";
       attachments.push(Utilities.newBlob(
         Utilities.base64Decode(data.raport_pdf.base64),
-        "application/pdf", data.raport_pdf.filename || "raport_psychiatryczny.pdf"
+        raportContentType,
+        raportFilename
       ));
-      console.log("[zwykly] Raport psychiatryczny dołączony");
+      console.log("[zwykly] Raport psychiatryczny dołączony: " + raportFilename + " (" + raportContentType + ")");
     } catch(e) { console.error("[zwykly] Błąd raport: " + e.message); }
   }
 
