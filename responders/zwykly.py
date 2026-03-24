@@ -224,7 +224,7 @@ def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
     # ── Poprzednia wiadomość (jeśli dostępna) ─────────────────────────────────
     if previous_body and previous_body.strip():
         lines.append("### POPRZEDNIA WIADOMOŚĆ OD TEJ OSOBY (Tyler i Sokrates MUSZĄ do niej nawiązać):")
-        lines.append(previous_body[:500])
+        lines.append(previous_body[:2000])
         lines.append("")
         # Instrukcja nawiązania z prompt.json
         poprzednia_instr = data.get("tyler_poprzednia_wiadomosc", "")
@@ -1015,7 +1015,7 @@ def _detect_job(body: str) -> str:
     if not body:
         return ""
     patterns = [
-        r'\bpracuję\s+(?:jako|na\s+stanowisku)\s+([a-złżźćńóęąś\s]{3,30})',
+        r'\bpracuję\s+(?:jako|na\s+stanowisku)\s+([a-złżźćńóęąś\s]{3,60})',
         r'\bjeste[mś]\s+([a-złżźćńóęąś]{4,20}(?:em|iem|ą)?)\b',
         r'\bzawód[:\s]+([a-złżźćńóęąś\s]{3,25})',
         r'\binspektor\b', r'\binżynier\b', r'\bnauczyciel\b', r'\blekarz\b',
@@ -1095,12 +1095,12 @@ def _build_session_vars(
     # ── USER_OBJECTS: Groq nouns_dict (priorytet) → fallback regex ───────────
     if nouns_dict:
         # nouns_dict = {rzecz001: 'kopalnia', rzecz002: 'pies', ...}
-        # Bierzemy wartości w kolejności kluczy, max 6
+        # Bierzemy wartości w kolejności kluczy, max 15
         sorted_nouns = [v for k, v in sorted(nouns_dict.items()) if isinstance(v, str)]
-        vars_dict["USER_OBJECTS"] = ", ".join(sorted_nouns[:6])
+        vars_dict["USER_OBJECTS"] = ", ".join(sorted_nouns[:15])
     else:
         nouns = _extract_nouns_from_body(body)
-        vars_dict["USER_OBJECTS"] = ", ".join(nouns[:6]) if nouns else ""
+        vars_dict["USER_OBJECTS"] = ", ".join(nouns[:15]) if nouns else ""
     vars_dict["USER_PERSON"]  = _detect_sender_name(body) or sender_name or ""
     vars_dict["USER_GENDER"]  = _detect_gender(body, sender_name)
     vars_dict["USER_CITY"]    = _detect_city(body)

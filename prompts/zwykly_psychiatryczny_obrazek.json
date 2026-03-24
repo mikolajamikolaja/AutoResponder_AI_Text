@@ -16,8 +16,8 @@
   "fallback_objects": "everyday objects, papers, worn shoes, keys, a watch",
 
   "hf_parameters": {
-    "num_inference_steps": 1,
-    "guidance_scale": 1,
+    "num_inference_steps": 5,
+    "guidance_scale": 5,
     "width": 1024,
     "height": 1024
   }

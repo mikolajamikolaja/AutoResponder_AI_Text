@@ -5,6 +5,13 @@
 
   "user_prefix": "Wypisz WSZYSTKIE rzeczowniki z poniższego tekstu emaila. Każdy rzeczownik zwróć w formie mianownika liczby pojedynczej.\n\nFormat odpowiedzi — TYLKO czysty JSON:\n{\"rzecz001\": \"krowa\", \"rzecz002\": \"pole\", \"rzecz003\": \"pies\"}\n\nTEKST:\n",
 
+  "znajdz_miasto": {
+    "system": "Jesteś precyzyjnym lingwistą polskim. Znajdź miasto lub miejscowość ZAMIESZKANIA nadawcy emaila. Zasady:\n1. Szukaj TYLKO miejscowości gdzie nadawca MIESZKA lub POCHODZI — nie gdzie mieszka ktoś inny.\n2. Zwróć nazwę w MIANOWNIKU (np. 'Wałbrzych' nie 'Wałbrzychu', 'Mokra Wieś' nie 'Mokrej Wsi').\n3. Jeśli nie ma żadnej miejscowości nadawcy — zwróć {}.\n4. Zwróć TYLKO czysty JSON bez markdown, bez komentarzy.",
+    "user_prefix": "Znajdź miejscowość ZAMIESZKANIA nadawcy.\n\nFormat: {\"miasto\": \"Wałbrzych\"}\n\nTEKST:\n",
+    "max_tokens": 100,
+    "temperature": 0.0
+  },
+
   "przykład_wejście": "Wczoraj byłem w kopalni z psem. Brygadzista dał mi awans bez uścisku dłoni. Żona patrzyła jak na meble.",
   "przykład_wyjście": {
     "rzecz001": "kopalnia",
@@ -25,6 +32,7 @@
     "Temperatura 0.1 — chcemy deterministyczność, nie kreatywność",
     "max_tokens 2000 wystarczy na ~300 rzeczowników",
     "Rotacja kluczy Groq tak samo jak reszta projektu",
-    "Wynik dopisywany do _.txt na końcu przez _append_nouns_to_debug_txt()"
+    "Wynik dopisywany do _.txt na końcu przez _append_nouns_to_debug_txt()",
+    "znajdz_miasto — osobny prompt do wykrywania miasta zamieszkania nadawcy (temperature 0.0)"
   ]
 }
