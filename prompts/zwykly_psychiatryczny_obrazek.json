@@ -1,0 +1,24 @@
+{
+  "description": "Prompt dla FLUX — JEDNO zdjęcie przedstawiające stół gabinetowy z 4 rozrzuconymi polaroidami. Każdy polaroid pokazuje inny kąt ujęcia tego samego pacjenta psychiatrycznego w kaftanie, otoczonego przedmiotami z emaila. Zmienne: {{OBJECTS}} = rzeczowniki z Groq (do 8 szt.), {{GENDER}} = płeć, {{NAME}} = imię.",
+
+  "prompt_template": "A top-down documentary photograph of a worn wooden psychiatric examination table. Scattered across the table surface are four Polaroid photographs, slightly overlapping, some tilted at random angles as if tossed there by a doctor. Each Polaroid shows a different shot of the same {{GENDER}} in a white canvas straitjacket with buckled leather straps, surrounded by these objects: {{OBJECTS}}. The four Polaroids show: (1) straight-on frontal shot — patient staring directly into the camera with hollow, thousand-yard-stare eyes, objects arranged on the table beside them; (2) overhead bird's-eye view — patient slumped on hospital bed, objects scattered around on the mattress; (3) close-up detail shot — hands bound in straitjacket straps, one or two objects resting against the restraints; (4) side profile shot — patient seated on metal chair, objects on the floor beside the chair legs. All four Polaroids share the same aesthetic: faded desaturated colors, slight overexposure, soft vignette, visible film grain, white Polaroid borders with handwritten labels: 'Ward B — frontal', 'Ward B — overhead', 'Ward B — detail', 'Ward B — profile'. The examination table itself has a metal tray with medical clipboard, a pen, and a coffee-stained manila folder labeled 'ADMISSION'. Background: cracked institutional green plaster wall, fluorescent strip light casting harsh shadows. Hyper-realistic, 1990s documentary photography style, 35mm grain.",
+
+  "notes": [
+    "{{OBJECTS}} — JEDYNA poprawna metoda wstawiania rzeczowników. Kod wstawia automatycznie do 8 rzeczowników z Groq (nouns_dict). NIE pisz [RZECZ001] — to działa tylko w plikach renderowanych przez _render_template.",
+    "{{GENDER}} — zastępowane: 'male patient' lub 'female patient' lub 'patient'",
+    "{{NAME}} — zastępowane imieniem z sender_name (lub 'unknown') — opcjonalnie dodaj do manila folder label",
+    "Efekt końcowy: JEDNO zdjęcie FLUX pokazujące stół z 4 rozrzuconymi polaroidami",
+    "Każdy z 4 polaroidów = inne ujęcie: frontal / overhead / detail (dłonie) / side profile",
+    "Przedmioty z emaila widoczne na KAŻDYM polaroidzie w innym układzie",
+    "NIE generuj: brutalnej przemocy, krwi, nagości — tylko melancholia i instytucjonalność"
+  ],
+
+  "fallback_objects": "everyday objects, papers, worn shoes, keys, a watch",
+
+  "hf_parameters": {
+    "num_inference_steps": 1,
+    "guidance_scale": 1,
+    "width": 1024,
+    "height": 1024
+  }
+}
