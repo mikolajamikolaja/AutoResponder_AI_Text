@@ -1298,7 +1298,7 @@ def _generate_panel_prompt(
     # Jeśli jest szablon z JS — wyślij go jako główny kontekst
     if panel_template_str:
         user_for_flux = (
-            f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
+            f"Panel {panel_index} of {len(panels_list)}. Fight Club 1999 aesthetic.\n\n"             
             f"BASE SCENE (from style config):\n{panel_template_str}\n\n"
             f"Main character: {character}\n"
             f"Action: {action}\n"
@@ -1311,7 +1311,7 @@ def _generate_panel_prompt(
         )
     else:
         user_for_flux = (
-            f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
+            f"Panel {panel_index} of {len(panels_list)}. Fight Club 1999 aesthetic.\n\n"
             f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are having fun, "
             f"they are slim and well-groomed, light casual clothes.\n\n"
             f"Main character: {character}\n"
