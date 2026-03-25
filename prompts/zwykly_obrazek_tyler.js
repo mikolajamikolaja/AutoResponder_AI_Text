@@ -26,9 +26,9 @@
         "text_rendering": "Text '[TEXT_5]' as stencil graffiti on the brick wall. Paint dripping."
       },
       {
-        "panel_4": "'[TEXT_3]'   '[TEXT_5]' '[TEXT_6]'  '[TEXT_7]' '[TEXT_8]'",
+        "panel_4": " '[TEXT_8]' dwie kozy.",
         "index": 4,
-        "text_rendering": "Text '[TEXT_3]'   '[TEXT_5]' '[TEXT_6]'  '[TEXT_7]' '[TEXT_8]' as stencil graffiti on the brick wall. Paint dripping."
+        "text_rendering": "Text  '[TEXT_8]' as stencil graffiti on the brick wall. Paint dripping."
       }
     ]
   },
