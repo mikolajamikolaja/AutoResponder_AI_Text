@@ -5,6 +5,12 @@
 
   "user_prefix": "Wypisz WSZYSTKIE rzeczowniki konkretne z poniższego tekstu emaila. Każdy rzeczownik zwróć w formie mianownika liczby pojedynczej.\n\nFormat odpowiedzi — TYLKO czysty JSON:\n{\"rzecz001\": \"krowa\", \"rzecz002\": \"pole\", \"rzecz003\": \"pies\"}\n\nTEKST:\n",
 
+  "znajdz_imie_nadawcy": {
+    "system": "Jesteś precyzyjnym lingwistą polskim. Znajdź imię NADAWCY emaila — osoby która napisała tę wiadomość. Zasady:\n1. Szukaj podpisu na końcu emaila — pojedyncze imię na osobnej linii to podpis nadawcy.\n2. Szukaj formy 'Pozdrawiam, Imię' lub '— Imię'.\n3. IGNORUJ imiona osób do których nadawca się zwraca (np. 'Drogi Pawle' — Paweł NIE jest nadawcą).\n4. Zwróć imię w MIANOWNIKU (np. 'Anna' nie 'Aniu', 'Paweł' nie 'Pawle').\n5. Jeśli nie ma podpisu nadawcy — zwróć {}.\n6. Zwróć TYLKO czysty JSON bez markdown, bez komentarzy.",
+    "user_prefix": "Znajdź imię NADAWCY (osoby która podpisała tę wiadomość, nie adresata).\n\nFormat: {\"imie\": \"Anna\"}\n\nTEKST:\n",
+    "max_tokens": 50,
+    "temperature": 0.0
+  },
   "znajdz_miasto": {
     "system": "Jesteś precyzyjnym lingwistą polskim. Znajdź miasto lub miejscowość ZAMIESZKANIA nadawcy emaila. Zasady:\n1. Szukaj TYLKO miejscowości gdzie nadawca MIESZKA lub POCHODZI — nie gdzie mieszka ktoś inny.\n2. Zwróć nazwę w MIANOWNIKU (np. 'Wałbrzych' nie 'Wałbrzychu', 'Mokra Wieś' nie 'Mokrej Wsi').\n3. Jeśli nie ma żadnej miejscowości nadawcy — zwróć {}.\n4. Zwróć TYLKO czysty JSON bez markdown, bez komentarzy.",
     "user_prefix": "Znajdź miejscowość ZAMIESZKANIA nadawcy.\n\nFormat: {\"miasto\": \"Wałbrzych\"}\n\nTEKST:\n",

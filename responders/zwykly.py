@@ -192,13 +192,14 @@ def _fallback_prompt_dict() -> dict:
     }
 
 
-def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
+def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name: str = "") -> str:
     """
     Buduje pełny string promptu z danych prompt.json.
     Obsługuje zarówno stary format (instrukcje/zasady_tylera/manifesty)
     jak i nowy (tyler_zasady_OBOWIAZKOWE / tyler_manifesty_OBOWIAZKOWE).
     Obsługuje previous_body — poprzednią wiadomość od nadawcy.
     Hard constraints umieszczone NA POCZĄTKU — żeby nie zostały ucięte przy długich emailach.
+    sender_name — imię nadawcy przekazane z GAS/webhook (priorytet nad autodetekcją).
     """
     lines = []
 
@@ -237,6 +238,18 @@ def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
     lines.append("### OBECNA WIADOMOŚĆ OD NADAWCY (na jej podstawie generuj WSZYSTKO):")
     lines.append(body)
     lines.append("")
+    # ── Imię nadawcy — kluczowe! ──────────────────────────────────────────────
+    detected_name = _detect_sender_name(body) or sender_name or ""
+    if detected_name:
+        lines.append("### KRYTYCZNE — IMIĘ NADAWCY TEGO EMAILA:")
+        lines.append(f"Osoba która NAPISAŁA ten email ma na imię: {detected_name}")
+        lines.append(
+            f"Tyler i Sokrates MUSZĄ zwracać się wyłącznie do '{detected_name}' — "
+            f"ZAKAZ zwracania się do innych osób wymienionych w treści emaila "
+            f"(np. jeśli w emailu jest 'Drogi Pawle', to Paweł jest adresatem emaila nadawcy, "
+            f"NIE nadawcą do nas)."
+        )
+        lines.append("")
 
     # ── Sokrates ──────────────────────────────────────────────────────────────
     sokrates = (
@@ -1102,6 +1115,33 @@ def _build_session_vars(
         nouns = _extract_nouns_from_body(body)
         vars_dict["USER_OBJECTS"] = ", ".join(nouns[:15]) if nouns else ""
     vars_dict["USER_PERSON"]  = _detect_sender_name(body) or sender_name or ""
+    # ── Zdrobnienie imienia przez Groq ───────────────────────────────────────
+    _user_person = vars_dict["USER_PERSON"]
+    if _user_person:
+        try:
+            _zdrobnienie = _user_person
+            _groq_keys_zdr = _get_groq_keys()
+            if _groq_keys_zdr:
+                _sys_zdr = (
+                    "Jesteś lingwistą polskim. Podaj zdrobniałą/pieszczotliwą formę "
+                    "podanego imienia polskiego. Odpowiedz WYŁĄCZNIE jednym słowem — "
+                    "samo zdrobnienie, nic więcej."
+                )
+                _usr_zdr = f"Imię: {_user_person}"
+                for _n_zdr, _k_zdr in _groq_keys_zdr:
+                    _r_zdr = _call_groq_single(_k_zdr, _sys_zdr, _usr_zdr, 20)
+                    if _r_zdr and _r_zdr != "RATE_LIMIT":
+                        _zdrobnienie = _r_zdr.strip().split()[0]
+                        current_app.logger.info(
+                            "[zdrobnienie] %s → %s", _user_person, _zdrobnienie
+                        )
+                        break
+            vars_dict["USER_NAME_ZDROBNIENIE"] = _zdrobnienie
+        except Exception as _e_zdr:
+            current_app.logger.warning("[zdrobnienie] Błąd: %s — fallback na imię", _e_zdr)
+            vars_dict["USER_NAME_ZDROBNIENIE"] = _user_person
+    else:
+        vars_dict["USER_NAME_ZDROBNIENIE"] = ""
     vars_dict["USER_GENDER"]  = _detect_gender(body, sender_name)
     vars_dict["USER_CITY"]    = _detect_city(body)
     vars_dict["USER_JOB"]     = _detect_job(body)
@@ -1676,7 +1716,7 @@ def _build_debug_txt(
 
     # Grupuj: najpierw webhook/wykryte, potem TEXT_*, potem SOKRATES_*
     webhook_keys  = ["SENDER", "SENDER_NAME", "BODY", "PREVIOUS_BODY"]
-    detected_keys = ["USER_PERSON", "USER_OBJECTS", "USER_GENDER", "USER_CITY",
+    detected_keys = ["USER_PERSON", "USER_NAME_ZDROBNIENIE", "USER_OBJECTS", "USER_GENDER", "USER_CITY",
                      "USER_JOB", "USER_EMOTION", "USER_PROVIDER"]
     text_keys     = sorted([k for k in session_vars if re.match(r'^TEXT_\d+$', k)],
                            key=lambda x: int(x.split('_')[1]))
@@ -3979,7 +4019,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
 
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────
     prompt_data = _load_prompt_json()
-    prompt_str  = _render_prompt(prompt_data, body, previous_body)
+    prompt_str  = _render_prompt(prompt_data, body, previous_body, sender_name=sender_name)
 
     system_msg = prompt_data.get("system", "Odpowiadaj wylacznie w formacie JSON.")
     user_msg   = prompt_str

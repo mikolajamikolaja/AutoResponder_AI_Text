@@ -11,11 +11,11 @@
     "numer_historii_choroby": "Losowy numer w formacie NY-2026-XXXXX",
     "data_przyjecia": "Data emaila",
     "dane_pacjenta": {
-      "imie_nazwisko": "Z emaila lub wymyślone jak w CV",
+      "imie_nazwisko": "Imię z emaila (priorytet: imię podpisane w emailu lub imię z SENDER_NAME), nazwisko ZAWSZE wymyślone nawiązując do głównego tematu emaila — np. 'Ania Doniczkowa', 'Ania Kwiatkowska', 'Ania Siewna'. ZAKAZ inicjałów. ZAKAZ 'Anna K'. ZAKAZ 'nieustalony'.",
       "wiek": "Z emaila jeśli podany lub 'nieustalony'",
-      "adres": "Z emaila jeśli podany",
-      "zawod": "Z emaila",
-      "stan_cywilny": "Z emaila lub wywnioskowany"
+      "adres": "Z emaila jeśli podany, jeśli nie — wymyśl adres nawiązujący do kontekstu emaila (miasto z emaila lub wymyślone pasujące do klimatu wiadomości). ZAKAZ 'nieustalony'.",
+      "zawod": "Z emaila jeśli podany, jeśli nie — wymyśl zawód wynikający z kontekstu emaila. ZAKAZ 'nieustalony'.",
+      "stan_cywilny": "Z emaila lub wywnioskowany z kontekstu — jeśli brak wskazówek, wymyśl pasujący. ZAKAZ 'nieustalony'."
     },
     "powod_przyjecia": "Oficjalny powód — nawiązuje do treści emaila, sformułowany medycznie",
     "wywiad": "3-4 zdania wywiadu z pacjentem — cytaty z emaila przepisane jako wypowiedzi pacjenta na fotelu psychiatry",
@@ -41,6 +41,7 @@
     "Diagnoza łacińska musi nawiązywać do konkretnych słów z emaila",
     "Jeśli jest poprzedni email — diagnoza dodatkowa opisuje ewolucję (lub brak) stanu pacjenta",
     "Notatka pielęgniarki to jedyne miejsce gdzie można być lekko żartobliwym",
-    "Rokowanie zawsze pesymistyczne ale trafne"
+    "Rokowanie zawsze pesymistyczne ale trafne",
+    "ZAKAZ używania słowa 'nieustalony' dla jakiegokolwiek pola danych pacjenta — wszystkie dane muszą być wymyślone na podstawie kontekstu emaila jeśli nie zostały podane wprost. Imię i nazwisko muszą nawiązywać do treści emaila"
   ]
 }

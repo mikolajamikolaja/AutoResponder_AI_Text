@@ -62,6 +62,8 @@ KARTA_RPG_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_karta_rpg.json")
 RAPORT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 PLAKAT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_plakat.json")
 GRA_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_gra.json")
+PSYCHIATRYCZNY_OBRAZEK_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_psychiatryczny_obrazek.json")
+NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POMOCNIK: rejestracja czcionek z polskimi znakami
@@ -117,29 +119,20 @@ def _register_fonts() -> tuple:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STAŁE API
+# STAŁE — przeniesione do core/config.py
 # ─────────────────────────────────────────────────────────────────────────────
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
-
-HF_API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-HF_STEPS = 2
-HF_GUIDANCE = 2
-HF_TIMEOUT = 55
-TYLER_JPG_QUALITY = 95  # Kompresja JPG dla paneli tryptyku (95% = minimalna strata)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAPOWANIE EMOCJI → PLIKI
-# ─────────────────────────────────────────────────────────────────────────────
-EMOCJA_MAP = {
-    "radosc": "twarz_radosc",
-    "smutek": "twarz_smutek",
-    "zlosc": "twarz_zlosc",
-    "lek": "twarz_lek",
-    "nuda": "twarz_nuda",
-    "spokoj": "twarz_spokoj",
-}
-FALLBACK_EMOT = "error"
+from core.config import (
+    MAX_DLUGOSC_EMAIL,
+    GROQ_API_URL,
+    GROQ_MODEL,
+    HF_API_URL,
+    HF_STEPS,
+    HF_GUIDANCE,
+    HF_TIMEOUT,
+    TYLER_JPG_QUALITY,
+    EMOCJA_MAP,
+    FALLBACK_EMOT,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -231,7 +224,7 @@ def _render_prompt(data: dict, body: str, previous_body: str = None) -> str:
     # ── Poprzednia wiadomość (jeśli dostępna) ─────────────────────────────────
     if previous_body and previous_body.strip():
         lines.append("### POPRZEDNIA WIADOMOŚĆ OD TEJ OSOBY (Tyler i Sokrates MUSZĄ do niej nawiązać):")
-        lines.append(previous_body[:500])
+        lines.append(previous_body[:2000])
         lines.append("")
         # Instrukcja nawiązania z prompt.json
         poprzednia_instr = data.get("tyler_poprzednia_wiadomosc", "")
@@ -585,6 +578,109 @@ def _extract_nouns_from_body(body: str) -> list:
     return nouns
 
 
+def _extract_nouns_groq(body: str) -> dict:
+    """
+    Wysyła email do Groq (rotacja kluczy) z promptem z zwykly_znajdz_rzeczowniki.json.
+    Zwraca dict {rzecz001: 'kopalnia', rzecz002: 'pies', ...} lub {} przy błędzie.
+    Fallback: DeepSeek.
+    """
+    NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
+    try:
+        with open(NOUNS_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[rzeczowniki] Brak zwykly_znajdz_rzeczowniki.json: %s", e)
+        return {}
+
+    system_msg  = cfg.get("system", "")
+    user_prefix = cfg.get("user_prefix", "Wypisz WSZYSTKIE rzeczowniki z tekstu:\n")
+    max_tokens  = cfg.get("max_tokens", 2000)
+    temperature = cfg.get("temperature", 0.1)
+    user_msg    = user_prefix + (body or "")
+
+    raw = None
+
+    # Groq rotacja kluczy
+    groq_keys = _get_groq_keys()
+    for name, key in groq_keys:
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        payload = {
+            "model": cfg.get("model", GROQ_MODEL),
+            "messages": [
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": user_msg},
+            ],
+            "max_tokens":  max_tokens,
+            "temperature": temperature,
+        }
+        try:
+            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+            if resp.status_code == 200:
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+                current_app.logger.info("[rzeczowniki] Groq OK klucz=%s (%d znaków)", name, len(raw))
+                break
+            elif resp.status_code == 429:
+                current_app.logger.warning("[rzeczowniki] 429 klucz=%s → następny", name)
+                continue
+            else:
+                current_app.logger.warning("[rzeczowniki] HTTP %s klucz=%s", resp.status_code, name)
+        except Exception as e:
+            current_app.logger.warning("[rzeczowniki] Wyjątek klucz=%s: %s", name, e)
+
+    # Fallback DeepSeek
+    if not raw:
+        current_app.logger.warning("[rzeczowniki] Groq zawiodło → DeepSeek")
+        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+
+    if not raw:
+        current_app.logger.error("[rzeczowniki] Brak odpowiedzi od AI")
+        return {}
+
+    # Parsuj JSON
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        m = re.search(r'\{.*\}', clean, re.DOTALL)
+        if m:
+            clean = m.group(0)
+        result = json.loads(clean.strip())
+        if not isinstance(result, dict):
+            raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
+        # Filtruj — tylko klucze rzecz001, rzecz002 itd.
+        nouns_dict = {k: v for k, v in result.items() if re.match(r'^rzecz\d+$', k) and isinstance(v, str)}
+        current_app.logger.info("[rzeczowniki] OK — %d rzeczowników", len(nouns_dict))
+        return nouns_dict
+    except Exception as e:
+        current_app.logger.warning("[rzeczowniki] Błąd JSON: %s | raw: %.200s", e, raw)
+        return {}
+
+
+def _append_nouns_to_debug_txt(debug_txt_dict: dict, nouns_dict: dict) -> dict:
+    """
+    Dopisuje listę rzeczowników na końcu pliku _.txt (base64).
+    Zwraca zaktualizowany dict debug_txt.
+    """
+    if not debug_txt_dict or not nouns_dict:
+        return debug_txt_dict
+    try:
+        existing = base64.b64decode(debug_txt_dict["base64"]).decode("utf-8")
+        lines = [
+            "",
+            "---------------------------------------------",
+            "RZECZOWNIKI Z EMAILA (zwykly_znajdz_rzeczowniki.json)",
+            "---------------------------------------------",
+        ]
+        for k in sorted(nouns_dict.keys()):
+            lines.append(f"  {k} = {nouns_dict[k]}")
+        lines.append("")
+        appended = existing + "\n".join(lines)
+        debug_txt_dict["base64"] = base64.b64encode(appended.encode("utf-8")).decode("ascii")
+        current_app.logger.info("[rzeczowniki] Dopisano %d rzeczowników do _.txt", len(nouns_dict))
+    except Exception as e:
+        current_app.logger.warning("[rzeczowniki] Błąd dopisywania do _.txt: %s", e)
+    return debug_txt_dict
+
+
 def _detect_sender_name(body: str) -> str | None:
     """
     Próbuje wykryć imię nadawcy z treści emaila.
@@ -612,6 +708,95 @@ def _detect_sender_name(body: str) -> str | None:
         return m.group(1)
 
     return None
+
+
+def _detect_gender(body: str, sender_name: str = "") -> str:
+    """
+    Wykrywa płeć nadawcy na podstawie treści emaila i sender_name.
+    Kolejność:
+      1. Regex na końcówkach czasowników/przymiotników w body
+      2. Groq — zapytanie o płeć na podstawie body + sender_name
+      3. Fallback: 'nieznana'
+    Zwraca 'kobieta', 'mezczyzna' lub 'nieznana'.
+    """
+    if not body and not sender_name:
+        return "nieznana"
+
+    text = (body or "").lower()
+
+    # ── 1. Regex na końcówkach gramatycznych ─────────────────────────────────
+    zenskie = [
+        r'\bjeste[mś]\s+\w*a\b',
+        r'\bby[łl]am\b',
+        r'\bposz[łl]am\b',
+        r'\bpracowa[łl]am\b',
+        r'\bchcia[łl]am\b',
+        r'\bpisa[łl]am\b',
+        r'\bzrobi[łl]am\b',
+        r'\bprzysz[łl]am\b',
+        r'\bmia[łl]am\b',
+        r'\bdosta[łl]am\b',
+        r'\bwysz[łl]am\b',
+        r'\bzmęczona\b',
+        r'\bszczęśliwa\b',
+        r'\bzdenerwowana\b',
+        r'\bprzejęta\b',
+        r'\bpoczułam\b',
+        r'\bpani\b',
+    ]
+    meskie = [
+        r'\bby[łl]em\b',
+        r'\bposzed[łl]em\b',
+        r'\bpracowa[łl]em\b',
+        r'\bchcia[łl]em\b',
+        r'\bpisa[łl]em\b',
+        r'\bzrobi[łl]em\b',
+        r'\bprzysz[łl]em\b',
+        r'\bmia[łl]em\b',
+        r'\bdosta[łl]em\b',
+        r'\bwysz[łl]em\b',
+        r'\bzmęczony\b',
+        r'\bszczęśliwy\b',
+        r'\bzdenerwowany\b',
+        r'\bpoczułem\b',
+        r'\bpan\b',
+    ]
+
+    score_k = sum(1 for p in zenskie if re.search(p, text))
+    score_m = sum(1 for p in meskie if re.search(p, text))
+
+    if score_k > score_m:
+        return "kobieta"
+    elif score_m > score_k:
+        return "mezczyzna"
+
+    # ── 2. Groq — płeć z imienia i fragmentu emaila ───────────────────────────
+    try:
+        groq_keys = _get_groq_keys()
+        if groq_keys:
+            system_gender = (
+                "Jesteś lingwistą. Na podstawie imienia i/lub fragmentu emaila określ płeć osoby. "
+                "Odpowiedz WYŁĄCZNIE jednym słowem: kobieta, mezczyzna lub nieznana."
+            )
+            user_gender = (
+                f"Imię osoby (sender_name): {sender_name or '(nieznane)'}\n"
+                f"Fragment emaila: {(body or '')[:400]}"
+            )
+            for name, key in groq_keys:
+                result = _call_groq_single(key, system_gender, user_gender, 10)
+                if result and result != "RATE_LIMIT":
+                    result_clean = result.strip().lower().replace(".", "")
+                    if "kobieta" in result_clean:
+                        current_app.logger.info("[gender] Groq → kobieta (imie=%s)", sender_name)
+                        return "kobieta"
+                    elif "mezczyzna" in result_clean or "mężczyzna" in result_clean:
+                        current_app.logger.info("[gender] Groq → mezczyzna (imie=%s)", sender_name)
+                        return "mezczyzna"
+                    break
+    except Exception as e:
+        current_app.logger.warning("[gender] Groq błąd: %s", e)
+
+    return "nieznana"
 
 
 def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
@@ -797,50 +982,269 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     return {"panel1": panel1, "panel2": panel2, "panel3": panel3}
 
 
+def _detect_city(body: str) -> str:
+    """
+    Wykrywa miasto/miejscowość z treści emaila.
+    Szuka znanych polskich miast oraz słów 'w [Miasto]', 'z [Miasto]'.
+    """
+    if not body:
+        return ""
+    known = [
+        "Warszawa", "Kraków", "Wrocław", "Poznań", "Gdańsk", "Łódź", "Szczecin",
+        "Bydgoszcz", "Lublin", "Katowice", "Białystok", "Gdynia", "Częstochowa",
+        "Radom", "Sosnowiec", "Toruń", "Kielce", "Rzeszów", "Gliwice", "Zabrze",
+        "Bogatynia", "Legnica", "Opole", "Zielona Góra", "Olsztyn", "Płock",
+    ]
+    for city in known:
+        if city.lower() in body.lower():
+            return city
+    m = re.search(
+        r'\b(?:w|z|do|ze|pod|nad|koło|przy)\s+([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{3,})',
+        body
+    )
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _detect_job(body: str) -> str:
+    """
+    Wykrywa zawód/profesję z treści emaila.
+    Szuka typowych słów kluczowych.
+    """
+    if not body:
+        return ""
+    patterns = [
+        r'\bpracuję\s+(?:jako|na\s+stanowisku)\s+([a-złżźćńóęąś\s]{3,60})',
+        r'\bjeste[mś]\s+([a-złżźćńóęąś]{4,20}(?:em|iem|ą)?)\b',
+        r'\bzawód[:\s]+([a-złżźćńóęąś\s]{3,25})',
+        r'\binspektor\b', r'\binżynier\b', r'\bnauczyciel\b', r'\blekarz\b',
+        r'\bkierowca\b', r'\bprogramista\b', r'\bksięgow\w+\b', r'\bsprzedaw\w+\b',
+        r'\bpielęgniark\w+\b', r'\bstrażak\b', r'\bpolicjant\b', r'\bgórnik\b',
+        r'\bdyrektor\b', r'\bprezes\b', r'\bmenedżer\b', r'\barchitekt\b',
+    ]
+    for p in patterns:
+        m = re.search(p, body, re.IGNORECASE)
+        if m:
+            if m.lastindex:
+                return m.group(1).strip()
+            return m.group(0).strip()
+    return ""
+
+
+def _split_into_sentences(text: str) -> list:
+    """
+    Dzieli tekst na zdania. Pomija nagłówki (###), separatory (---),
+    podpisy (— Sokrates) i linie krótsze niż 20 znaków.
+    Zwraca listę zdań jako stringów.
+    """
+    if not text:
+        return []
+    sentences = []
+    # Podziel po . ! ? ale nie po skrótach
+    raw = re.split(r'(?<=[.!?])\s+', text)
+    for s in raw:
+        s = s.strip()
+        if not s:
+            continue
+        if s.startswith('#') or s.startswith('—') or s.startswith('-'):
+            continue
+        if len(s) < 20:
+            continue
+        sentences.append(s)
+    return sentences
+
+
+def _build_session_vars(
+        body: str,
+        sender_email: str,
+        sender_name: str,
+        previous_body: str,
+        res_text: str,
+        emotion_key: str,
+        provider: str,
+        panel_assignments: list = None,
+        nouns_dict: dict = None,
+) -> dict:
+    """
+    Buduje słownik WSZYSTKICH zmiennych globalnych sesji.
+    Klucze = nazwy zmiennych bez nawiasów kwadratowych.
+    Wartości = stringi gotowe do podstawienia.
+
+    Zmienne z GAS/webhook:
+      SENDER, SENDER_NAME, BODY, PREVIOUS_BODY
+
+    Wykryte z emaila:
+      USER_PERSON, USER_OBJECTS, USER_GENDER, USER_CITY, USER_JOB, USER_EMOTION, USER_PROVIDER
+      USER_OBJECTS pochodzi z nouns_dict (Groq) jeśli dostępny, fallback na regex.
+
+    Ze zdań Tylera:
+      TEXT_1 .. TEXT_N
+
+    Ze zdań Sokratesa:
+      SOKRATES_1 .. SOKRATES_N
+    """
+    vars_dict = {}
+
+    # ── Zmienne z webhook / GAS ───────────────────────────────────────────────
+    vars_dict["SENDER"]        = sender_email or ""
+    vars_dict["SENDER_NAME"]   = sender_name or ""
+    vars_dict["BODY"]          = body or ""
+    vars_dict["PREVIOUS_BODY"] = previous_body or ""
+
+    # ── USER_OBJECTS: Groq nouns_dict (priorytet) → fallback regex ───────────
+    if nouns_dict:
+        # nouns_dict = {rzecz001: 'kopalnia', rzecz002: 'pies', ...}
+        # Bierzemy wartości w kolejności kluczy, max 15
+        sorted_nouns = [v for k, v in sorted(nouns_dict.items()) if isinstance(v, str)]
+        vars_dict["USER_OBJECTS"] = ", ".join(sorted_nouns[:15])
+    else:
+        nouns = _extract_nouns_from_body(body)
+        vars_dict["USER_OBJECTS"] = ", ".join(nouns[:15]) if nouns else ""
+    vars_dict["USER_PERSON"]  = _detect_sender_name(body) or sender_name or ""
+    vars_dict["USER_GENDER"]  = _detect_gender(body, sender_name)
+    vars_dict["USER_CITY"]    = _detect_city(body)
+    vars_dict["USER_JOB"]     = _detect_job(body)
+    vars_dict["USER_EMOTION"] = emotion_key or ""
+    vars_dict["USER_PROVIDER"]= provider or ""
+
+    # ── Zdania Tylera → TEXT_1 .. TEXT_N ─────────────────────────────────────
+    tyler_text = ""
+    if res_text and "### TYLER DURDEN" in res_text:
+        tyler_text = res_text.split("### TYLER DURDEN", 1)[1]
+    elif res_text:
+        tyler_text = res_text
+
+    tyler_sentences = _split_into_sentences(tyler_text)
+    for i, s in enumerate(tyler_sentences, 1):
+        vars_dict[f"TEXT_{i}"] = s
+
+    # ── Zdania Sokratesa → SOKRATES_1 .. SOKRATES_N ──────────────────────────
+    sokrates_text = ""
+    if res_text and "### SOKRATES" in res_text:
+        part = res_text.split("### SOKRATES", 1)[1]
+        if "---" in part:
+            sokrates_text = part.split("---")[0]
+        else:
+            sokrates_text = part
+
+    sokrates_sentences = _split_into_sentences(sokrates_text)
+    for i, s in enumerate(sokrates_sentences, 1):
+        vars_dict[f"SOKRATES_{i}"] = s
+
+    return vars_dict
+
+
+def _render_template(text: str, vars_dict: dict) -> tuple:
+    """
+    Podstawia wszystkie [ZMIENNA] w tekście na wartości ze słownika.
+    Zwraca (tekst_po_podstawieniu, lista_użytych_zmiennych).
+    Jeśli [TEXT_N] nie istnieje w słowniku — losuje z dostępnych TEXT_*.
+    """
+    if not text or not vars_dict:
+        return text, []
+
+    used = []
+
+    # Znajdź wszystkie placeholdery w tekście
+    placeholders = re.findall(r'\[([A-Z_0-9]+)\]', text)
+
+    # Zbierz dostępne TEXT_* i SOKRATES_* do losowania fallback
+    text_keys     = sorted([k for k in vars_dict if re.match(r'^TEXT_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+    sokrates_keys = sorted([k for k in vars_dict if re.match(r'^SOKRATES_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+
+    result = text
+    for ph in placeholders:
+        if ph in vars_dict:
+            result = result.replace(f"[{ph}]", vars_dict[ph], 1)
+            used.append(ph)
+        elif re.match(r'^TEXT_\d+$', ph) and text_keys:
+            # fallback — losuj z dostępnych TEXT_*
+            fallback_key = random.choice(text_keys)
+            result = result.replace(f"[{ph}]", vars_dict[fallback_key], 1)
+            used.append(f"{ph}→{fallback_key}(losowy)")
+        elif re.match(r'^SOKRATES_\d+$', ph) and sokrates_keys:
+            fallback_key = random.choice(sokrates_keys)
+            result = result.replace(f"[{ph}]", vars_dict[fallback_key], 1)
+            used.append(f"{ph}→{fallback_key}(losowy)")
+        # jeśli zmienna nieznana — zostawiamy [ZMIENNA] bez zmian
+
+    return result, used
+
+
 def _generate_panel_prompt(
         panel_index: int,
         panel_config: dict,
         style_config: dict,
         response_text: str,
         prompt_data: dict,
-        body: str
+        body: str,
+        session_vars: dict = None,
 ) -> str:
     """
     Generuje angielski prompt FLUX dla jednego panelu tryptyku.
+    - Używa session_vars do podstawiania [TEXT_N], [USER_OBJECTS] itd. w szablonie z JS
     - Losuje postać Fight Club per panel
-    - Wykrywa imię nadawcy i wplata jako postać drugoplanową
-    - Wyciąga rzeczowniki z emaila jako obiekty w scenie
     - Losuje styl wizualny i akcję
     - Bez dymków — tekst dopisuje Pillow osobno
     """
+    if session_vars is None:
+        session_vars = {}
+
     base_style = style_config.get("base_style", "cinematic film still, Fight Club 1999 aesthetic")
-    quality = style_config.get("quality_tags", "photorealistic, raw, gritty")
+    quality    = style_config.get("quality_tags", "photorealistic, raw, gritty")
     neg_prompt = style_config.get("negative_prompt",
                                   "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark")
 
     # ── Losuj postać, styl, akcję ─────────────────────────────────────────────
-    character = random.choice(FIGHT_CLUB_CHARACTERS)
+    character   = random.choice(FIGHT_CLUB_CHARACTERS)
     panel_style = random.choice(PANEL_STYLES)
-    action = random.choice(PANEL_ACTIONS)
+    action      = random.choice(PANEL_ACTIONS)
+
+    # ── Pobierz szablon panelu z JS i podstaw zmienne ─────────────────────────
+    panel_template_str = ""
+    panel_used_vars = []
+    panels_list = style_config.get("triptych", {}).get("panels", [])
+
+    # Znajdź config dla tego panelu (szukamy po kluczu panel_1, panel_2 itd.)
+    panel_key = f"panel_{panel_index}"
+    for p in panels_list:
+        # panels_list to lista dictów, każdy ma jeden klucz panel_N
+        if panel_key in p:
+            panel_template_str = p[panel_key]
+            break
+        # fallback — może być dict z kluczem "index"
+        if p.get("index") == panel_index:
+            panel_template_str = p.get(panel_key, p.get("description", ""))
+            break
+
+    if panel_template_str:
+        panel_template_str, panel_used_vars = _render_template(panel_template_str, session_vars)
+
+    # ── Cytat Tylera dla podpisu pod obrazkiem ────────────────────────────────
+    # Priorytet: TEXT_{panel_index} z session_vars, fallback: _extract_tyler_sentences
+    caption_key = f"TEXT_{panel_index}"
+    if caption_key in session_vars and session_vars[caption_key]:
+        caption = session_vars[caption_key]
+    else:
+        tyler_sentences = _extract_tyler_sentences(response_text)
+        quote_map = {"1": "panel1", "2": "panel2", "3": "panel3"}
+        caption = tyler_sentences.get(quote_map.get(str(panel_index), "panel1"), "")
 
     # ── Rzeczowniki z emaila ──────────────────────────────────────────────────
-    nouns = _extract_nouns_from_body(body)
-    nouns_str = ", ".join(nouns[:4]) if nouns else "debris, trash, broken furniture"
+    nouns_str = session_vars.get("USER_OBJECTS", "") or "debris, trash, broken furniture"
 
-    # ── Imię nadawcy → postać drugoplanowa ───────────────────────────────────
-    sender_name = _detect_sender_name(body)
-    if sender_name:
+    # ── Imię nadawcy ──────────────────────────────────────────────────────────
+    sender_name_val = session_vars.get("USER_PERSON", "")
+    if sender_name_val:
         sender_char = (
-            f"A Polish woman named {sender_name} is also in the scene — "
+            f"A Polish person named {sender_name_val} is also in the scene — "
             f"ordinary clothes, overwhelmed expression, reacting to the chaos."
         )
     else:
         sender_char = ""
-
-    # ── Cytat Tylera (bez dymka — tylko jako kontekst dla sceny) ─────────────
-    tyler_sentences = _extract_tyler_sentences(response_text)
-    quote_map = {"1": "panel1", "2": "panel2", "3": "panel3"}
-    caption = tyler_sentences.get(quote_map.get(str(panel_index), "panel1"), "")
 
     system_for_flux = (
         "You are a cinematic visual prompt engineer for FLUX image generation. "
@@ -851,20 +1255,36 @@ def _generate_panel_prompt(
         "Output: ONE paragraph, max 120 words, no bullet points. Only the prompt."
     )
 
-    user_for_flux = (
-        f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
-        f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are having fun, they are slim and well-groomed, their hair is gray dressed for hot summer weather, light casual clothes..\n\n"
-        f"Main character: {character}\n"
-        f"Action: {action}\n"
-        f"Objects in scene (from sender email context): {nouns_str}\n"
-        f"Visual style: {panel_style}, {base_style}\n"
-        f"{sender_char}\n"
-        f"Negative: {neg_prompt}\n\n"
-        f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
-        "Write the FLUX prompt now:"
-    )
+    # Jeśli jest szablon z JS — wyślij go jako główny kontekst
+    if panel_template_str:
+        user_for_flux = (
+            f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
+            f"BASE SCENE (from style config):\n{panel_template_str}\n\n"
+            f"Main character: {character}\n"
+            f"Action: {action}\n"
+            f"Objects in scene: {nouns_str}\n"
+            f"Visual style: {panel_style}, {base_style}\n"
+            f"{sender_char}\n"
+            f"Negative: {neg_prompt}\n\n"
+            f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
+            "Write the FLUX prompt now:"
+        )
+    else:
+        user_for_flux = (
+            f"Panel {panel_index} of 3. Fight Club 1999 aesthetic.\n\n"
+            f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are having fun, "
+            f"they are slim and well-groomed, light casual clothes.\n\n"
+            f"Main character: {character}\n"
+            f"Action: {action}\n"
+            f"Objects in scene (from sender email context): {nouns_str}\n"
+            f"Visual style: {panel_style}, {base_style}\n"
+            f"{sender_char}\n"
+            f"Negative: {neg_prompt}\n\n"
+            f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
+            "Write the FLUX prompt now:"
+        )
 
-    flux_prompt, provider = _call_ai_with_fallback(system_for_flux, user_for_flux, max_tokens=300)
+    flux_prompt, prov = _call_ai_with_fallback(system_for_flux, user_for_flux, max_tokens=300)
 
     if not flux_prompt:
         flux_prompt = (
@@ -873,13 +1293,13 @@ def _generate_panel_prompt(
         )
 
     current_app.logger.info("[zwykly-img] Panel %d prompt (%s): %.120s",
-                            panel_index, provider, flux_prompt)
-    return flux_prompt, caption
+                            panel_index, prov, flux_prompt)
+    return flux_prompt, caption, panel_used_vars
 
 
 def _get_hf_tokens() -> list:
-    """Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKENXx)."""
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(24)]
+    """Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKEN25)."""
+    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(26)]
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
@@ -1058,51 +1478,65 @@ def _generate_raw_email_image(body: str) -> dict | None:
 def _generate_triptych(
         response_text: str,
         prompt_data: dict,
-        body: str
-) -> list:
+        body: str,
+        session_vars: dict = None,
+) -> tuple:
     """
     Generuje listę obrazków PNG tryptyku (max 3 panele).
     Jeśli tokeny HF wyczerpią się przed końcem — zwraca tyle ile wygenerowano.
-    Zwraca listę dict [{base64, content_type, filename, ...}, ...]
+    Zwraca (images, panel_prompts, panel_assignments)
+      images           — lista dict [{base64, content_type, filename, ...}]
+      panel_prompts    — lista stringów promptów FLUX
+      panel_assignments— lista dict {panel, caption, used_vars} do logu
     """
+    if session_vars is None:
+        session_vars = {}
+
     style_config = _load_style_config()
     if not style_config:
         current_app.logger.warning("[zwykly-img] Brak STYLE_CONFIG — pomijam generowanie tryptyku")
-        return [], []
+        return [], [], []
 
     panels_config = style_config.get("triptych", {}).get("panels", [])
     if not panels_config:
         current_app.logger.warning("[zwykly-img] Brak konfiguracji paneli w STYLE_CONFIG")
-        return [], []
+        return [], [], []
 
     images = []
     panel_prompts = []
+    panel_assignments = []
+
     for panel in panels_config:
         idx = panel.get("index", len(images) + 1)
 
-        # Generuj prompt dla panelu (zwraca tuple: prompt + cytat)
-        flux_prompt, caption = _generate_panel_prompt(
+        flux_prompt, caption, used_vars = _generate_panel_prompt(
             panel_index=idx,
             panel_config=panel,
             style_config=style_config,
             response_text=response_text,
             prompt_data=prompt_data,
-            body=body
+            body=body,
+            session_vars=session_vars,
         )
         panel_prompts.append(flux_prompt)
+        panel_assignments.append({
+            "panel": idx,
+            "caption": caption,
+            "used_vars": used_vars,
+            "prompt_preview": flux_prompt[:120],
+        })
 
-        # Generuj obrazek
         image = _generate_flux_image(flux_prompt, panel_index=idx)
 
         if image:
-            image = _png_to_jpg(image, panel_index=idx)  # PNG → JPG 95%
-            image = _add_text_below_image(image, caption, idx)  # dopisz tekst pod obrazkiem
+            image = _png_to_jpg(image, panel_index=idx)
+            image = _add_text_below_image(image, caption, idx)
             images.append(image)
             current_app.logger.info("[zwykly-img] Panel %d/%d: OK (%s)",
                                     idx, len(panels_config), image.get("filename", "?"))
         else:
             current_app.logger.warning(
-                "[zwykly-img] Panel %d/%d: brak — tokeny wyczerpane lub błąd. "
+                "[zwykly-img] Panel %d/%d: brak — tokeny wyczerpane lub blad. "
                 "Zwracam %d wygenerowanych paneli.",
                 idx, len(panels_config), len(images)
             )
@@ -1110,7 +1544,7 @@ def _generate_triptych(
 
     current_app.logger.info("[zwykly-img] Tryptyk: wygenerowano %d/%d paneli",
                             len(images), len(panels_config))
-    return images, panel_prompts
+    return images, panel_prompts, panel_assignments
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1125,46 +1559,191 @@ def _build_debug_txt(
         res_text: str,
         triptych_images: list,
         panel_prompts: list,
+        system_msg: str = "",
+        user_msg: str = "",
+        session_vars: dict = None,
+        panel_assignments: list = None,
 ) -> dict:
     """
-    Buduje plik debug_txt (base64 TXT) do zapisu na Google Drive.
-    Zawiera: timestamp, provider, emocja, email nadawcy (fragment),
-             surowa odpowiedź modelu, tekstowa odpowiedź, prompty paneli.
-    Zwraca dict zgodny z _saveTylerDebugTxt() w GAS:
-      {"base64": ..., "content_type": "text/plain", "filename": "..."}
+    Buduje pełny log debug TXT do zapisu na Google Drive.
+    Zawiera: statystyki długości, wszystkie prompty, odpowiedź AI,
+    info o obrazkach, WSZYSTKIE zmienne sesji, przyporządkowania paneli,
+    zestawienie końcowe co nadawca otrzyma.
     """
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if session_vars is None:
+        session_vars = {}
+    if panel_assignments is None:
+        panel_assignments = []
+
+    body_len       = len(body or "")
+    user_msg_len   = len(user_msg or "")
+    res_raw_len    = len(res_raw or "")
+    res_text_len   = len(res_text or "")
+    system_msg_len = len(system_msg or "")
+
+    # Zestawienie obrazków
+    img_lines = []
+    for i, img in enumerate(triptych_images or [], 1):
+        fn   = img.get("filename", "?")
+        ct   = img.get("content_type", "?")
+        size = img.get("size_jpg", img.get("size_png_orig", "?"))
+        img_lines.append(f"  Obrazek {i}: {fn} | format: {ct} | rozmiar: {size}")
+
+    # Zestawienie "nadawca otrzyma"
+    otrzyma = []
+    if res_text:
+        otrzyma.append("  v reply_html — odpowiedz Tylera i Sokratesa (HTML)")
+    if triptych_images:
+        otrzyma.append(f"  v triptych — {len(triptych_images)} obrazek(ow) JPG Fight Club")
+    otrzyma.append("  v emoticon — emotka PNG (FLUX)")
+    otrzyma.append("  v cv_pdf — CV w stylu Tylera (PDF)")
+    otrzyma.append("  v horoskop_pdf — Horoskop nihilistyczny (PDF)")
+    otrzyma.append("  v karta_rpg_pdf — Karta postaci RPG (PDF)")
+    otrzyma.append("  v raport_pdf — Raport psychiatryczny (PDF)")
+    otrzyma.append("  v ankieta_pdf — Ankieta interaktywna AcroForm (PDF)")
+    otrzyma.append("  v plakat_svg — Plakat Tyler Durden (SVG)")
+    otrzyma.append("  v gra_html — Gra interaktywna (HTML)")
+    otrzyma.append("  v wyjasnienie.txt — Wyjasnienie odpowiedzi (TXT)")
+    otrzyma.append("  v _.txt — Ten log debugowania (TXT)")
+
     lines = [
         f"=== ZWYKLY DEBUG {ts} ===",
-        f"provider:   {provider}",
-        f"emocja:     {emotion_key}",
-        f"panele:     {len(triptych_images)}",
+        f"provider:              {provider}",
+        f"emocja:                {emotion_key}",
+        f"panele wygenerowane:   {len(triptych_images)}",
         "",
-        "--- BODY (pierwsze 500 znaków) ---",
-        (body or "")[:500],
+        "---------------------------------------------",
+        "STATYSTYKI DLUGOSCI",
+        "---------------------------------------------",
+        f"Email otrzymany:        {body_len} znakow",
+        f"System prompt:          {system_msg_len} znakow",
+        f"User prompt (do AI):    {user_msg_len} znakow (email + instrukcje)",
+        f"Odpowiedz surowa (AI):  {res_raw_len} znakow",
+        f"Odpowiedz tekstowa:     {res_text_len} znakow",
         "",
-        "--- RAW MODEL OUTPUT ---",
-        (res_raw or "(brak)")[:3000],
+        "---------------------------------------------",
+        "TRESC EMAILA (pelna)",
+        "---------------------------------------------",
+        (body or "(brak)"),
         "",
-        "--- ODPOWIEDZ TEKSTOWA ---",
-        (res_text or "(brak)")[:2000],
+        "---------------------------------------------",
+        "SYSTEM PROMPT (pelny)",
+        "---------------------------------------------",
+        (system_msg or "(brak)"),
         "",
-        "--- PROMPTY PANELI ---",
+        "---------------------------------------------",
+        "USER PROMPT WYSLANY DO AI (pelny)",
+        "---------------------------------------------",
+        (user_msg or "(brak)"),
+        "",
+        "---------------------------------------------",
+        "SUROWA ODPOWIEDZ AI (pelna)",
+        "---------------------------------------------",
+        (res_raw or "(brak)"),
+        "",
+        "---------------------------------------------",
+        "ODPOWIEDZ TEKSTOWA (pelna)",
+        "---------------------------------------------",
+        (res_text or "(brak)"),
+        "",
+        "---------------------------------------------",
+        "PROMPTY PANELI FLUX (pelne)",
+        "---------------------------------------------",
     ]
-    for i, p in enumerate(panel_prompts, 1):
-        lines.append(f"Panel {i}: {p[:300]}")
+    for i, p in enumerate(panel_prompts or [], 1):
+        lines.append(f"Panel {i}:")
+        lines.append(p)
+        lines.append("")
+
+    lines += [
+        "---------------------------------------------",
+        "OBRAZKI WYGENEROWANE",
+        "---------------------------------------------",
+    ]
+    if img_lines:
+        lines += img_lines
+    else:
+        lines.append("  (brak obrazkow)")
+
+    # ── ZMIENNE GLOBALNE SESJI ────────────────────────────────────────────────
+    lines += [
+        "",
+        "---------------------------------------------",
+        "ZMIENNE GLOBALNE SESJI (dostepne jako [ZMIENNA] w plikach JSON)",
+        "---------------------------------------------",
+    ]
+
+    # Grupuj: najpierw webhook/wykryte, potem TEXT_*, potem SOKRATES_*
+    webhook_keys  = ["SENDER", "SENDER_NAME", "BODY", "PREVIOUS_BODY"]
+    detected_keys = ["USER_PERSON", "USER_OBJECTS", "USER_GENDER", "USER_CITY",
+                     "USER_JOB", "USER_EMOTION", "USER_PROVIDER"]
+    text_keys     = sorted([k for k in session_vars if re.match(r'^TEXT_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+    sokr_keys     = sorted([k for k in session_vars if re.match(r'^SOKRATES_\d+$', k)],
+                           key=lambda x: int(x.split('_')[1]))
+
+    lines.append("-- Z Google Apps Script / webhook:")
+    for k in webhook_keys:
+        v = session_vars.get(k, "")
+        preview = str(v)[:120].replace("\n", " ")
+        lines.append(f"  [{k}] = \"{preview}\"")
+
     lines.append("")
-    lines.append("=== KONIEC ===")
+    lines.append("-- Wykryte z emaila:")
+    for k in detected_keys:
+        v = session_vars.get(k, "")
+        lines.append(f"  [{k}] = \"{v}\"")
+
+    lines.append("")
+    lines.append(f"-- Zdania Tylera ({len(text_keys)} zdań):")
+    for k in text_keys:
+        v = session_vars.get(k, "")
+        lines.append(f"  [{k}] = \"{v}\"")
+
+    lines.append("")
+    lines.append(f"-- Zdania Sokratesa ({len(sokr_keys)} zdań):")
+    for k in sokr_keys:
+        v = session_vars.get(k, "")
+        lines.append(f"  [{k}] = \"{v}\"")
+
+    # ── PRZYPORZĄDKOWANIA PANELI ──────────────────────────────────────────────
+    lines += [
+        "",
+        "---------------------------------------------",
+        "PRZYPORZĄDKOWANIE ZMIENNYCH DO PANELI",
+        "---------------------------------------------",
+    ]
+    if panel_assignments:
+        for pa in panel_assignments:
+            used = ", ".join(pa.get("used_vars", [])) or "(brak podstawien)"
+            lines.append(f"  Panel {pa['panel']}: uzyte zmienne: {used}")
+            lines.append(f"    caption: \"{pa.get('caption', '')}\"")
+            lines.append(f"    prompt (poczatek): \"{pa.get('prompt_preview', '')}\"")
+            lines.append("")
+    else:
+        lines.append("  (brak danych o przyporządkowaniu)")
+
+    lines += [
+        "",
+        "---------------------------------------------",
+        "NADAWCA POWINIEN OTRZYMAC:",
+        "---------------------------------------------",
+    ]
+    lines += otrzyma
+    lines += [
+        "",
+        "=== KONIEC ===",
+    ]
 
     content = "\n".join(lines)
     b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
     return {
-        "base64": b64,
-        "content_type": "text/plain",
-        "filename": "_.txt",  # stała nazwa — GAS szuka tego pliku po nazwie
-        "filename_drive": f"zwykly_debug_{ts}.txt",  # na Drive używa znacznika czasu
+        "base64":         b64,
+        "content_type":   "text/plain",
+        "filename":       "_.txt",
+        "filename_drive": f"zwykly_debug_{ts}.txt",
     }
-
 
 def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     """
@@ -1196,7 +1775,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
                 "model": GROQ_MODEL,
                 "messages": [
                     {"role": "system", "content": system_groq},
-                    {"role": "user", "content": f"Email:\n{body[:800]}\nEmocja: {emotion_key}"},
+                    {"role": "user", "content": f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}"},
                 ],
                 "max_tokens": 150,
                 "temperature": 0.7,
@@ -1211,7 +1790,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     if not icon_prompt:
         icon_prompt = call_deepseek(
             system_groq,
-            f"Email:\n{body[:800]}\nEmocja: {emotion_key}",
+            f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}",
             MODEL_TYLER,
             timeout=20,
         )
@@ -1255,9 +1834,9 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
     schema = cv_cfg.get("output_schema", {})
     instrukcje = cv_cfg.get("instrukcje_dodatkowe", [])
 
-    context_parts = [f"EMAIL:\n{body[:1500]}"]
+    context_parts = [f"EMAIL:\n{body[:MAX_DLUGOSC_EMAIL]}"]
     if previous_body and previous_body.strip():
-        context_parts.append(f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:500]}")
+        context_parts.append(f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:MAX_DLUGOSC_EMAIL]}")
     if sender_email:
         context_parts.append(f"\nEMAIL NADAWCY: {sender_email}")
     context_parts.append(f"\nSCHEMAT JSON DO WYPEŁNIENIA:\n{json.dumps(schema, ensure_ascii=False, indent=2)}")
@@ -1306,10 +1885,13 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
 
     imie = cv_data.get("imie_nazwisko", "unknown person") if cv_data else "unknown person"
     tytul = cv_data.get("tytul_zawodowy", "") if cv_data else ""
+    plec = _detect_gender(body, imie)
+    plec_en = {"kobieta": "woman", "mezczyzna": "man"}.get(plec, "person")
     user_msg = (
         f"Person: {imie}\n"
+        f"Gender: {plec_en}\n"
         f"Job title: {tytul}\n"
-        f"Email content (for context on objects to include):\n{body[:600]}"
+        f"Email content (for context):\n{body[:MAX_DLUGOSC_EMAIL]}"
     )
 
     photo_prompt = None
@@ -1402,26 +1984,26 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     def draw_text(txt, x, y, font=FN, size=10, color=BLACK, max_width=None):
         set_color(color)
         c.setFont(font, size)
-        if max_width:
-            words = str(txt).split()
-            line = ""
-            lines = []
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, font, size) <= max_width:
-                    line = test
-                else:
-                    if line:
-                        lines.append(line)
-                    line = w
-            if line:
-                lines.append(line)
-            for i, ln in enumerate(lines):
-                c.drawString(x, y - i * (size + 2), ln)
-            return len(lines) * (size + 2)
-        else:
-            c.drawString(x, y, str(txt))
-            return size + 2
+        effective_width = max_width if max_width is not None else col_width
+        if effective_width and effective_width < (right_margin - x):
+            # Zawijanie — zawsze tnij do szerokości strony
+            effective_width = min(effective_width, right_margin - x)
+        words = str(txt).split()
+        line = ""
+        lines = []
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(test, font, size) <= effective_width:
+                line = test
+            else:
+                if line:
+                    lines.append(line)
+                line = w
+        if line:
+            lines.append(line)
+        for i, ln in enumerate(lines):
+            c.drawString(x, y - i * (size + 2), ln)
+        return len(lines) * (size + 2)
 
     c.setFillColorRGB(*BLACK)
     c.rect(0, H - 45 * mm, W, 45 * mm, fill=1, stroke=0)
@@ -1468,7 +2050,10 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     y = H - 58 * mm
     left_margin = 15 * mm
     right_margin = W - 15 * mm
-    col_width = right_margin - left_margin
+    # Jeśli jest zdjęcie, tekst nie może wchodzić pod zdjęcie w nagłówku
+    # Zdjęcie zajmuje 38mm + 10mm margines = 48mm od prawej krawędzi
+    photo_col_width = (W - (38 * mm + 10 * mm + 15 * mm)) - left_margin if photo_b64 else (right_margin - left_margin)
+    col_width = right_margin - left_margin  # pełna szerokość dla sekcji pod nagłówkiem
 
     def section_header(title, ypos):
         c.setFont(FB, 11)
@@ -1534,8 +2119,21 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
             c.setFillColorRGB(*DARK)
             for ob in obowiazki:
                 y = check_page_break(y)
-                c.drawString(left_margin + 4 * mm, y, f"• {ob}")
-                y -= 4.5 * mm
+                words_ob = f"• {ob}".split()
+                line_ob = ""
+                for w in words_ob:
+                    test = (line_ob + " " + w).strip()
+                    if c.stringWidth(test, FN, 9) <= col_width - 4 * mm:
+                        line_ob = test
+                    else:
+                        if line_ob:
+                            c.drawString(left_margin + 4 * mm, y, line_ob)
+                            y -= 4.5 * mm
+                            y = check_page_break(y)
+                        line_ob = w
+                if line_ob:
+                    c.drawString(left_margin + 4 * mm, y, line_ob)
+                    y -= 4.5 * mm
             y -= 3 * mm
 
     wyksztalcenie = cv_data.get("wyksztalcenie", [])
@@ -1593,8 +2191,20 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         c.setFont(FN, 9)
         c.setFillColorRGB(*DARK)
         line_z = " | ".join(zainteresowania)
-        c.drawString(left_margin, y, line_z)
-        y -= 8 * mm
+        words_z = line_z.split()
+        cur_z = ""
+        for w in words_z:
+            test = (cur_z + " " + w).strip()
+            if c.stringWidth(test, FN, 9) <= col_width:
+                cur_z = test
+            else:
+                c.drawString(left_margin, y, cur_z)
+                y -= 4.5 * mm
+                y = check_page_break(y)
+                cur_z = w
+        if cur_z:
+            c.drawString(left_margin, y, cur_z)
+            y -= 8 * mm
 
     # ── ŻYCIORYS ──────────────────────────────────────────────────────────────────
     zyciorys = cv_data.get("zyciorys", "")
@@ -1669,8 +2279,8 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
     )
 
     user_msg = (
-        f"Email który otrzymał program (kontekst):\n{body[:500]}\n\n"
-        f"Odpowiedź do wyjaśnienia:\n{res_text[:3000]}"
+        f"Email który otrzymał program (kontekst):\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź do wyjaśnienia:\n{res_text}"
     )
 
     raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=3000)
@@ -1769,8 +2379,8 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Odpowiedź Tylera do nadawcy:\n{res_text[:2000]}\n\n"
-        f"Email nadawcy (kontekst):\n{body[:300]}\n\n"
+        f"Odpowiedź Tylera do nadawcy:\n{res_text}\n\n"
+        f"Email nadawcy (kontekst):\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
@@ -1914,24 +2524,42 @@ function sprawdz() {{
         "filename": f"ankieta_{ts}.html",
     }
 
-    # ── Buduj PDF ─────────────────────────────────────────────────────────────
+    # ── Buduj PDF AcroForm (interaktywny z checkboxami) ──────────────────────
     try:
         from reportlab.pdfgen import canvas as rl_canvas
         from reportlab.lib.pagesizes import A4
         from reportlab.lib.units import mm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
 
         FN, FB = _register_fonts()
 
         buf = io.BytesIO()
         W, H = A4
         c = rl_canvas.Canvas(buf, pagesize=A4)
+        c.setTitle(tytul)
         lm, rm = 15 * mm, W - 15 * mm
         cw = rm - lm
 
-        def new_page_if_needed(y, needed=25 * mm):
-            if y < needed:
+        def wrap_draw_a(txt, x, y, font, size, max_w, color=(0.1, 0.1, 0.1)):
+            c.setFont(font, size)
+            c.setFillColorRGB(*color)
+            words = str(txt).split()
+            line = ""
+            used = 0
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_w:
+                    line = test
+                else:
+                    c.drawString(x, y - used, line)
+                    used += size + 3
+                    line = w
+            if line:
+                c.drawString(x, y - used, line)
+                used += size + 3
+            return used
+
+        def new_page_if_needed(y, need=30 * mm):
+            if y < need:
                 c.showPage()
                 return H - 20 * mm
             return y
@@ -1941,69 +2569,145 @@ function sprawdz() {{
         c.rect(0, H - 30 * mm, W, 30 * mm, fill=1, stroke=0)
         c.setFont(FB, 14)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W / 2, H - 15 * mm, tytul)
-        c.setFont(FN, 9)
+        c.drawCentredString(W / 2, H - 14 * mm, tytul[:60])
+        c.setFont(FN, 8)
         c.setFillColorRGB(0.7, 0.7, 0.7)
-        c.drawCentredString(W / 2, H - 23 * mm, data.get("wprowadzenie", "")[:80])
+        c.drawCentredString(W / 2, H - 22 * mm, data.get("wprowadzenie", "")[:100])
 
-        y = H - 40 * mm
+        y = H - 38 * mm
+        form = c.acroForm
 
-        for p in pytania:
-            nr = p.get("nr", "?")
+        correct_answers = {}  # nr → poprawna litera
+
+        for p in pytania[:5]:
+            nr      = str(p.get("nr", "?"))
+            cytat   = p.get("cytat_tylera", "")
             pytanie_txt = p.get("pytanie", "")
-            odp = p.get("odpowiedzi", {})
-            if not isinstance(odp, dict):
+            odp     = p.get("odpowiedzi", {})
+            if isinstance(odp, list):
+                odp = {
+                    str(item.get("klucz", item.get("key", chr(97 + i)))): str(item.get("tresc", item.get("text", "")))
+                    for i, item in enumerate(odp)
+                }
+            elif not isinstance(odp, dict):
                 odp = {}
-            wyjasnienie = p.get("wyjasnienie", "")
 
-            y = new_page_if_needed(y, 45 * mm)
+            correct_answers[nr] = "b"  # zawsze b — jak w oryginalnym HTML
 
-            # Numer pytania
-            c.setFont(FB, 10)
-            c.setFillColorRGB(0.7, 0.1, 0.1)
+            y = new_page_if_needed(y, 60 * mm)
+
+            # Numer i pytanie
+            c.setFont(FB, 9)
+            c.setFillColorRGB(0.6, 0.1, 0.1)
             c.drawString(lm, y, f"Pytanie {nr}:")
             y -= 5 * mm
+            used = wrap_draw_a(pytanie_txt, lm, y, FN, 9, cw, (0.1, 0.1, 0.1))
+            y -= used + 2 * mm
 
-            # Treść pytania
-            c.setFont(FN, 10)
-            c.setFillColorRGB(0.1, 0.1, 0.1)
-            words = pytanie_txt.split()
-            line = ""
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, FN, 10) <= cw:
-                    line = test
-                else:
-                    c.drawString(lm, y, line)
-                    y -= 5 * mm
-                    line = w
-                    y = new_page_if_needed(y)
-            if line:
-                c.drawString(lm, y, line)
-                y -= 6 * mm
+            # Cytat
+            if cytat:
+                used = wrap_draw_a(f'"{cytat}"', lm + 3 * mm, y, FN, 8, cw - 6 * mm, (0.4, 0.4, 0.4))
+                y -= used + 2 * mm
 
-            # Odpowiedzi
-            c.setFont(FN, 9)
-            for key, val in odp.items():
-                c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm + 5 * mm, y, f"{key}) {val}")
-                y -= 4.5 * mm
-                y = new_page_if_needed(y)
+            # Odpowiedzi z checkboxami AcroForm
+            for key in ["a", "b", "c"]:
+                val = odp.get(key, "")
+                if not val:
+                    continue
+                y = new_page_if_needed(y, 12 * mm)
 
-            # Wyjaśnienie
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.5, 0.1, 0.1)
-            c.drawString(lm + 5 * mm, y, f"► {wyjasnienie}")
-            y -= 7 * mm
+                field_name = f"q{nr}_{key}"
+                from reportlab.lib.colors import Color as RLColor
+                form.checkbox(
+                    name=field_name,
+                    tooltip=f"Pytanie {nr}, odpowiedz {key}",
+                    x=lm,
+                    y=y - 3 * mm,
+                    buttonStyle="check",
+                    borderColor=RLColor(0.5, 0.1, 0.1),
+                    fillColor=RLColor(1, 1, 1),
+                    textColor=RLColor(0.5, 0.1, 0.1),
+                    forceBorder=True,
+                    size=10,
+                )
+
+                used = wrap_draw_a(f"{key}) {val}", lm + 7 * mm, y, FN, 9, cw - 7 * mm, (0.15, 0.15, 0.15))
+                y -= max(used, 6 * mm) + 1 * mm
+
+            y -= 4 * mm
+            c.setStrokeColorRGB(0.7, 0.7, 0.7)
+            c.setLineWidth(0.3)
+            c.line(lm, y, rm, y)
+            y -= 4 * mm
+
+        # Pole na wynik i przycisk Podlicz
+        y = new_page_if_needed(y, 25 * mm)
+        y -= 5 * mm
+
+        from reportlab.lib.colors import Color as RLColor
+        form.textfield(
+            name="wynik",
+            tooltip="Wynik",
+            x=lm,
+            y=y - 8 * mm,
+            width=80 * mm,
+            height=8 * mm,
+            fontSize=10,
+            borderColor=RLColor(0.5, 0.1, 0.1),
+            fillColor=RLColor(0.98, 0.95, 0.95),
+            textColor=RLColor(0.1, 0.1, 0.1),
+            value="Nacisnij Podlicz...",
+            fieldFlags="readOnly",
+        )
+
+        correct_js = ", ".join(f'"{nr}": "{ans}"' for nr, ans in correct_answers.items())
+        total_pytań = len(pytania[:5])
+        js_code = (
+            f"var poprawne = {{{correct_js}}};\n"
+            f"var wynik = 0;\n"
+            f"var total = {total_pytań};\n"
+            "for (var nr in poprawne) {\n"
+            "    var checked_field = this.getField(\"q\" + nr + \"_\" + poprawne[nr]);\n"
+            "    if (checked_field && checked_field.value === \"Yes\") { wynik++; }\n"
+            "}\n"
+            "var komentarz = wynik >= total * 0.8 ? \"Jestes gotowy.\" : wynik >= total * 0.5 ? \"Prawie.\" : \"Rozczarowujace.\";\n"
+            "this.getField(\"wynik\").value = \"Wynik: \" + wynik + \" / \" + total + \" — \" + komentarz;"
+        )
+
+        # ── Przycisk PODLICZ — rysowany manualnie (reportlab nie ma form.button) ──
+        from reportlab.lib.colors import Color as RLColor
+        btn_x      = lm + 85 * mm
+        btn_y      = y - 8 * mm
+        btn_w      = 40 * mm
+        btn_h      = 8 * mm
+        # Tło przycisku
+        c.setFillColorRGB(0.5, 0.1, 0.1)
+        c.setStrokeColorRGB(0.5, 0.1, 0.1)
+        c.roundRect(btn_x, btn_y, btn_w, btn_h, 2, fill=1, stroke=1)
+        # Napis na przycisku
+        c.setFont(FB, 9)
+        c.setFillColorRGB(1, 1, 1)
+        c.drawCentredString(btn_x + btn_w / 2, btn_y + btn_h * 0.3, "PODLICZ")
+        # Link JS (działa w Acrobat) — użyj anotacji URI jako fallback
+        # Prawdziwy JS trigger — dodajemy przez AcroForm pushbutton bez form.button
+        try:
+            from reportlab.pdfbase.pdfdoc import PDFArray, PDFDictionary, PDFName, PDFString
+        except ImportError:
+            pass  # nie dodajemy JS — przycisk jest dekoracyjny, wynik liczy HTML
+
+        y -= 15 * mm
+        c.setFont(FN, 8)
+        c.setFillColorRGB(0.4, 0.4, 0.4)
+        c.drawCentredString(W / 2, y, data.get("zakonczenie", "— Tyler Durden"))
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         pdf_dict = {
-            "base64": pdf_b64,
+            "base64":       pdf_b64,
             "content_type": "application/pdf",
-            "filename": f"ankieta_{ts}.pdf",
+            "filename":     f"ankieta_{ts}.pdf",
         }
-        current_app.logger.info("[ankieta] OK: %d pytań", len(pytania))
+        current_app.logger.info("[ankieta] OK AcroForm: %d pytan", len(pytania[:5]))
         return html_dict, pdf_dict
 
     except Exception as e:
@@ -2033,8 +2737,8 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
     schema = cfg.get("output_schema", {})
     daty_str = "\n".join(f"Dzień {i+1} ({d})" for i, d in enumerate(daty))
     user_msg = (
-        f"Email nadawcy:\n{body[:800]}\n\n"
-        f"Odpowiedź Tylera (kontekst):\n{res_text[:1000]}\n\n"
+        f"Email nadawcy:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera (kontekst):\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"WAŻNE: W polu 'data' każdego dnia użyj DOKŁADNIE tych dat:\n{daty_str}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
@@ -2184,7 +2888,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             # Rada Tylera
             c.setFont(FN, 8)
             c.setFillColorRGB(0.6, 0.1, 0.1)
-            c.drawString(lm, y, f"Rada Tylera: {rada[:90]}")
+            c.drawString(lm, y, f"Rada Tylera: {rada}")
             y -= 4 * mm
 
             # Separator
@@ -2236,8 +2940,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Email:\n{body[:800]}\n\n"
-        f"Odpowiedź Tylera:\n{res_text[:800]}\n\n"
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych polskich kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
@@ -2397,7 +3101,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for um in data.get("umiejetnosci_specjalne", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"◆ {um[:80]}")
+            c.drawString(lm + 3 * mm, y, f"◆ {um}")
             y -= 5 * mm
 
         y -= 3 * mm
@@ -2411,7 +3115,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for item in data.get("ekwipunek", []):
             c.setFont(FN, 8)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"⚔ {item[:80]}")
+            c.drawString(lm + 3 * mm, y, f"⚔ {item}")
             y -= 5 * mm
 
         y -= 3 * mm
@@ -2422,7 +3126,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawString(lm, y, "QUEST GŁÓWNY:")
         c.setFont(FN, 8)
         c.setFillColorRGB(*DARK)
-        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", "")[:70])
+        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", ""))
         y -= 8 * mm
 
         # Cytat na dole
@@ -2456,12 +3160,134 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         return None
 
 
+def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = "") -> str | None:
+    """
+    Generuje zdjęcie pacjenta psychiatrycznego w kaftanie bezpieczeństwa przez FLUX.
+    Używa promptu z zwykly_psychiatryczny_obrazek.json.
+    Podmienia {{OBJECTS}} na rzeczowniki z emaila.
+    Zwraca base64 JPG lub None.
+    """
+    try:
+        with open(PSYCHIATRYCZNY_OBRAZEK_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        current_app.logger.warning("[psych-photo] Brak zwykly_psychiatryczny_obrazek.json: %s", e)
+        return None
+
+    prompt_template = cfg.get("prompt_template", "")
+    fallback_objects = cfg.get("fallback_objects", "everyday objects, papers, worn shoes")
+    hf_params = cfg.get("hf_parameters", {})
+
+    # ── Buduj listę obiektów z rzeczowników ──────────────────────────────────
+    if nouns_dict:
+        objects_list = list(nouns_dict.values())[:8]  # max 8 rzeczowników
+        objects_str = ", ".join(objects_list)
+    else:
+        # fallback: wyciągnij z body regexem
+        nouns_fallback = _extract_nouns_from_body(body)
+        objects_str = ", ".join(nouns_fallback[:6]) if nouns_fallback else fallback_objects
+
+    # ── Płeć — do opisu pacjenta ─────────────────────────────────────────────
+    gender = _detect_gender(body, sender_name)
+    gender_desc = {
+        "kobieta": "female patient, woman",
+        "mezczyzna": "male patient, man",
+    }.get(gender, "patient")
+
+    # ── Podmień {{OBJECTS}} w szablonie promptu ───────────────────────────────
+    prompt = prompt_template.replace("{{OBJECTS}}", objects_str)
+    # Podmień opcjonalne zmienne jeśli są w szablonie
+    prompt = prompt.replace("{{GENDER}}", gender_desc)
+    prompt = prompt.replace("{{NAME}}", sender_name or "unknown")
+
+    current_app.logger.info(
+        "[psych-photo] Prompt (pierwsze 200 znaków): %.200s", prompt
+    )
+    current_app.logger.info(
+        "[psych-photo] Obiekty: %s | Płeć: %s", objects_str, gender
+    )
+
+    # ── Wywołaj FLUX z parametrami z JSON ────────────────────────────────────
+    tokens = _get_hf_tokens()
+    if not tokens:
+        current_app.logger.error("[psych-photo] Brak tokenów HF")
+        return None
+
+    seed = random.randint(0, 2 ** 32 - 1)
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "num_inference_steps": hf_params.get("num_inference_steps", 4),
+            "guidance_scale": hf_params.get("guidance_scale", 3.0),
+            "width": hf_params.get("width", 768),
+            "height": hf_params.get("height", 1024),
+            "seed": seed,
+        }
+    }
+
+    raw_img = None
+    for name, token in tokens:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "image/png"
+        }
+        try:
+            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
+            if resp.status_code == 200:
+                raw_img = resp.content
+                current_app.logger.info("[psych-photo] FLUX OK token=%s (%d B)", name, len(raw_img))
+                break
+            elif resp.status_code == 429:
+                current_app.logger.warning("[psych-photo] 429 token=%s → następny", name)
+            else:
+                current_app.logger.warning("[psych-photo] HTTP %d token=%s", resp.status_code, name)
+        except Exception as e:
+            current_app.logger.warning("[psych-photo] Wyjątek token=%s: %s", name, e)
+
+    if not raw_img:
+        current_app.logger.error("[psych-photo] Wszystkie tokeny HF zawiodły")
+        return None
+
+    # ── Konwertuj PNG → JPG, zachowaj proporcje polaroid ─────────────────────
+    try:
+        from PIL import Image as PILImage
+        pil = PILImage.open(io.BytesIO(raw_img)).convert("RGB")
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=92, optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        current_app.logger.info("[psych-photo] Konwersja JPG OK (%dKB)", len(buf.getvalue()) // 1024)
+        return b64
+    except Exception as e:
+        current_app.logger.warning("[psych-photo] Błąd konwersji: %s — zwracam PNG b64", e)
+        return base64.b64encode(raw_img).decode("ascii")
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# RAPORT PSYCHIATRYCZNY PDF
+# RAPORT PSYCHIATRYCZNY DOCX (zastępuje PDF)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text: str) -> dict | None:
-    """Generuje raport psychiatryczny w stylu przyjęcia do szpitala — DeepSeek pierwszy."""
+def _build_raport_psychiatryczny(
+        body: str,
+        previous_body: str | None,
+        res_text: str,
+        nouns_dict: dict = None,
+        sender_name: str = "",
+) -> dict | None:
+    """
+    Generuje raport psychiatryczny jako DOCX (python-docx).
+    Na końcu dokumentu wkleja zdjęcie FLUX pacjenta w kaftanie bezpieczeństwa.
+    Zwraca dict {base64, content_type, filename} lub None.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt, Cm, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
+    except ImportError as e:
+        current_app.logger.error("[raport] Brak python-docx: %s", e)
+        return None
+
     try:
         with open(RAPORT_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -2471,11 +3297,11 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
 
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
-    context = f"EMAIL PACJENTA:\n{body[:1500]}"
+    context = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}"
     if previous_body:
-        context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:500]}"
-    context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:800]}"
-    context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}"
+        context += f"\n\nPOPRZEDNI EMAIL (historia choroby):\n{previous_body[:MAX_DLUGOSC_EMAIL]}"
+    context += f"\n\nODPOWIEDŹ TYLERA (materiał diagnostyczny):\n{res_text[:MAX_DLUGOSC_EMAIL]}"
+    context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
     context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
     # DeepSeek PIERWSZY dla raportu
@@ -2519,7 +3345,6 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         for wrong, right in KEY_MAP_RAPORT.items():
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
-                current_app.logger.info("[raport] znormalizowano '%s' → '%s'", wrong, right)
         if isinstance(data.get("dane_pacjenta"), str):
             data["dane_pacjenta"] = {"imie_nazwisko": data["dane_pacjenta"]}
         if not data.get("dane_pacjenta"):
@@ -2534,191 +3359,207 @@ def _build_raport_psychiatryczny(body: str, previous_body: str | None, res_text:
         current_app.logger.warning("[raport] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
+    # ── Buduj DOCX ────────────────────────────────────────────────────────────
     try:
-        from reportlab.pdfgen import canvas as rl_canvas
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.units import mm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
+        doc = Document()
 
-        FN, FB = _register_fonts()
-
-        buf = io.BytesIO()
-        W, H = A4
-        c = rl_canvas.Canvas(buf, pagesize=A4)
-        lm, rm = 20 * mm, W - 20 * mm
-        cw = rm - lm
-
-        def draw_wrap(txt, x, y, font=FN, size=9, color=(0.1, 0.1, 0.1), max_w=None):
-            if max_w is None:
-                max_w = cw
-            c.setFont(font, size)
-            c.setFillColorRGB(*color)
-            words = str(txt).split()
-            line = ""
-            used = 0
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, font, size) <= max_w:
-                    line = test
-                else:
-                    c.drawString(x, y - used, line)
-                    used += size + 2
-                    line = w
-            if line:
-                c.drawString(x, y - used, line)
-                used += size + 2
-            return used
+        # Marginesy
+        for section in doc.sections:
+            section.top_margin    = Cm(2)
+            section.bottom_margin = Cm(2)
+            section.left_margin   = Cm(2.5)
+            section.right_margin  = Cm(2.5)
 
         szpital_cfg = cfg.get("szpital", {})
 
-        # Nagłówek szpitala
-        c.setFont(FB, 12)
-        c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.drawCentredString(W / 2, H - 20 * mm, szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"))
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.4, 0.4, 0.4)
-        c.drawCentredString(W / 2, H - 25 * mm, szpital_cfg.get("adres", "New York, NY"))
-        c.drawCentredString(W / 2, H - 29 * mm, szpital_cfg.get("oddzial", ""))
+        # ── Nagłówek szpitala ─────────────────────────────────────────────────
+        h = doc.add_heading(
+            szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"), level=1
+        )
+        h.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in h.runs:
+            run.font.size = Pt(14)
+            run.font.color.rgb = RGBColor(0x0D, 0x0D, 0x0D)
 
-        c.setStrokeColorRGB(0.1, 0.1, 0.1)
-        c.setLineWidth(1.5)
-        c.line(lm, H - 32 * mm, rm, H - 32 * mm)
-        c.line(lm, H - 33.5 * mm, rm, H - 33.5 * mm)
+        sub = doc.add_paragraph(szpital_cfg.get("adres", ""))
+        sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sub.runs[0].font.size = Pt(9)
+        sub.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
-        # Tytuł dokumentu
-        c.setFont(FB, 11)
-        c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.drawCentredString(W / 2, H - 40 * mm, "HISTORIA CHOROBY — KARTA PRZYJĘCIA")
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.4, 0.4, 0.4)
+        if szpital_cfg.get("oddzial"):
+            od = doc.add_paragraph(szpital_cfg["oddzial"])
+            od.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            od.runs[0].font.size = Pt(9)
+            od.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+
+        doc.add_paragraph()  # odstęp
+
+        # ── Tytuł dokumentu ───────────────────────────────────────────────────
+        tyt = doc.add_heading("HISTORIA CHOROBY — KARTA PRZYJĘCIA", level=2)
+        tyt.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in tyt.runs:
+            run.font.size = Pt(12)
+
         nr = data.get("numer_historii_choroby", "NY-2026-00000")
-        c.drawCentredString(W / 2, H - 45 * mm,
-                            f"Nr: {nr}  |  Data: {data.get('data_przyjecia', datetime.now().strftime('%d.%m.%Y'))}")
+        data_przyjecia = data.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
+        nr_par = doc.add_paragraph(f"Nr: {nr}  |  Data: {data_przyjecia}")
+        nr_par.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        nr_par.runs[0].font.size = Pt(9)
+        nr_par.runs[0].font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
-        c.setLineWidth(0.5)
-        c.line(lm, H - 48 * mm, rm, H - 48 * mm)
+        doc.add_paragraph()
 
-        y = H - 55 * mm
+        def sekcja(tytul_sek):
+            p = doc.add_heading(tytul_sek.upper(), level=3)
+            for run in p.runs:
+                run.font.size = Pt(10)
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(0x0D, 0x0D, 0x0D)
+            return p
 
-        def sekcja(tytul, y):
-            c.setFont(FB, 9)
-            c.setFillColorRGB(0.05, 0.05, 0.05)
-            c.drawString(lm, y, tytul.upper())
-            c.setStrokeColorRGB(0.3, 0.3, 0.3)
-            c.setLineWidth(0.3)
-            c.line(lm, y - 2, rm, y - 2)
-            return y - 6 * mm
+        def pole(label, wartosc):
+            if not wartosc:
+                return
+            p = doc.add_paragraph()
+            run_label = p.add_run(f"{label}: ")
+            run_label.bold = True
+            run_label.font.size = Pt(10)
+            run_val = p.add_run(str(wartosc))
+            run_val.font.size = Pt(10)
 
-        def check_page(y, needed=25 * mm):
-            if y < needed:
-                c.showPage()
-                return H - 20 * mm
-            return y
+        def tekst_blok(zawartosc):
+            if not zawartosc:
+                return
+            p = doc.add_paragraph(str(zawartosc))
+            p.runs[0].font.size = Pt(10)
+            p.paragraph_format.space_after = Pt(4)
 
-        # Dane pacjenta
-        y = sekcja("Dane Pacjenta", y)
+        def lista_punktow(items):
+            for item in (items or []):
+                p = doc.add_paragraph(style="List Bullet")
+                run = p.add_run(str(item))
+                run.font.size = Pt(10)
+
+        # ── Dane pacjenta ─────────────────────────────────────────────────────
+        sekcja("Dane Pacjenta")
         dp = data.get("dane_pacjenta", {})
-        pairs = [
-            ("Imię i nazwisko", dp.get("imie_nazwisko", "")),
-            ("Wiek", dp.get("wiek", "")),
-            ("Adres", dp.get("adres", "")),
-            ("Zawód", dp.get("zawod", "")),
-            ("Stan cywilny", dp.get("stan_cywilny", "")),
-        ]
-        for label, val in pairs:
-            if val:
-                c.setFont(FB, 8)
-                c.setFillColorRGB(0.2, 0.2, 0.2)
-                c.drawString(lm, y, f"{label}:")
-                c.setFont(FN, 8)
-                c.drawString(lm + 40 * mm, y, str(val)[:60])
-                y -= 5 * mm
-        y -= 3 * mm
+        pole("Imię i nazwisko", dp.get("imie_nazwisko", ""))
+        pole("Wiek", dp.get("wiek", ""))
+        pole("Adres", dp.get("adres", ""))
+        pole("Zawód", dp.get("zawod", ""))
+        pole("Stan cywilny", dp.get("stan_cywilny", ""))
+        doc.add_paragraph()
 
-        # Powód przyjęcia
-        y = check_page(y, 30 * mm)
-        y = sekcja("Powód Przyjęcia", y)
-        used = draw_wrap(data.get("powod_przyjecia", ""), lm, y)
-        y -= used + 4 * mm
+        # ── Powód przyjęcia ───────────────────────────────────────────────────
+        sekcja("Powód Przyjęcia")
+        tekst_blok(data.get("powod_przyjecia", ""))
+        doc.add_paragraph()
 
-        # Wywiad
-        y = check_page(y, 35 * mm)
-        y = sekcja("Wywiad z Pacjentem", y)
-        used = draw_wrap(data.get("wywiad", ""), lm, y)
-        y -= used + 4 * mm
+        # ── Wywiad ────────────────────────────────────────────────────────────
+        sekcja("Wywiad z Pacjentem")
+        tekst_blok(data.get("wywiad", ""))
+        doc.add_paragraph()
 
-        # Objawy
-        y = check_page(y, 30 * mm)
-        y = sekcja("Objawy", y)
-        for ob in data.get("objawy", []):
-            y = check_page(y)
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"• {ob[:90]}")
-            y -= 5 * mm
-        y -= 2 * mm
+        # ── Objawy ────────────────────────────────────────────────────────────
+        sekcja("Objawy")
+        lista_punktow(data.get("objawy", []))
+        doc.add_paragraph()
 
-        # Diagnoza
-        y = check_page(y, 25 * mm)
-        y = sekcja("Diagnoza", y)
-        c.setFont(FB, 9)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("diagnoza_wstepna", "")[:80])
-        y -= 5 * mm
+        # ── Diagnoza ──────────────────────────────────────────────────────────
+        sekcja("Diagnoza")
+        p_diag = doc.add_paragraph()
+        run_diag = p_diag.add_run(data.get("diagnoza_wstepna", ""))
+        run_diag.bold = True
+        run_diag.font.size = Pt(11)
+        run_diag.font.color.rgb = RGBColor(0x99, 0x1A, 0x1A)
         if data.get("diagnoza_dodatkowa"):
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.3, 0.3, 0.3)
-            c.drawString(lm, y, f"Diagnoza dodatkowa: {data.get('diagnoza_dodatkowa', '')[:70]}")
-            y -= 5 * mm
-        y -= 2 * mm
+            p_dd = doc.add_paragraph()
+            run_dd = p_dd.add_run(f"Diagnoza dodatkowa: {data['diagnoza_dodatkowa']}")
+            run_dd.font.size = Pt(10)
+            run_dd.font.color.rgb = RGBColor(0x4D, 0x4D, 0x4D)
+        doc.add_paragraph()
 
-        # Zalecenia
-        y = check_page(y, 30 * mm)
-        y = sekcja("Zalecenia Terapeutyczne", y)
-        for zal in data.get("zalecenia", []):
-            y = check_page(y)
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.2, 0.2, 0.2)
-            c.drawString(lm + 3 * mm, y, f"→ {zal[:90]}")
-            y -= 5 * mm
-        y -= 2 * mm
+        # ── Zalecenia ─────────────────────────────────────────────────────────
+        sekcja("Zalecenia Terapeutyczne")
+        lista_punktow(data.get("zalecenia", []))
+        doc.add_paragraph()
 
-        # Rokowanie
-        y = check_page(y, 20 * mm)
-        y = sekcja("Rokowanie", y)
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, data.get("rokowanie", "")[:90])
-        y -= 8 * mm
+        # ── Rokowanie ─────────────────────────────────────────────────────────
+        sekcja("Rokowanie")
+        p_rok = doc.add_paragraph()
+        run_rok = p_rok.add_run(data.get("rokowanie", ""))
+        run_rok.font.size = Pt(10)
+        run_rok.font.color.rgb = RGBColor(0x99, 0x1A, 0x1A)
+        doc.add_paragraph()
 
-        # Podpis
-        y = check_page(y, 20 * mm)
-        c.setStrokeColorRGB(0.3, 0.3, 0.3)
-        c.line(lm, y, lm + 60 * mm, y)
-        y -= 4 * mm
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.3, 0.3, 0.3)
-        c.drawString(lm, y, data.get("podpis_lekarza", "Dr. T. Durden, MD"))
-        y -= 8 * mm
+        # ── Podpis ────────────────────────────────────────────────────────────
+        p_podpis = doc.add_paragraph()
+        run_podpis = p_podpis.add_run(data.get("podpis_lekarza", "Dr. T. Durden, MD"))
+        run_podpis.font.size = Pt(10)
+        run_podpis.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
 
-        # Notatka pielęgniarki
         if data.get("notatka_oddzialu"):
-            c.setStrokeColorRGB(0.6, 0.6, 0.6)
-            c.line(lm, y, rm, y)
-            y -= 4 * mm
-            c.setFont(FN, 7)
-            c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.drawString(lm, y, f"Notatka pielęgniarki: {data.get('notatka_oddzialu', '')[:100]}")
+            p_not = doc.add_paragraph()
+            run_not = p_not.add_run(f"Notatka pielęgniarki: {data['notatka_oddzialu']}")
+            run_not.font.size = Pt(9)
+            run_not.font.color.rgb = RGBColor(0x80, 0x80, 0x80)
 
-        c.save()
-        pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        # ── Zdjęcie psychiatryczne na końcu ───────────────────────────────────
+        doc.add_paragraph()
+        doc.add_page_break()
+
+        photo_title = doc.add_heading("DOKUMENTACJA FOTOGRAFICZNA PACJENTA", level=2)
+        photo_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in photo_title.runs:
+            run.font.size = Pt(11)
+            run.font.color.rgb = RGBColor(0x0D, 0x0D, 0x0D)
+
+        photo_sub = doc.add_paragraph("Zdjęcie wykonane przy przyjęciu — Oddział B")
+        photo_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        photo_sub.runs[0].font.size = Pt(9)
+        photo_sub.runs[0].font.color.rgb = RGBColor(0x80, 0x80, 0x80)
+
+        doc.add_paragraph()
+
+        # Generuj zdjęcie przez FLUX
+        photo_b64 = _generate_psychiatric_photo(
+            body=body,
+            nouns_dict=nouns_dict or {},
+            sender_name=sender_name,
+        )
+
+        if photo_b64:
+            try:
+                photo_bytes = base64.b64decode(photo_b64)
+                photo_stream = io.BytesIO(photo_bytes)
+                p_img = doc.add_paragraph()
+                p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run_img = p_img.add_run()
+                run_img.add_picture(photo_stream, width=Cm(12))
+                current_app.logger.info("[raport] Zdjęcie wklejone do DOCX OK")
+            except Exception as e:
+                current_app.logger.warning("[raport] Błąd wklejania zdjęcia do DOCX: %s", e)
+                p_no_img = doc.add_paragraph("[Zdjęcie niedostępne]")
+                p_no_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        else:
+            current_app.logger.warning("[raport] Brak zdjęcia psychiatrycznego — pomijam")
+            p_no_img = doc.add_paragraph("[Zdjęcie niewygenertowane — błąd FLUX]")
+            p_no_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # ── Zapisz DOCX do BytesIO ────────────────────────────────────────────
+        buf = io.BytesIO()
+        doc.save(buf)
+        docx_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        current_app.logger.info("[raport] OK")
-        return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"raport_psychiatryczny_{ts}.pdf"}
+        current_app.logger.info("[raport] DOCX OK")
+        return {
+            "base64":       docx_b64,
+            "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "filename":     f"raport_psychiatryczny_{ts}.docx",
+        }
 
     except Exception as e:
-        current_app.logger.error("[raport] Błąd PDF: %s", e)
+        current_app.logger.error("[raport] Błąd DOCX: %s", e)
         return None
 
 
@@ -2738,7 +3579,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Odpowiedź Tylera:\n{res_text[:2000]}\n\nEmail:\n{body[:400]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\nEmail:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy na GÓRNYM POZIOMIE:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj w 'plakat'."
     )
@@ -2921,8 +3762,8 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
     user_msg = (
-        f"Email:\n{body[:800]}\n\n"
-        f"Odpowiedź Tylera:\n{res_text[:1500]}\n\n"
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
@@ -3117,73 +3958,95 @@ function pokazWynik() {{
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
 
-def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "") -> dict:
+def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "") -> dict:
     """
     Buduje sekcję 'zwykly' odpowiedzi:
 
     1. Wczytuje zwykly_prompt.json i renderuje prompt programowo
     2. Groq PIERWSZY → DeepSeek FALLBACK — generuje odpowiedź Tyler+Sokrates
     3. Parsuje JSON z odpowiedzi: tekst + emocja
-    4. Generuje emotkę PNG przez FLUX (zastępuje pliki z dysku)
-    5. Generuje CV PDF z zdjęciem FLUX
-    6. Generuje tryptyk PNG (3 panele FLUX Fight Club)
-    7. Zwraca dict ze wszystkimi elementami
-
-    Nadawca dostaje:
-      - reply_html  (HTML z odpowiedzią)
-      - emoticon    (PNG emotki generowanej przez FLUX — inline)
-      - cv_pdf      (PDF CV w stylu Tylera — załącznik)
-      - triptych    (lista max 3 JPG — jeśli tokeny HF dostępne)
+    4. Buduje session_vars — słownik wszystkich zmiennych globalnych sesji
+    5. Generuje emotkę PNG przez FLUX
+    6. Generuje CV PDF z zdjęciem FLUX
+    7. Generuje tryptyk PNG (3 panele FLUX Fight Club) z podstawianiem zmiennych
+    8. Zwraca dict ze wszystkimi elementami
     """
     current_app.logger.info("[zwykly] VERSION_CHECK: isinstance_fix=True file=%s", __file__)
 
+    # ── 0. Rzeczowniki przez Groq — raz na początku, używane wszędzie ─────────
+    nouns_dict = _extract_nouns_groq(body)
+    current_app.logger.info("[zwykly] rzeczowniki Groq: %d słów", len(nouns_dict))
+
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────
     prompt_data = _load_prompt_json()
-    prompt_str = _render_prompt(prompt_data, body, previous_body)
+    prompt_str  = _render_prompt(prompt_data, body, previous_body)
 
-    system_msg = prompt_data.get("system", "Odpowiadaj wyłącznie w formacie JSON.")
-    user_msg = prompt_str
+    system_msg = prompt_data.get("system", "Odpowiadaj wylacznie w formacie JSON.")
+    user_msg   = prompt_str
 
     # ── 2. Wywołaj model (Groq → DeepSeek) ───────────────────────────────────
     res_raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=6000)
-    current_app.logger.info("[zwykly] Provider użyty: %s", provider)
+    current_app.logger.info("[zwykly] Provider uzyty: %s", provider)
 
     # ── 3. Parsuj odpowiedź ───────────────────────────────────────────────────
     res_text, emotion_key = _parse_response(res_raw)
 
     # ── 3b. Retry z DeepSeek jeśli odpowiedź niekompletna ────────────────────
     if not res_text and provider == "groq":
-        current_app.logger.warning("[zwykly] Groq zwrócił niekompletną odpowiedź — retry DeepSeek")
+        current_app.logger.warning("[zwykly] Groq zwrocil niekompletna odpowiedz — retry DeepSeek")
         res_raw_retry = call_deepseek(system_msg, user_msg, MODEL_TYLER)
         if res_raw_retry:
             res_text, emotion_key = _parse_response(res_raw_retry)
             if res_text:
                 provider = "deepseek-retry"
-                res_raw = res_raw_retry
+                res_raw  = res_raw_retry
                 current_app.logger.info("[zwykly] DeepSeek retry OK")
 
     if not res_text:
         res_text = (
-            "### SOKRATES\n\nPrzepraszam, tym razem słowa do mnie nie przyszły.\n\n"
+            "### SOKRATES\n\nPrzepraszam, tym razem slowa do mnie nie przyszly.\n\n"
             "— Sokrates\n\n---\n\n### TYLER DURDEN\n\n"
-            "System zawiódł. Ale to i tak lepiej — maszyny nie powinny za nas myśleć.\n\n"
+            "System zawiodl. Ale to i tak lepiej — maszyny nie powinny za nas myslec.\n\n"
             "— Tyler Durden"
         )
 
-    # ── 4. Emotka FLUX (zastępuje pliki z dysku) ──────────────────────────────
-    # PDF emocji wyłączony — zastąpiony przez cv_pdf generowany dynamicznie
+    # ── 4. Buduj session_vars ─────────────────────────────────────────────────
+    session_vars = _build_session_vars(
+        body=body,
+        sender_email=sender_email,
+        sender_name=sender_name,
+        previous_body=previous_body or "",
+        res_text=res_text,
+        emotion_key=emotion_key,
+        provider=provider,
+        nouns_dict=nouns_dict,
+    )
+    # Dołącz rzeczowniki Groq do session_vars jako RZECZ001, RZECZ002...
+    for k, v in nouns_dict.items():
+        vars_dict_key = k.upper()  # rzecz001 → RZECZ001
+        session_vars[vars_dict_key] = v
+    current_app.logger.info(
+        "[zwykly] session_vars: %d zmiennych (TEXT_*=%d, SOKRATES_*=%d)",
+        len(session_vars),
+        len([k for k in session_vars if k.startswith("TEXT_")]),
+        len([k for k in session_vars if k.startswith("SOKRATES_")]),
+    )
+
+    # ── 5. Emotka FLUX ────────────────────────────────────────────────────────
     png_b64 = _generate_icon_flux(body, emotion_key)
     if not png_b64:
-        current_app.logger.warning("[zwykly] FLUX emotka zawiodła — fallback na plik")
+        current_app.logger.warning("[zwykly] FLUX emotka zawiodla — fallback na plik")
         png_b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
         if not png_b64:
             png_b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{FALLBACK_EMOT}.png"))
 
-    # ── 5. Buduj HTML reply ───────────────────────────────────────────────────
+    # ── 6. Buduj HTML reply ───────────────────────────────────────────────────
     reply_html = build_html_reply(res_text)
 
-    # ── 6. Tryptyk FLUX ───────────────────────────────────────────────────────
-    triptych_images, panel_prompts = _generate_triptych(res_text, prompt_data, body)
+    # ── 7. Tryptyk FLUX z session_vars ───────────────────────────────────────
+    triptych_images, panel_prompts, panel_assignments = _generate_triptych(
+        res_text, prompt_data, body, session_vars=session_vars
+    )
 
     # ── Czwarty obrazek — surowa treść emaila bez AI ──────────────────────────
     raw_email_image = _generate_raw_email_image(body)
@@ -3191,9 +4054,9 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         triptych_images.append(raw_email_image)
         current_app.logger.info("[raw-img] Dodano czwarty obrazek do tryptyku")
 
-    # ── 7. Generuj CV (treść + zdjęcie + PDF) ─────────────────────────────────
-    cv_pdf_b64 = None
-    cv_data = None
+    # ── 8. Generuj CV (treść + zdjęcie + PDF) ─────────────────────────────────
+    cv_pdf_b64  = None
+    cv_data     = None
     cv_photo_b64 = None
 
     try:
@@ -3222,14 +4085,14 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo_b64)
 
     except Exception as e:
-        current_app.logger.error("[zwykly] Błąd generowania CV: %s", e)
+        current_app.logger.error("[zwykly] Blad generowania CV: %s", e)
 
     current_app.logger.info(
         "[zwykly] OK provider=%s emotion=%s png=%s cv_pdf=%s tryptyk=%d paneli",
         provider, emotion_key, bool(png_b64), bool(cv_pdf_b64), len(triptych_images)
     )
 
-    # ── 8. Debug TXT do Google Drive ─────────────────────────────────────────
+    # ── 9. Debug TXT do Google Drive ─────────────────────────────────────────
     debug_txt = _build_debug_txt(
         body=body,
         provider=provider,
@@ -3238,18 +4101,25 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         res_text=res_text,
         triptych_images=triptych_images,
         panel_prompts=panel_prompts,
+        system_msg=system_msg,
+        user_msg=user_msg,
+        session_vars=session_vars,
+        panel_assignments=panel_assignments,
     )
+    # Dopisz rzeczowniki na końcu _.txt
+    if nouns_dict:
+        debug_txt = _append_nouns_to_debug_txt(debug_txt, nouns_dict)
 
-    # ── 9. Wyjaśnienie odpowiedzi ─────────────────────────────────────────────
+    # ── 10. Wyjaśnienie odpowiedzi ────────────────────────────────────────────
     explanation_txt = _build_explanation_txt(res_text, body)
 
-    # ── 10. Nowe elementy (ankieta, horoskop, karta RPG, raport, plakat, gra) ─
+    # ── 11. Nowe elementy (ankieta, horoskop, karta RPG, raport, plakat, gra) ─
     ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
-    horoskop_pdf = _build_horoskop(body, res_text)
+    horoskop_pdf  = _build_horoskop(body, res_text)
     karta_rpg_pdf = _build_karta_rpg(body, res_text)
-    raport_pdf = _build_raport_psychiatryczny(body, previous_body, res_text)
-    plakat_svg = _build_plakat_svg(res_text, body)
-    gra_html = _build_gra_html(body, res_text)
+    raport_pdf    = _build_raport_psychiatryczny(body, previous_body, res_text, nouns_dict=nouns_dict, sender_name=sender_name)
+    plakat_svg    = _build_plakat_svg(res_text, body)
+    gra_html      = _build_gra_html(body, res_text)
 
     current_app.logger.info(
         "[zwykly] Dodatkowe: ankieta=%s horoskop=%s karta=%s raport=%s plakat=%s gra=%s",
@@ -3257,7 +4127,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         bool(raport_pdf), bool(plakat_svg), bool(gra_html)
     )
 
-    # ── 11. Zwróć wszystko ────────────────────────────────────────────────────
+    # ── 12. Zwróć wszystko ────────────────────────────────────────────────────
     if isinstance(cv_data, dict):
         imie_nazwisko = cv_data.get("imie_nazwisko", "CV")
     else:
@@ -3267,26 +4137,26 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     return {
         "reply_html": reply_html,
         "emoticon": {
-            "base64": png_b64,
+            "base64":       png_b64,
             "content_type": "image/png",
-            "filename": f"emotka_{emotion_key}.png",
+            "filename":     f"emotka_{emotion_key}.png",
         },
         "cv_pdf": {
-            "base64": cv_pdf_b64,
+            "base64":       cv_pdf_b64,
             "content_type": "application/pdf",
-            "filename": f"CV_{safe_name}_Tyler.pdf",
+            "filename":     f"CV_{safe_name}_Tyler.pdf",
         },
-        "detected_emotion": emotion_key,
-        "provider": provider,
-        "triptych": triptych_images,
+        "detected_emotion":  emotion_key,
+        "provider":          provider,
+        "triptych":          triptych_images,
         "triptych_for_drive": triptych_images,
-        "debug_txt": debug_txt,
-        "explanation_txt": explanation_txt,
-        "ankieta_html": ankieta_html,
-        "ankieta_pdf": ankieta_pdf,
-        "horoskop_pdf": horoskop_pdf,
-        "karta_rpg_pdf": karta_rpg_pdf,
-        "raport_pdf": raport_pdf,
-        "plakat_svg": plakat_svg,
-        "gra_html": gra_html,
+        "debug_txt":         debug_txt,
+        "explanation_txt":   explanation_txt,
+        "ankieta_html":      ankieta_html,
+        "ankieta_pdf":       ankieta_pdf,
+        "horoskop_pdf":      horoskop_pdf,
+        "karta_rpg_pdf":     karta_rpg_pdf,
+        "raport_pdf":        raport_pdf,
+        "plakat_svg":        plakat_svg,
+        "gra_html":          gra_html,
     }

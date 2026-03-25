@@ -90,13 +90,13 @@
 
   "instrukcje_dodatkowe": [
     "KROK 1 przed pisaniem: zidentyfikuj z emaila — (1) główne zajęcie/problem nadawcy, (2) konkretne obiekty/miejsca/osoby wymienione, (3) emocję dominującą, (4) to czego nadawca szuka lub boi się.",
-    "KROK 2: każdy element CV mapuj na jeden z tych czterech punktów — nie pisz nic co nie wynika z emaila.",
+    "ZAKAZ 'nieustalony' dla jakiegokolwiek pola — wszystkie dane muszą być wymyślone na podstawie kontekstu emaila jeśli nie zostały podane wprost. Wiek wymyślony, adres wymyślony nawiązując do emaila, zawód z emaila lub wymyślony, stan cywilny wywnioskowany z treści.",
     "Firma 1 = główne zajęcie lub problem z emaila (6 lat korporacji → Excel & Pustka S.A. przez 6 lat)",
     "Firma 2 = stan emocjonalny lub relacyjny z emaila (zagubiony, kredyt, pustka → Kredyt Emocjonalny Sp. z o.o.)",
     "Firma 3 = to co utracone, marzenie lub plany z emaila",
     "Jeśli jest POPRZEDNIA WIADOMOŚĆ — CV uwzględnia ją: np. jeśli ktoś pisał wcześniej o czymś i teraz pisze o czymś innym, CV pokazuje 'ewolucję' (lub jej brak) między wiadomościami jako kolejne stanowiska.",
     "Podsumowanie zawodowe to diagnoza Tylera — nie opis ogólny ale konkretna analiza tej osoby.",
-    "Życiorys to kulminacja CV — Tyler zna nadawcę lepiej niż on sam siebie i to tu pokazuje. Musi być 4-6 zdań, każde z konkretnym faktem z emaila, hiperbolicznie wyolbrzymione ale prawdziwe w sednie.",
+    "Życiorys to kulminacja CV — Tyler zna nadawcę lepiej niż on sam siebie i to tu pokazuje. Musi być 8-15 zdań, każde z konkretnym faktem z emaila, hiperbolicznie wyolbrzymione ale prawdziwe w sednie.",
     "Cytat Tylera musi być odpowiedzią na konkretne zdanie z emaila — jakby Tyler cytował z powrotem nadawcę i komentował.",
     "ZAKAZ: Imion/nazw firm które nie mają związku z emailem (zakaz 'Kocie Sprawki' gdy email jest o górnictwie).",
     "ZAKAZ: Ogólnych fraz w stylu 'praca w różnych firmach', 'komunikacja interpersonalna', 'obsługa komputera'.",
