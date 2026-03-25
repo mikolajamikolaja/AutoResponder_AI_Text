@@ -12,15 +12,23 @@
     "panels": [
       {
         "panel_1": "triptych comic layout, Extreme close-up. Tyler Durden's bloody hands releasing [USER_OBJECTS] at high speed. [USER_OBJECTS] lights reflected in his glazed eyes. Motion blur on background. He is [USER_OBJECTS]. Background: total destruction. At Tyler's feet and across the scorched ground: [USER_OBJECTS] burning, melting, disintegrating — the material possessions of a wasted life.. Several eighteen-year-old women without clothes. The women are taking a shower with disheveled hair. Tattoos on their thighs, tattoos on their chests,very torn clothes,beachwear. In the background, the men in the kennel, shaved, in cheap black shirts and black trousers; their faces hard, tense, fierce; their skin dirty, covered with dried sweat, abrasions, and darkening bruises; they move quickly, nervously, with aggressive energy; terribly menacing as a spreading unit, sweeping with brutal determination, silent, disciplined, looking like men who have been through too much and are ready for more.",
-        "text_rendering": "A hand-drawn speech bubble with cracked ink style containing the words: '[TEXT_1]'. Text sharp and legible despite chaos."
+        "index": 1,
+        "text_rendering": "A hand-drawn speech bubble with cracked ink style containing the words: '[TEXT_4]'. Text sharp and legible despite chaos."
       },
       {
         "panel_2": "diptych comic layout, Medium shot. Tyler standing before a burning field of [USER_OBJECTS], arms spread wide, face turned upward toward black smoke. He looks liberated. Background: total destruction.Several eighteen-year-old women without clothes. The women are taking a shower. A woman is making love to a man. Several 18-year-old women, with disheveled hair. Tattoos on their thighs, tattoos on their chests. In the background, the men in the kennel, shaved, in cheap black shirts and black trousers; their faces hard, tense, fierce; their skin dirty, covered with dried sweat, abrasions, and darkening bruises; they move quickly, nervously, with aggressive energy; terribly menacing as a spreading unit, sweeping with brutal determination, silent, disciplined, looking like men who have been through too much and are ready for more.",
-        "text_rendering": "The quote '[TEXT_2]' burned as graffiti into the scorched ground. Letters uneven, raw."
+        "index": 2,
+        "text_rendering": "The quote '[TEXT_6]' burned as graffiti into the scorched ground. Letters uneven, raw."
       },
       {
         "panel_3": "four-panel comic layout, Low angle. Tyler crouching over a terrified [USER_OBJECTS] pinned against a dumpster in a dark alley, surrounded by [USER_OBJECTS] spilled across the wet asphalt from an overturned bag, Tyler holding something to their temple, forcing them to confront their meaningless life. Steam from pipes. Rats.Several eighteen-year-old women without clothes. The women are taking a shower. A woman is making love to a man. Several 18-year-old women, with disheveled hair. Tattoos on their thighs, tattoos on their chests. In the background, the men in the kennel, shaved, in cheap black shirts and black trousers; their faces hard, tense, fierce; their skin dirty, covered with dried sweat, abrasions, and darkening bruises; they move quickly, nervously, with aggressive energy; terribly menacing as a spreading unit, sweeping with brutal determination, silent, disciplined, looking like men who have been through too much and are ready for more.",
-        "text_rendering": "Text '[TEXT_3]' as stencil graffiti on the brick wall. Paint dripping."
+        "index": 3,
+        "text_rendering": "Text '[TEXT_5]' as stencil graffiti on the brick wall. Paint dripping."
+      }
+      {
+        "panel_4": "'[TEXT_3]'   '[TEXT_5]' '[TEXT_6]'  '[TEXT_7]' '[TEXT_8]'",
+        "index": 4,
+        "text_rendering": "Text '[TEXT_3]'   '[TEXT_5]' '[TEXT_6]'  '[TEXT_7]' '[TEXT_8]' as stencil graffiti on the brick wall. Paint dripping."
       }
     ]
   },
