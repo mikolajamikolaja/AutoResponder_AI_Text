@@ -607,7 +607,7 @@ def _extract_nouns_groq(body: str) -> dict:
 
     system_msg  = cfg.get("system", "")
     user_prefix = cfg.get("user_prefix", "Wypisz WSZYSTKIE rzeczowniki z tekstu:\n")
-    max_tokens  = cfg.get("max_tokens", 2000)
+    max_tokens  = cfg.get("max_tokens", 3000)
     temperature = cfg.get("temperature", 0.1)
     user_msg    = user_prefix + (body or "")
 
@@ -3348,7 +3348,7 @@ def _build_raport_psychiatryczny(
     raw = call_deepseek(system_msg, context, MODEL_TYLER)
     if not raw:
         for name, key in _get_groq_keys():
-            result = _call_groq_single(key, system_msg, context, 2500)
+            result = _call_groq_single(key, system_msg, context, 3500)
             if result and result != "RATE_LIMIT":
                 raw = result
                 break
