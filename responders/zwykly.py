@@ -995,6 +995,190 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     return {"panel1": panel1, "panel2": panel2, "panel3": panel3}
 
 
+def _extract_tyler_rules(response_text: str) -> list:
+    """
+    Wyciąga 8 zasad Tylera z tekstu odpowiedzi AI.
+    Zwraca listę stringów (max 8 zasad).
+    Panel 1 = zasady 1+2 (identyczne), panele 2-7 = zasady 2-7 (indeks 1-6),
+    panel 7 = zasada 8.
+    Tak naprawdę zwracamy listę 7 zasad do 7 paneli:
+      panel_rules[0] = zasada 1 (i 2)
+      panel_rules[1] = zasada 3
+      ...
+      panel_rules[6] = zasada 8
+    """
+    if not response_text:
+        return []
+
+    tyler_section = response_text
+    if "### TYLER DURDEN" in response_text:
+        tyler_section = response_text.split("### TYLER DURDEN", 1)[1]
+
+    ordinal_map = {
+        "pierwsza": 1, "druga": 2, "trzecia": 3, "czwarta": 4,
+        "piąta": 5, "piata": 5, "szósta": 6, "szosta": 6,
+        "siódma": 7, "siodma": 7, "ósma": 8, "osma": 8,
+    }
+
+    rules = {}
+    lines = [l.strip() for l in tyler_section.splitlines() if l.strip()]
+    for line in lines:
+        m = re.match(
+            r'^(pierwsza|druga|trzecia|czwarta|pi[aą]ta|sz[oó]sta|si[oó]dma|[oó]sma)\s+zasada',
+            line, re.IGNORECASE
+        )
+        if m:
+            ordinal = m.group(1).lower().replace("ó", "o").replace("ą", "a")
+            idx = ordinal_map.get(ordinal)
+            if idx and idx not in rules:
+                rules[idx] = line.strip()
+
+    # Fallback: szukaj linii z numerem 1. 2. itd.
+    if len(rules) < 4:
+        for line in lines:
+            m = re.match(r'^([1-8])[.)]\s*(.+)', line)
+            if m:
+                idx = int(m.group(1))
+                if idx not in rules:
+                    rules[idx] = line.strip()
+
+    # Zbuduj listę 7 paneli: panel1=zasada1, panel2=zasada3, ..., panel7=zasada8
+    # Mapowanie panel → numer zasady
+    # Panel 1 = zasada 1 (i 2 — są identyczne)
+    # Panel 2 = zasada 3
+    # Panel 3 = zasada 4
+    # Panel 4 = zasada 5
+    # Panel 5 = zasada 6
+    # Panel 6 = zasada 7
+    # Panel 7 = zasada 8
+    panel_to_rule = {1: 1, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8}
+    panel_rules = []
+    for p in range(1, 8):
+        rule_idx = panel_to_rule[p]
+        rule_text = rules.get(rule_idx, rules.get(p, ""))
+        panel_rules.append(rule_text)
+
+    current_app.logger.info(
+        "[tyler-rules] Wyciągnięto %d zasad z tekstu Tylera → %d paneli",
+        len(rules), len([r for r in panel_rules if r])
+    )
+    return panel_rules
+
+
+PANEL_WYTYCZNE_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_panel_wytyczne.json")
+
+
+def _load_panel_wytyczne() -> dict:
+    """
+    Wczytuje wytyczne do generowania paneli z zwykly_panel_wytyczne.json.
+    Wszystkie wytyczne stylistyczne, system prompt AI, szablony user promptu
+    i logika odwrócenia są tam — Python nic nie hardkoduje.
+    Fallback: minimalny dict jeśli plik niedostępny.
+    """
+    try:
+        with open(PANEL_WYTYCZNE_JSON_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        current_app.logger.info("[panel-wytyczne] Wczytano zwykly_panel_wytyczne.json OK")
+        return data
+    except FileNotFoundError:
+        current_app.logger.error("[panel-wytyczne] Brak pliku %s — używam fallbacku", PANEL_WYTYCZNE_JSON_PATH)
+    except json.JSONDecodeError as e:
+        current_app.logger.error("[panel-wytyczne] Błąd JSON w zwykly_panel_wytyczne.json: %s", e)
+    return {
+        "system_prompt_AI": (
+            "You are a cinematic visual prompt engineer for FLUX image generation. "
+            "Fight Club 1999 aesthetic. Given a Tyler Durden RULE, generate a scene showing "
+            "the VIOLATION of that rule. Characters actively do what the rule forbids. "
+            "Output: ONE paragraph, max 120 words, English only, just the FLUX prompt."
+        ),
+        "user_prompt_szablon": (
+            "TYLER'S RULE (panel [PANEL_NR]/7):\n[ZASADA_TEKST]\n\n"
+            "Objects from sender's email: [USER_OBJECTS]\n"
+            "Generate a FLUX prompt showing the VIOLATION of this rule:"
+        ),
+        "style_variants": ["35mm film grain, high contrast, Fight Club 1999, David Fincher"],
+        "fallback_gdy_brak_zasady": (
+            "Tyler Durden walking away from a burning wreck, 35mm film grain, "
+            "Fight Club 1999 aesthetic, David Fincher, underexposed, gritty"
+        ),
+        "styl_globalny": {"zakazy_negatywne": "clean, polished, beautiful, anime, text, watermark"},
+    }
+
+
+def _generate_panel_prompt_from_rule(
+        panel_index: int,
+        rule_text: str,
+        style_config: dict,
+        body: str,
+        session_vars: dict = None,
+) -> tuple:
+    """
+    Dla jednej zasady Tylera generuje prompt FLUX pokazujący ODWROTNOŚĆ zakazu.
+    Jeśli Tyler mówi 'nie rób X' → obrazek pokazuje bohaterów Fight Club robiących X.
+
+    WSZYSTKIE wytyczne stylistyczne i prompty czytane są z zwykly_panel_wytyczne.json.
+    Aby zmienić klimat/styl obrazków — wystarczy edytować ten plik JSON,
+    bez dotykania kodu Pythona.
+
+    Zwraca (flux_prompt, caption, used_vars).
+    """
+    if session_vars is None:
+        session_vars = {}
+
+    # ── Wczytaj wytyczne z JSON ───────────────────────────────────────────────
+    w = _load_panel_wytyczne()
+
+    nouns_str    = session_vars.get("USER_OBJECTS", "") or "debris, broken furniture, ash"
+    panel_style  = random.choice(w.get("style_variants", ["35mm film grain, Fight Club 1999"]))
+
+    # Postacie z JSON (jeśli są) lub fallback na FIGHT_CLUB_CHARACTERS z kodu
+    postacie_dict = w.get("postacie", {})
+    if postacie_dict:
+        postacie_str = "; ".join(postacie_dict.values())
+    else:
+        postacie_str = "; ".join(FIGHT_CLUB_CHARACTERS[:3])
+
+    oswietlenie = w.get("styl_globalny", {}).get("oswietlenie", "")
+
+    # ── System prompt — w całości z JSON ─────────────────────────────────────
+    system_for_scene = w.get("system_prompt_AI", "")
+
+    # ── User prompt — szablon z JSON, podstawiamy zmienne ────────────────────
+    user_szablon = w.get("user_prompt_szablon", "")
+    user_for_scene = (
+        user_szablon
+        .replace("[PANEL_NR]",        str(panel_index))
+        .replace("[ZASADA_TEKST]",    rule_text or "")
+        .replace("[USER_OBJECTS]",    nouns_str)
+        .replace("[STYL_OSWIETLENIA]", oswietlenie[:200] if oswietlenie else "")
+        .replace("[STYL_WIZUALNY]",   panel_style)
+        .replace("[POSTACIE]",        postacie_str[:300])
+    )
+
+    # ── Wywołaj AI ────────────────────────────────────────────────────────────
+    flux_prompt, prov = _call_ai_with_fallback(system_for_scene, user_for_scene, max_tokens=300)
+
+    # ── Fallback gdy AI zwróciło pustą odpowiedź ──────────────────────────────
+    if not flux_prompt or len(flux_prompt.strip()) < 20:
+        fallback_tmpl = w.get("fallback_gdy_brak_zasady", "")
+        flux_prompt = (
+            fallback_tmpl.replace("[USER_OBJECTS]", nouns_str)
+            or (
+                f"Fight Club 1999 characters Tyler Durden and Narrator deliberately "
+                f"breaking the rule '{rule_text[:80]}', surrounded by {nouns_str}, "
+                f"{panel_style}, 35mm film grain, gritty, underexposed"
+            )
+        )
+
+    caption = rule_text[:120] if rule_text else f"Zasada {panel_index}"
+
+    current_app.logger.info(
+        "[panel-rule] Panel %d/7 (%s): %.100s...",
+        panel_index, prov, flux_prompt
+    )
+    return flux_prompt, caption, []
+
+
 def _detect_city(body: str) -> str:
     """
     Wykrywa miasto/miejscowość z treści emaila.
@@ -1522,68 +1706,121 @@ def _generate_triptych(
         session_vars: dict = None,
 ) -> tuple:
     """
-    Generuje listę obrazków PNG tryptyku (max 3 panele).
+    Generuje 7 paneli — każdy odpowiada jednej zasadzie Tylera.
+    Panel 1 = zasada 1 (i 2, bo są identyczne)
+    Panel 2 = zasada 3
+    ...
+    Panel 7 = zasada 8
+
+    Dla każdej zasady Groq generuje prompt FLUX pokazujący ODWROTNOŚĆ zakazu
+    (jeśli Tyler mówi "nie rób X" → obrazek pokazuje bohaterów Fight Club robiących X).
+
     Jeśli tokeny HF wyczerpią się przed końcem — zwraca tyle ile wygenerowano.
-    Zwraca (images, panel_prompts, panel_assignments)
-      images           — lista dict [{base64, content_type, filename, ...}]
-      panel_prompts    — lista stringów promptów FLUX
-      panel_assignments— lista dict {panel, caption, used_vars} do logu
+    Zwraca (images, panel_prompts, panel_assignments).
     """
     if session_vars is None:
         session_vars = {}
 
     style_config = _load_style_config()
     if not style_config:
-        current_app.logger.warning("[zwykly-img] Brak STYLE_CONFIG — pomijam generowanie tryptyku")
+        current_app.logger.warning("[zwykly-img] Brak STYLE_CONFIG — pomijam generowanie")
         return [], [], []
 
-    panels_config = style_config.get("triptych", {}).get("panels", [])
-    if not panels_config:
-        current_app.logger.warning("[zwykly-img] Brak konfiguracji paneli w STYLE_CONFIG")
-        return [], [], []
+    # Wyciągnij zasady Tylera z odpowiedzi AI → lista 7 elementów
+    panel_rules = _extract_tyler_rules(response_text)
+
+    # Jeśli nie udało się wyciągnąć zasad — fallback na stary tryb (3 panele z JS)
+    if not any(panel_rules):
+        current_app.logger.warning(
+            "[zwykly-img] Brak zasad Tylera w odpowiedzi — fallback na stary tryb 3 paneli"
+        )
+        panels_config = style_config.get("triptych", {}).get("panels", [])
+        if not panels_config:
+            return [], [], []
+        images, panel_prompts, panel_assignments = [], [], []
+        for panel in panels_config:
+            idx = panel.get("index", len(images) + 1)
+            flux_prompt, caption, used_vars = _generate_panel_prompt(
+                panel_index=idx,
+                panel_config=panel,
+                style_config=style_config,
+                response_text=response_text,
+                prompt_data=prompt_data,
+                body=body,
+                session_vars=session_vars,
+            )
+            panel_prompts.append(flux_prompt)
+            panel_assignments.append({"panel": idx, "caption": caption,
+                                       "used_vars": used_vars, "prompt_preview": flux_prompt[:120]})
+            image = _generate_flux_image(flux_prompt, panel_index=idx)
+            if image:
+                image = _png_to_jpg(image, panel_index=idx)
+                image = _add_text_below_image(image, caption, idx)
+                images.append(image)
+            else:
+                break
+        return images, panel_prompts, panel_assignments
+
+    # ── Tryb główny: 7 paneli z zasad Tylera ─────────────────────────────────
+    # Uzupełnij listę do 7 elementów (jeśli modelu nie wygenerował wszystkich zasad)
+    while len(panel_rules) < 7:
+        panel_rules.append("")
 
     images = []
     panel_prompts = []
     panel_assignments = []
 
-    for panel in panels_config:
-        idx = panel.get("index", len(images) + 1)
+    current_app.logger.info("[zwykly-img] Generuję 7 paneli z zasad Tylera")
 
-        flux_prompt, caption, used_vars = _generate_panel_prompt(
-            panel_index=idx,
-            panel_config=panel,
+    for panel_idx in range(1, 8):
+        rule_text = panel_rules[panel_idx - 1]
+
+        if not rule_text:
+            current_app.logger.warning("[zwykly-img] Panel %d: brak zasady — pomijam", panel_idx)
+            panel_assignments.append({
+                "panel": panel_idx,
+                "caption": f"(brak zasady {panel_idx})",
+                "used_vars": [],
+                "prompt_preview": "(pominięty)",
+            })
+            continue
+
+        flux_prompt, caption, used_vars = _generate_panel_prompt_from_rule(
+            panel_index=panel_idx,
+            rule_text=rule_text,
             style_config=style_config,
-            response_text=response_text,
-            prompt_data=prompt_data,
             body=body,
             session_vars=session_vars,
         )
         panel_prompts.append(flux_prompt)
         panel_assignments.append({
-            "panel": idx,
+            "panel": panel_idx,
+            "rule": rule_text[:100],
             "caption": caption,
             "used_vars": used_vars,
             "prompt_preview": flux_prompt[:120],
         })
 
-        image = _generate_flux_image(flux_prompt, panel_index=idx)
+        image = _generate_flux_image(flux_prompt, panel_index=panel_idx)
 
         if image:
-            image = _png_to_jpg(image, panel_index=idx)
-            image = _add_text_below_image(image, caption, idx)
+            image = _png_to_jpg(image, panel_index=panel_idx)
+            image = _add_text_below_image(image, caption, panel_idx)
             images.append(image)
-            current_app.logger.info("[zwykly-img] Panel %d/%d: OK (%s)",
-                                    idx, len(panels_config), image.get("filename", "?"))
+            current_app.logger.info(
+                "[zwykly-img] Panel %d/7 OK: %s", panel_idx, image.get("filename", "?")
+            )
         else:
             current_app.logger.warning(
-                "[zwykly-img] Panel %d/%d: brak — tokeny wyczerpane lub blad. "
+                "[zwykly-img] Panel %d/7: brak obrazka — tokeny wyczerpane. "
                 "Zwracam %d wygenerowanych paneli.",
-                idx, len(panels_config), len(images)
+                panel_idx, len(images)
             )
             break
 
-    current_app.logger.info("[zwykly-img] Tryptyk: wygenerowano %d/%d paneli",
-                            len(images), len(panels_config))
+    current_app.logger.info(
+        "[zwykly-img] Septet zasad: wygenerowano %d/7 paneli", len(images)
+    )
     return images, panel_prompts, panel_assignments
 
 

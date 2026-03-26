@@ -1,66 +1,85 @@
-// <STYLE_CONFIG>
 {
+  "_komentarz": "Wytyczne do generowania 7 paneli obrazków Fight Club. Zmień ten plik aby zmienić klimat/styl obrazków — Python czyta stąd wszystkie wytyczne, nic nie jest hardkodowane w kodzie.",
+
   "model_target": "FLUX.1 [schnell]",
-  "optimization_strategy": "High-impact descriptive natural language. Focus on physical textures and direct spatial instructions. Minimalist but heavy on atmospheric 'grit'. David Fincher visual language — underexposed, chemical, violent.",
 
-  "character_profile": "Brad Pitt as Tyler Durden from Fight Club 1999. POST-CAR CRASH version: blood smeared on forehead, glazed thousand-yard stare, smoke rising from background wreckage. Unwashed, disheveled beyond recognition. Split lip, bruised cheekbone, dried blood under nose and ear. Greasy matted hair stuck to face. Shirtless with soap-burn scars, fresh bruises, chemical burns on forearms. Cigarette ash on fingers, nicotine-stained nails. Dark circles under bloodshot eyes. Looks like he has not slept in 5 days and just walked away from a burning car. Absolutely NOT clean, NOT groomed, NOT handsome, NOT heroic. Raw, damaged, real. No retouching. No beauty. Only wreckage.",
+  "styl_globalny": {
+    "opis": "David Fincher — Fight Club 1999. Underexposed, chemical, violent. Gritty realism.",
+    "techniczny": "Raw photo, 35mm movie still, extreme high contrast, industrial decay, realistic textures, chemical color grade, underexposed, film grain, no beauty, no retouching.",
+    "oswietlenie": "Cinematic chiaroscuro at maximum intensity. Sickly green and corpse-yellow underexposed tones. Extreme 35mm film grain with visible scratches. Deep black shadows swallowing 40% of frame. Industrial grime on every surface. Flickering failing fluorescent light. 1990s film stock pushed to ISO 3200. Chemical burn aesthetic. Colors desaturated to near-monochrome except for fire and blood.",
+    "paleta": "Desaturated grey-green-yellow. Isolated red only for blood or fire. No natural light, no daylight, no sunshine anywhere.",
+    "atmosfera": [
+      "Every surface covered in grime, rust, chemical residue",
+      "Light sources: only failing fluorescents, fire, distant headlights",
+      "Smoke or chemical vapor in every scene",
+      "Background always implies decay, abandonment, or imminent disaster"
+    ],
+    "zakazy_negatywne": "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark, happy, sunshine, colorful"
+  },
 
-  "fincher_lighting_engine": "Cinematic chiaroscuro at maximum intensity. Sickly green and corpse-yellow underexposed tones. Extreme 35mm film grain with visible scratches. Deep black shadows swallowing 40% of frame. Industrial grime on every surface. Flickering failing fluorescent light. 1990s film stock pushed to ISO 3200. Chemical burn aesthetic. Colors desaturated to near-monochrome except for fire and blood.",
+  "postacie": {
+    "tyler_durden": "Brad Pitt as Tyler Durden from Fight Club 1999. POST-CAR CRASH version: blood smeared on forehead, glazed thousand-yard stare, smoke rising from background wreckage. Unwashed, disheveled beyond recognition. Split lip, bruised cheekbone, dried blood under nose and ear. Greasy matted hair stuck to face. Shirtless with soap-burn scars, fresh bruises, chemical burns on forearms. Cigarette ash on fingers, nicotine-stained nails. Dark circles under bloodshot eyes. Looks like he has not slept in 5 days and just walked away from a burning car. Absolutely NOT clean, NOT groomed, NOT handsome, NOT heroic. Raw, damaged, real.",
+    "narrator": "Edward Norton as the Narrator — total insomnia look. Sunken charcoal-rimmed eyes, pale sickly skin with visible veins. Sweat-stained tattered white dress shirt, sleeves ripped off, covered in dried blood. Massive purple hematoma on cheekbone, split lip. Completely dissociated, thousand-yard stare. Dark moody lighting.",
+    "marla": "Helena Bonham Carter as Marla Singer — shredded soot-covered vintage dress. Unwashed bird's-nest hair. Smudged heavy black raccoon eye makeup running down face. Peeling wallpaper wall, derelict hallway. Nihilistic smirk, blood on teeth, trembling ash-covered fingers holding cigarette."
+  },
 
-  "triptych": {
-    "instruction": "A wide horizontal 3:1 aspect ratio image divided into 3 equal side-by-side vertical panels by thin black lines. Each panel must show a distinct camera angle and distinct nihilist scenario.",
-    "panels": [
+  "mapowanie_paneli": {
+    "_komentarz": "Panel 1 = zasada 1 (i 2, bo są identyczne). Panel 2 = zasada 3. Panel 3 = zasada 4. Panel 4 = zasada 5. Panel 5 = zasada 6. Panel 6 = zasada 7. Panel 7 = zasada 8.",
+    "panel_1": {"zasada_nr": 1, "opis_panelu": "Zasady 1 i 2 — identyczne. Zakaz wyrażony dwa razy."},
+    "panel_2": {"zasada_nr": 3},
+    "panel_3": {"zasada_nr": 4},
+    "panel_4": {"zasada_nr": 5, "uwaga": "Piąta zasada zawsze brzmi: Nie dawaj sobie szansy na prawdziwą wolność!"},
+    "panel_5": {"zasada_nr": 6},
+    "panel_6": {"zasada_nr": 7},
+    "panel_7": {"zasada_nr": 8, "uwaga": "Ósma zasada zawiera imię nadawcy i słowo musisz."}
+  },
+
+  "logika_odwrocenia": {
+    "_komentarz": "KLUCZOWA ZASADA: Tyler zakazuje czegoś → obrazek pokazuje ZŁAMANIE tego zakazu. Nie można pokazać 'nie robienia' czegoś — więc zawsze pokazujemy odwrotność.",
+    "zasada_AI": "Dla podanej zasady Tylera wygeneruj scenę pokazującą DOKŁADNIE TO, czego zasada zabrania. Wszyscy główni bohaterowie Fight Club robią właśnie to, co jest zakazane. Scena musi być konkretna, wizualna, absurdalnie dosłowna.",
+    "przyklady": [
       {
-        "panel_1": "triptych comic layout, Extreme close-up. Tyler Durden's bloody hands releasing [USER_OBJECTS] at high speed. [USER_OBJECTS] lights reflected in his glazed eyes. Motion blur on background. He is [USER_OBJECTS]. Background: total destruction. At Tyler's feet and across the scorched ground: [USER_OBJECTS] burning, melting, disintegrating — the material possessions of a wasted life.. Several eighteen-year-old women without clothes. The women are taking a shower with disheveled hair. Tattoos on their thighs, tattoos on their chests,very torn clothes,beachwear. In the background, the men in the kennel, shaved, in cheap black shirts and black trousers; their faces hard, tense, fierce; their skin dirty, covered with dried sweat, abrasions, and darkening bruises; they move quickly, nervously, with aggressive energy; terribly menacing as a spreading unit, sweeping with brutal determination, silent, disciplined, looking like men who have been through too much and are ready for more.",
-        "index": 1,
-        "text_rendering": "A hand-drawn speech bubble with cracked ink style containing the words: '[TEXT_4]'. Text sharp and legible despite chaos."
+        "zasada": "Nie pozwól, aby Twoje uczucia kontrolowały Twoje życie.",
+        "obrazek": "Tyler Durden siedzi w fotelu jak marionetka. Gigantyczne czerwone macki z napisami ZŁOŚĆ, STRACH, FRUSTRACJA wychodzą z jego klatki piersiowej i sterują jego rękami i głową jak pacynką. Narrator stoi obok i wskazuje z aprobatą. Tło: industrialne, brudne."
       },
       {
-        "panel_2": "diptych comic layout, Medium shot. Tyler standing before a burning field of [USER_OBJECTS], arms spread wide, face turned upward toward black smoke. He looks liberated. Background: total destruction.Several eighteen-year-old women without clothes. The women are taking a shower. . Several 18-year-old women, with disheveled hair. Tattoos on their thighs, tattoos on their chests. In the background, the men in the kennel, shaved, in cheap black shirts and black trousers; their faces hard, tense, fierce; their skin dirty, covered with dried sweat, abrasions, and darkening bruises; they move quickly, nervously, with aggressive energy; terribly menacing as a spreading unit, sweeping with brutal determination, silent, disciplined, looking like men who have been through too much and are ready for more.",
-        "index": 2,
-        "text_rendering": "The quote '[TEXT_6]' burned as graffiti into the scorched ground. Letters uneven, raw."
+        "zasada": "Twoje kości bolą, bo boisz się przyszłości.",
+        "obrazek": "Tyler i Narrator stoją przy osi czasu rozciągniętej przez zniszczone magazyny. Obaj wpatrują się w odległą, rozmytą przyszłość z szeroko otwartymi oczami pełnymi paniki. Przez ich skórę prześwitują kontury kości — stawy świecą czerwonym bólem. Kolana pęknięte jak suchy beton."
       },
       {
-        "panel_3": "four-panel comic layout, Low angle. Tyler crouching over a terrified [USER_OBJECTS] pinned against a dumpster in a dark alley, surrounded by [USER_OBJECTS] spilled across the wet asphalt from an overturned bag, Tyler holding something to their temple, forcing them to confront their meaningless life. Steam from pipes. Rats.Several eighteen-year-old women without clothes. The women are taking a shower. Several 18-year-old women, with disheveled hair. Tattoos on their thighs, tattoos on their chests. In the background, the men in the kennel, shaved, in cheap black shirts and black trousers; their faces hard, tense, fierce; their skin dirty, covered with dried sweat, abrasions, and darkening bruises; they move quickly, nervously, with aggressive energy; terribly menacing as a spreading unit, sweeping with brutal determination, silent, disciplined, looking like men who have been through too much and are ready for more.",
-        "index": 3,
-        "text_rendering": "Text '[TEXT_5]' as stencil graffiti on the brick wall. Paint dripping."
+        "zasada": "Wizyta kolega to okazja, żebyś się ukryła przed sobą.",
+        "obrazek": "Marla Singer stoi w progu, za drzwiami widać sylwetkę gościa. Marla aktywnie zakłada na twarz wielką uśmiechniętą maskę. Drugą ręką zatrzaskuje za sobą drzwi do ciemnego pokoju, w którym stoi jej własne smutne odbicie w lustrze."
       },
       {
-        "panel_4": " '[TEXT_8]'[USER_OBJECTS] ",
-        "index": 4,
-        "text_rendering": "Text  '[TEXT_8]' "
+        "zasada": "Nie dawaj sobie szansy na prawdziwą wolność!",
+        "obrazek": "Tyler stoi w centrum pięknej otwartej przestrzeni i aktywnie muruje wokół siebie ciasne więzienie z cegieł. Właśnie kładzie ostatnią cegłę nad głową, odcinając widok na niebo. Na cegłach wyryte: BEZPIECZEŃSTWO, NAWYK, STRACH. Wyraz twarzy: zadowolony."
+      },
+      {
+        "zasada": "Musisz stracić wszystko, żeby znaleźć siebie.",
+        "obrazek": "Narrator kurczowo trzyma ciężką walizkę pełną złotych łańcuchów i pamiątek, choć stoi na skraju przepaści. Tyler Durden stoi za nim i wskazuje przepaść — ale Narrator odwraca się plecami i mocniej ściska walizkę. Twarz: panika i kurczowe trzymanie."
       }
     ]
   },
 
-  "panel_actions_additional": [
-    "Tyler releasing steering wheel in speeding car, smiling, headlights incoming, reckless liberation",
-    "Tyler standing in front of a massive burning pile of [USER_OBJECTS], arms open wide, face turned to black smoke",
-    "Tyler forcing Raymond K. Hessel moment — holding [USER_OBJECTS] to the temple of a terrified person in a dark alley",
-    "Tyler in a flooded basement surrounded by floating [USER_OBJECTS] and consumer goods, laughing manically",
-    "Tyler at the bottom of a concrete pit looking up at a tiny square of grey sky — hitting rock bottom",
-    "Tyler destroying [USER_OBJECTS] with a sledgehammer in an abandoned industrial warehouse, sparks flying",
-    "Tyler sitting in a grimy armchair surrounded by stacks of [USER_OBJECTS], holding a chemical burn mark on his hand"
+  "system_prompt_AI": "You are a cinematic visual prompt engineer for FLUX.1 image generation. Fight Club 1999 aesthetic — David Fincher, gritty, underexposed, 35mm film grain. Your task: given a Tyler Durden RULE (a prohibition), generate a scene showing the EXACT OPPOSITE — the VIOLATION of that rule. The main Fight Club characters (Tyler, Narrator, Marla) are actively doing what the rule forbids. The scene must be: concrete, visually specific, absurdly literal, dark, nihilistic. NO text in the image. NO speech bubbles. Describe: physical appearance of characters, specific action, environment, objects, lighting. Output: ONE paragraph, max 120 words, English only, no bullet points, no comments — just the FLUX prompt.",
+
+  "user_prompt_szablon": "TYLER'S RULE (panel [PANEL_NR]/7):\n[ZASADA_TEKST]\n\nObjects from sender's email (use as props): [USER_OBJECTS]\nLighting style: [STYL_OSWIETLENIA]\nVisual style: [STYL_WIZUALNY]\nCharacters available: [POSTACIE]\n\nGenerate a FLUX prompt showing the VIOLATION of this rule:",
+
+  "style_variants": [
+    "35mm film grain, high contrast, sickly green and amber tones, Fincher cinematography",
+    "raw gritty street photography, harsh fluorescent light, 1990s documentary style",
+    "extreme chiaroscuro, single bare bulb lighting, deep shadows, industrial decay",
+    "handheld camera blur, motion, chaotic energy, smoke and sweat",
+    "desaturated noir, cold blue shadows, cracked concrete textures",
+    "overexposed bleach bypass, washed out whites, dark crushed blacks"
   ],
-  "schnell_technical_parameters": {
-    "aspect_ratio": "3:1",
-    "steps_optimized": "4-8 steps",
+
+  "flux_parametry": {
+    "aspect_ratio": "1:1",
+    "steps": "4-8",
     "guidance_scale": "3.5",
-    "style_tags": "Raw photo, gritty realism, 35mm movie still, extreme high contrast, industrial decay, realistic textures, David Fincher aesthetic, chemical color grade, underexposed, film grain, no beauty, no retouching."
+    "negative_prompt": "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark, happy, sunshine, daylight"
   },
 
-  "atmosphere_intensifiers": [
-    "Every surface covered in grime, rust, chemical residue",
-    "Light sources: only failing fluorescents, fire, distant headlights",
-    "Color palette: desaturated grey-green-yellow with isolated red of blood or fire",
-    "No natural light, no daylight, no sunshine anywhere",
-    "Smoke or chemical vapor in every scene",
-    "Background always implies decay, abandonment, or imminent disaster"
-  ],
-
-  "safety_and_content_filter": {
-    "forbidden_words": ["szczęście", "harmonia", "balans"],
-    "replacement_logic": "Always map to sender's context — destruction, nihilism, and the specific objects from their email."
-  }
+  "fallback_gdy_brak_zasady": "Tyler Durden walking away from a burning wreck, surrounded by [USER_OBJECTS] on fire, 35mm film grain, Fight Club 1999 aesthetic, David Fincher, underexposed, gritty, no beauty, industrial decay"
 }
-// </STYLE_CONFIG>
