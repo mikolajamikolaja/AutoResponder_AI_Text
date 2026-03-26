@@ -1721,45 +1721,35 @@ def _generate_triptych(
     if session_vars is None:
         session_vars = {}
 
-    style_config = _load_style_config()
-    if not style_config:
-        current_app.logger.warning("[zwykly-img] Brak STYLE_CONFIG — pomijam generowanie")
-        return [], [], []
+    # style_config z JS używany tylko pomocniczo — nieobecność NIE blokuje generowania
+    style_config = _load_style_config() or {}
 
     # Wyciągnij zasady Tylera z odpowiedzi AI → lista 7 elementów
     panel_rules = _extract_tyler_rules(response_text)
 
-    # Jeśli nie udało się wyciągnąć zasad — fallback na stary tryb (3 panele z JS)
+    # Jeśli nie udało się wyciągnąć zasad — fallback: 1 panel z promptem z wytycznych JSON
     if not any(panel_rules):
         current_app.logger.warning(
-            "[zwykly-img] Brak zasad Tylera w odpowiedzi — fallback na stary tryb 3 paneli"
+            "[zwykly-img] Brak zasad Tylera w odpowiedzi — fallback: 1 panel z wytycznych JSON"
         )
-        panels_config = style_config.get("triptych", {}).get("panels", [])
-        if not panels_config:
+        w = _load_panel_wytyczne()
+        fallback_prompt = (
+            w.get("fallback_gdy_brak_zasady", "")
+             .replace("[USER_OBJECTS]", session_vars.get("USER_OBJECTS", "debris"))
+        )
+        if not fallback_prompt:
             return [], [], []
-        images, panel_prompts, panel_assignments = [], [], []
-        for panel in panels_config:
-            idx = panel.get("index", len(images) + 1)
-            flux_prompt, caption, used_vars = _generate_panel_prompt(
-                panel_index=idx,
-                panel_config=panel,
-                style_config=style_config,
-                response_text=response_text,
-                prompt_data=prompt_data,
-                body=body,
-                session_vars=session_vars,
-            )
-            panel_prompts.append(flux_prompt)
-            panel_assignments.append({"panel": idx, "caption": caption,
-                                       "used_vars": used_vars, "prompt_preview": flux_prompt[:120]})
-            image = _generate_flux_image(flux_prompt, panel_index=idx)
-            if image:
-                image = _png_to_jpg(image, panel_index=idx)
-                image = _add_text_below_image(image, caption, idx)
-                images.append(image)
-            else:
-                break
-        return images, panel_prompts, panel_assignments
+        image = _generate_flux_image(fallback_prompt, panel_index=1)
+        if not image:
+            return [], [], []
+        image = _png_to_jpg(image, panel_index=1)
+        image = _add_text_below_image(image, "Tyler Durden", 1)
+        return (
+            [image],
+            [fallback_prompt],
+            [{"panel": 1, "caption": "fallback", "used_vars": [],
+              "prompt_preview": fallback_prompt[:120]}],
+        )
 
     # ── Tryb główny: 7 paneli z zasad Tylera ─────────────────────────────────
     # Uzupełnij listę do 7 elementów (jeśli modelu nie wygenerował wszystkich zasad)
