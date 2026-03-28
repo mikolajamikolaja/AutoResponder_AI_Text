@@ -835,7 +835,7 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tu
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _register_fonts_docx():
-    """Rejestruje DejaVuSans dla reportlab (nieużywane tu, ale zachowane dla spójności)."""
+    """Zachowane dla spójności importów."""
     pass
 
 
@@ -843,12 +843,15 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                 photo_przedmioty_b64: str | None, cfg: dict) -> str | None:
     """
     Buduje DOCX z raportem psychiatrycznym.
+    Styl: maszynopis (Courier New), bez tabel, podpis kursywą.
     Zwraca base64 DOCX lub None.
     """
     try:
         from docx import Document
         from docx.shared import Pt, Cm, RGBColor
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+        from docx.oxml import OxmlElement
     except ImportError as e:
         current_app.logger.error("[psych-docx] Brak python-docx: %s", e)
         return None
@@ -856,58 +859,136 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     szpital = cfg.get("szpital", {})
     doc     = Document()
 
-    # Marginesy
+    # ── Marginesy — szersze, jak stary maszynopis ──────────────────────────
     for section in doc.sections:
-        section.top_margin    = Cm(2)
-        section.bottom_margin = Cm(2)
-        section.left_margin   = Cm(2.5)
+        section.top_margin    = Cm(2.5)
+        section.bottom_margin = Cm(2.5)
+        section.left_margin   = Cm(3.0)
         section.right_margin  = Cm(2.5)
 
-    RED   = RGBColor(0x99, 0x1A, 0x1A)
-    DARK  = RGBColor(0x0D, 0x0D, 0x0D)
-    GREY  = RGBColor(0x66, 0x66, 0x66)
-    LGREY = RGBColor(0x99, 0x99, 0x99)
+    # ── Kolory ────────────────────────────────────────────────────────────
+    BLACK  = RGBColor(0x0A, 0x0A, 0x0A)   # prawie czarny — tusz maszyny
+    DKRED  = RGBColor(0x7A, 0x0F, 0x0F)   # ciemna czerwień dla nagłówków
+    GREY   = RGBColor(0x55, 0x55, 0x55)   # szary dla not i komentarzy
+    LGREY  = RGBColor(0x99, 0x99, 0x99)   # jasny szary dla separatorów
+    FADED  = RGBColor(0x33, 0x33, 0x33)   # wyblakły tusz
 
-    def heading(text, level=1, color=DARK, size=14):
-        h = doc.add_heading(text, level=level)
-        h.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        for run in h.runs:
-            run.font.size      = Pt(size)
-            run.font.color.rgb = color
-        return h
+    TYPEWRITER = "Courier New"            # główna czcionka maszynopisu
+    TYPEWRITER_SIZE = 10                  # 10pt — klasyczny maszynopis
 
-    def para(text, bold=False, italic=False, color=DARK, size=10, align=None):
+    # ── Helpery ───────────────────────────────────────────────────────────
+
+    def _set_font(run, name=TYPEWRITER, size=TYPEWRITER_SIZE,
+                  bold=False, italic=False, color=BLACK):
+        run.font.name    = name
+        run.font.size    = Pt(size)
+        run.bold         = bold
+        run.italic       = italic
+        run.font.color.rgb = color
+
+    def maszyna(text, bold=False, italic=False, color=BLACK,
+                size=TYPEWRITER_SIZE, align=None, space_before=0, space_after=3):
+        """Akapit w stylu maszynopisu."""
         p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(space_before)
+        p.paragraph_format.space_after  = Pt(space_after)
         if align:
             p.alignment = align
-        r = p.add_run(str(text))
-        r.bold           = bold
-        r.italic         = italic
-        r.font.size      = Pt(size)
-        r.font.color.rgb = color
+        r = p.add_run(str(text) if text else "")
+        _set_font(r, bold=bold, italic=italic, color=color, size=size)
         return p
 
-    def field(label, value, label_color=DARK, val_color=DARK, size=10):
+    def naglowek(text, color=DKRED, size=11, upper=True):
+        """Nagłówek sekcji — Courier New bold, caps, podkreślony wizualnie."""
+        doc.add_paragraph()
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after  = Pt(2)
+        r = p.add_run(text.upper() if upper else text)
+        _set_font(r, bold=True, color=color, size=size)
+        # Separator pod nagłówkiem
+        sep = doc.add_paragraph()
+        sep.paragraph_format.space_before = Pt(0)
+        sep.paragraph_format.space_after  = Pt(4)
+        r2 = sep.add_run("=" * 68)
+        _set_font(r2, color=LGREY, size=7)
+        return p
+
+    def podnaglowek(text, color=FADED, size=10):
+        """Podtytuł — mniejszy, kursywa."""
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(6)
+        p.paragraph_format.space_after  = Pt(2)
+        r = p.add_run(f"--- {text} ---")
+        _set_font(r, italic=True, color=color, size=size)
+        return p
+
+    def pole(label, value, size=TYPEWRITER_SIZE):
+        """Pole danych: ETYKIETA: wartość."""
         if not value:
             return
-        p  = doc.add_paragraph()
-        rl = p.add_run(f"{label}: ")
-        rl.bold            = True
-        rl.font.size       = Pt(size)
-        rl.font.color.rgb  = label_color
-        rv = p.add_run(str(value))
-        rv.font.size       = Pt(size)
-        rv.font.color.rgb  = val_color
-
-    def separator():
         p = doc.add_paragraph()
-        p.paragraph_format.space_after  = Pt(2)
-        p.paragraph_format.space_before = Pt(2)
-        r = p.add_run("─" * 72)
-        r.font.size      = Pt(7)
-        r.font.color.rgb = LGREY
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(1)
+        rl = p.add_run(f"{label.upper()}: ")
+        _set_font(rl, bold=True, size=size)
+        rv = p.add_run(str(value))
+        _set_font(rv, size=size)
 
-    def insert_photo(b64: str, caption: str, width_cm: float = 14.0):
+    def separator_lekki():
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after  = Pt(2)
+        r = p.add_run("- " * 34)
+        _set_font(r, color=LGREY, size=7)
+
+    def punkt_listy(text, numer=None, size=TYPEWRITER_SIZE):
+        """Punkt listy bez stylu Word — czysty maszynopis."""
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(2)
+        p.paragraph_format.left_indent  = Cm(0.8)
+        prefix = f"{numer}." if numer else "  *"
+        r = p.add_run(f"{prefix}  {str(text)}")
+        _set_font(r, size=size)
+
+    def cytat_blok(text, size=9):
+        """Cytat — wcięty, kursywa."""
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after  = Pt(4)
+        p.paragraph_format.left_indent  = Cm(1.2)
+        p.paragraph_format.right_indent = Cm(0.5)
+        r = p.add_run(str(text))
+        _set_font(r, italic=True, color=GREY, size=size)
+
+    def nota_kursywa(text, size=9):
+        """Nieoficjalna nota — szary kursywa."""
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(2)
+        p.paragraph_format.space_after  = Pt(6)
+        p.paragraph_format.left_indent  = Cm(0.6)
+        r = p.add_run(f"[Nota: {str(text)}]")
+        _set_font(r, italic=True, color=GREY, size=size)
+
+    def podpis_odrecznie(text, size=16):
+        """
+        Symulacja podpisu odręcznego — bold italic duże, Courier New
+        (brak prawdziwej czcionki kaligraficznej w środowisku serwerowym).
+        """
+        doc.add_paragraph()
+        p = doc.add_paragraph()
+        p.paragraph_format.space_before = Pt(8)
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        r = p.add_run(text)
+        r.font.name    = "Courier New"
+        r.font.size    = Pt(size)
+        r.bold         = True
+        r.italic       = True
+        r.font.color.rgb = DKRED
+        return p
+
+    def insert_photo(b64: str, caption: str, width_cm: float = 13.0):
         if not b64:
             return
         try:
@@ -917,335 +998,374 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             cap = doc.add_paragraph(caption)
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for r in cap.runs:
-                r.font.size    = Pt(8)
-                r.italic       = True
-                r.font.color.rgb = GREY
+                _set_font(r, italic=True, color=GREY, size=8)
         except Exception as e:
             current_app.logger.warning("[psych-docx] Błąd wstawiania zdjęcia: %s", e)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # NAGŁÓWEK SZPITALA
+    # NAGŁÓWEK INSTYTUCJI
     # ══════════════════════════════════════════════════════════════════════════
-    h1 = doc.add_heading(szpital.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"), 1)
-    h1.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for r in h1.runs:
-        r.font.size      = Pt(14)
-        r.font.color.rgb = DARK
+    p_nazwa = doc.add_paragraph()
+    p_nazwa.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_nazwa = p_nazwa.add_run(szpital.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena").upper())
+    _set_font(r_nazwa, bold=True, size=13)
 
-    p_adr = doc.add_paragraph(szpital.get("adres", ""))
+    p_adr = doc.add_paragraph()
     p_adr.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for r in p_adr.runs:
-        r.font.size      = Pt(9)
-        r.font.color.rgb = GREY
+    r_adr = p_adr.add_run(szpital.get("adres", ""))
+    _set_font(r_adr, size=9, color=GREY)
 
-    p_odd = doc.add_paragraph(szpital.get("oddzial", ""))
+    p_odd = doc.add_paragraph()
     p_odd.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for r in p_odd.runs:
-        r.font.size      = Pt(9)
-        r.font.color.rgb = GREY
+    r_odd = p_odd.add_run(szpital.get("oddzial", ""))
+    _set_font(r_odd, size=9, color=GREY)
 
     doc.add_paragraph()
 
-    tyt = doc.add_heading("HISTORIA CHOROBY — KARTA PRZYJĘCIA I HOSPITALIZACJI", 2)
-    tyt.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for r in tyt.runs:
-        r.font.size = Pt(12)
+    p_tyt = doc.add_paragraph()
+    p_tyt.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_tyt = p_tyt.add_run("HISTORIA CHOROBY — KARTA PRZYJECIA I HOSPITALIZACJI")
+    _set_font(r_tyt, bold=True, size=11)
 
-    nr         = raport.get("numer_historii_choroby", "NY-2026-00000")
+    nr         = raport.get("numer_historii_choroby", "NY-2026-99999")
     data_przyj = raport.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
-    nr_p = doc.add_paragraph(f"Nr: {nr}  |  Data przyjęcia: {data_przyj}  |  "
-                              f"Lekarz prowadzący: {szpital.get('lekarz', 'Dr. T. Durden')}")
-    nr_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    for r in nr_p.runs:
-        r.font.size      = Pt(9)
-        r.font.color.rgb = GREY
+    p_nr = doc.add_paragraph()
+    p_nr.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_nr = p_nr.add_run(
+        f"Nr: {nr}   |   Data przyjecia: {data_przyj}   |   "
+        f"Lekarz prowadzacy: {szpital.get('lekarz', 'Dr. T. Durden')}"
+    )
+    _set_font(r_nr, size=9, color=GREY)
 
-    separator()
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 1 — DANE PACJENTA
+    # I. DANE PACJENTA
     # ══════════════════════════════════════════════════════════════════════════
-    heading("I. DANE PACJENTA", 2, RED, 11)
+    naglowek("I. DANE PACJENTA")
     dp = raport.get("dane_pacjenta", {})
-    field("Imię i nazwisko", dp.get("imie_nazwisko", ""))
-    field("Wiek",            dp.get("wiek", ""))
-    field("Adres",           dp.get("adres", ""))
-    field("Zawód",           dp.get("zawod", ""))
-    field("Stan cywilny",    dp.get("stan_cywilny", ""))
-    field("Nr ubezpieczenia",dp.get("numer_ubezpieczenia", ""))
-    doc.add_paragraph()
+    pole("Imie i nazwisko",   dp.get("imie_nazwisko", ""))
+    pole("Wiek",              dp.get("wiek", ""))
+    pole("Adres",             dp.get("adres", ""))
+    pole("Zawod",             dp.get("zawod", ""))
+    pole("Stan cywilny",      dp.get("stan_cywilny", ""))
+    pole("Nr ubezpieczenia",  dp.get("numer_ubezpieczenia", ""))
 
-    # ZDJĘCIE 1 — pacjent w kaftanie
     if photo_pacjent_b64:
-        heading("DOKUMENTACJA FOTOGRAFICZNA — PRZYJĘCIE", 3, GREY, 9)
-        insert_photo(photo_pacjent_b64,
-                     "Fot. 1 — Pacjent w kaftanie bezpieczeństwa. Oddział B. Materiał dowodowy.")
         doc.add_paragraph()
+        podnaglowek("DOKUMENTACJA FOTOGRAFICZNA — PRZYJECIE")
+        insert_photo(photo_pacjent_b64,
+                     "Fot. 1 — Pacjent w kaftanie bezpieczenstwa. Oddzial B. Material dowodowy.")
 
-    separator()
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 2 — POWÓD PRZYJĘCIA
-    # ══════════════════════════════════════════════════════════════════════════
-    heading("II. POWÓD PRZYJĘCIA", 2, RED, 11)
-    para(raport.get("powod_przyjecia", ""), size=10)
-    doc.add_paragraph()
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 3 — CYTATY Z PRZYJĘCIA
+    # II. POWÓD PRZYJĘCIA
     # ══════════════════════════════════════════════════════════════════════════
-    heading("III. CYTATY Z IZBY PRZYJĘĆ", 2, RED, 11)
+    naglowek("II. POWOD PRZYJECIA")
+    powod = raport.get("powod_przyjecia", "")
+    if powod:
+        maszyna(powod, size=10, space_after=4)
+
+    separator_lekki()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # III. CYTATY Z IZBY PRZYJĘĆ
+    # ══════════════════════════════════════════════════════════════════════════
+    naglowek("III. CYTATY Z IZBY PRZYJEC")
     cytaty = raport.get("cytaty_z_przyjecia", "")
     if isinstance(cytaty, list):
-        for c in cytaty:
-            para(str(c), italic=True, color=GREY, size=9)
-    else:
-        para(str(cytaty), italic=True, color=GREY, size=9)
-    doc.add_paragraph()
-    separator()
+        for i, c in enumerate(cytaty, 1):
+            maszyna(f"[{i}]", bold=True, size=9, space_after=0)
+            cytat_blok(str(c), size=9)
+    elif cytaty:
+        cytat_blok(str(cytaty), size=9)
+
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 4 — DEPOZYT
+    # IV. PROTOKÓŁ DEPOZYTU
     # ══════════════════════════════════════════════════════════════════════════
-    heading("IV. PROTOKÓŁ DEPOZYTU — PRZEDMIOTY SKONFISKOWANE", 2, RED, 11)
+    naglowek("IV. PROTOKOL DEPOZYTU — PRZEDMIOTY SKONFISKOWANE")
     dep = raport.get("depozyt", {})
     if isinstance(dep, dict):
         lista = dep.get("lista_przedmiotow", [])
         proto = dep.get("protokol_depozytu", "")
         if lista:
-            for item in lista:
-                p_item = doc.add_paragraph(style="List Bullet")
-                r_item = p_item.add_run(str(item))
-                r_item.font.size      = Pt(10)
-                r_item.font.color.rgb = DARK
+            for i, item in enumerate(lista, 1):
+                punkt_listy(str(item), numer=i, size=9)
         if proto:
             doc.add_paragraph()
-            para(proto, italic=True, color=GREY, size=9)
-    doc.add_paragraph()
+            nota_kursywa(proto, size=9)
 
-    # ZDJĘCIE 2 — same przedmioty jako dowody
     if photo_przedmioty_b64:
-        heading("DOKUMENTACJA FOTOGRAFICZNA — DOWODY RZECZOWE", 3, GREY, 9)
-        insert_photo(photo_przedmioty_b64,
-                     "Fot. 2 — Przedmioty skonfiskowane przy przyjęciu. "
-                     "Protokół dowodów rzeczowych, Oddział B.")
         doc.add_paragraph()
+        podnaglowek("DOKUMENTACJA FOTOGRAFICZNA — DOWODY RZECZOWE")
+        insert_photo(photo_przedmioty_b64,
+                     "Fot. 2 — Przedmioty skonfiskowane przy przyjęciu. Protokol dowodow rzeczowych.")
 
-    separator()
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 5 — FARMAKOLOGIA (pełna lista leków)
+    # V. FARMAKOLOGIA — format akapitowy, bez tabel
     # ══════════════════════════════════════════════════════════════════════════
-    heading("V. FARMAKOLOGIA — PEŁNA LISTA LEKÓW ZASTOSOWANYCH", 2, RED, 11)
+    naglowek("V. FARMAKOLOGIA — PELNA LISTA LEKOW ZASTOSOWANYCH")
     farm = raport.get("farmakologia", {})
     leki_lista = farm.get("leki", []) if isinstance(farm, dict) else []
 
     if leki_lista:
-        col_widths = [Cm(5), Cm(3.5), Cm(5), Cm(3.5)]
-        t = doc.add_table(rows=1, cols=4)
-        t.style = "Table Grid"
-        hdr = t.rows[0].cells
-        for i, label in enumerate(["Nazwa leku", "Rzeczownik źródłowy", "Wskazanie", "Dawkowanie"]):
-            hdr[i].text = ""
-            r = hdr[i].paragraphs[0].add_run(label)
-            r.bold            = True
-            r.font.size       = Pt(9)
-            r.font.color.rgb  = RED
-        for lek in leki_lista:
+        for i, lek in enumerate(leki_lista, 1):
             if not isinstance(lek, dict):
                 continue
-            row = t.add_row().cells
-            row[0].text = str(lek.get("nazwa", ""))
-            row[1].text = str(lek.get("rzeczownik_zrodlowy", ""))
-            row[2].text = str(lek.get("wskazanie", ""))
-            row[3].text = str(lek.get("dawkowanie", ""))
-            for cell in row:
-                for p in cell.paragraphs:
-                    for r in p.runs:
-                        r.font.size = Pt(9)
-        doc.add_paragraph()
+            doc.add_paragraph()
+            # Nazwa leku jako podtytuł
+            p_lek = doc.add_paragraph()
+            p_lek.paragraph_format.space_before = Pt(4)
+            p_lek.paragraph_format.space_after  = Pt(1)
+            p_lek.paragraph_format.left_indent  = Cm(0.4)
+            r_lek = p_lek.add_run(f"{i}.  {lek.get('nazwa', '???').upper()}")
+            _set_font(r_lek, bold=True, size=10)
+
+            # Przedmioty odebrane (zamiast "rzeczownik źródłowy")
+            p_rz = doc.add_paragraph()
+            p_rz.paragraph_format.left_indent = Cm(1.2)
+            p_rz.paragraph_format.space_after = Pt(0)
+            r_rz_l = p_rz.add_run("Przedmioty odebrane: ")
+            _set_font(r_rz_l, bold=True, size=9)
+            r_rz_v = p_rz.add_run(str(lek.get("rzeczownik_zrodlowy", "")))
+            _set_font(r_rz_v, size=9)
+
+            # Wskazanie
+            p_ws = doc.add_paragraph()
+            p_ws.paragraph_format.left_indent = Cm(1.2)
+            p_ws.paragraph_format.space_after = Pt(0)
+            r_ws_l = p_ws.add_run("Wskazanie: ")
+            _set_font(r_ws_l, bold=True, size=9)
+            r_ws_v = p_ws.add_run(str(lek.get("wskazanie", "")))
+            _set_font(r_ws_v, size=9)
+
+            # Dawkowanie
+            p_dw = doc.add_paragraph()
+            p_dw.paragraph_format.left_indent = Cm(1.2)
+            p_dw.paragraph_format.space_after = Pt(6)
+            r_dw_l = p_dw.add_run("Dawkowanie: ")
+            _set_font(r_dw_l, bold=True, size=9)
+            r_dw_v = p_dw.add_run(str(lek.get("dawkowanie", "")))
+            _set_font(r_dw_v, italic=True, size=9, color=GREY)
 
     nota_farm = farm.get("nota_farmaceutyczna", "") if isinstance(farm, dict) else ""
     if nota_farm:
-        para(nota_farm, italic=True, color=GREY, size=9)
+        doc.add_paragraph()
+        nota_kursywa(nota_farm, size=9)
 
-    doc.add_paragraph()
-    separator()
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 6 — HOSPITALIZACJA (14 dni w tabeli)
+    # VI. PRZEBIEG HOSPITALIZACJI — format akapitowy, bez tabel
     # ══════════════════════════════════════════════════════════════════════════
-    heading("VI. PRZEBIEG HOSPITALIZACJI — 14 DNI", 2, RED, 11)
+    naglowek("VI. PRZEBIEG HOSPITALIZACJI — 14 DNI")
 
     dni_all = (raport.get("hospitalizacja_tydzien_1", []) or []) + \
               (raport.get("hospitalizacja_tydzien_2", []) or [])
 
-    if dni_all:
-        t2 = doc.add_table(rows=1, cols=5)
-        t2.style = "Table Grid"
-        hdr2 = t2.rows[0].cells
-        for i, label in enumerate(["Dzień", "Data", "Zdarzenie", "Lek", "Stan pacjenta"]):
-            hdr2[i].text = ""
-            r = hdr2[i].paragraphs[0].add_run(label)
-            r.bold           = True
-            r.font.size      = Pt(9)
-            r.font.color.rgb = RED
+    for d in dni_all:
+        if not isinstance(d, dict):
+            continue
 
-        for d in dni_all:
-            if not isinstance(d, dict):
-                continue
-            row = t2.add_row().cells
-            row[0].text = str(d.get("dzien", ""))
-            row[1].text = str(d.get("data", ""))
-            row[2].text = str(d.get("zdarzenie", ""))
-            row[3].text = str(d.get("lek", ""))
-            row[4].text = str(d.get("stan_pacjenta", ""))
-            for cell in row:
-                for p in cell.paragraphs:
-                    for r in p.runs:
-                        r.font.size = Pt(8)
+        dzien = d.get("dzien", "?")
+        data  = d.get("data", "")
 
-            # Nota lekarska kursywą pod wierszem tabeli
-            nota = d.get("nota_lekarska", "")
-            if nota:
-                p_nota = doc.add_paragraph()
-                r_nota = p_nota.add_run(f"    ↳ {nota}")
-                r_nota.italic         = True
-                r_nota.font.size      = Pt(8)
-                r_nota.font.color.rgb = GREY
+        # Nagłówek dnia
+        p_dzien = doc.add_paragraph()
+        p_dzien.paragraph_format.space_before = Pt(8)
+        p_dzien.paragraph_format.space_after  = Pt(1)
+        r_dzien = p_dzien.add_run(f"DZIEN {dzien}   /   {data}")
+        _set_font(r_dzien, bold=True, size=10, color=DKRED)
 
-    doc.add_paragraph()
-    separator()
+        # Zdarzenie
+        zdarz = d.get("zdarzenie", "")
+        if zdarz:
+            maszyna(zdarz, size=9, space_before=2, space_after=2)
+
+        # Lek
+        lek_d = d.get("lek", "")
+        if lek_d:
+            p_ld = doc.add_paragraph()
+            p_ld.paragraph_format.left_indent = Cm(0.5)
+            p_ld.paragraph_format.space_after = Pt(1)
+            r_ld_l = p_ld.add_run("Podano: ")
+            _set_font(r_ld_l, bold=True, size=9)
+            r_ld_v = p_ld.add_run(str(lek_d))
+            _set_font(r_ld_v, size=9)
+
+        # Stan pacjenta
+        stan = d.get("stan_pacjenta", "")
+        if stan:
+            p_st = doc.add_paragraph()
+            p_st.paragraph_format.left_indent = Cm(0.5)
+            p_st.paragraph_format.space_after = Pt(1)
+            r_st_l = p_st.add_run("Ocena: ")
+            _set_font(r_st_l, bold=True, size=9)
+            r_st_v = p_st.add_run(str(stan))
+            _set_font(r_st_v, size=9, color=GREY)
+
+        # Nota lekarska
+        nota = d.get("nota_lekarska", "")
+        if nota:
+            nota_kursywa(nota, size=8)
+
+        separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 7 — WYPIS
+    # VII. KARTA WYPISU
     # ══════════════════════════════════════════════════════════════════════════
-    heading("VII. KARTA WYPISU", 2, RED, 11)
+    naglowek("VII. KARTA WYPISU")
     wypis = raport.get("wypis", {})
     if isinstance(wypis, dict):
-        field("Dzień wypisu",  wypis.get("dzien_wypisu", ""))
-        field("Powód wypisu",  wypis.get("powod_wypisu", ""))
+        pole("Dzien wypisu",  wypis.get("dzien_wypisu", ""))
+        pole("Powod wypisu",  wypis.get("powod_wypisu", ""))
+
+        stan_wip = wypis.get("stan_przy_wypisie", "")
+        if stan_wip:
+            doc.add_paragraph()
+            podnaglowek("Stan pacjenta przy wypisie")
+            maszyna(stan_wip, size=10, space_after=4)
+
         doc.add_paragraph()
-        para(wypis.get("stan_przy_wypisie", ""), size=10)
-        doc.add_paragraph()
-        heading("Zalecenia po wypisie:", 3, DARK, 10)
+        podnaglowek("Zalecenia po wypisie")
         zal = wypis.get("zalecenia_po_wypisie", [])
         if isinstance(zal, list):
-            for z in zal:
-                p_z = doc.add_paragraph(style="List Bullet")
-                p_z.add_run(str(z)).font.size = Pt(10)
+            for i, z in enumerate(zal, 1):
+                punkt_listy(str(z), numer=i, size=9)
         elif zal:
-            para(str(zal), size=10)
-        doc.add_paragraph()
-        if wypis.get("opis_pozegnania"):
-            para(wypis["opis_pozegnania"], italic=True, color=GREY, size=9)
-    doc.add_paragraph()
-    separator()
+            maszyna(str(zal), size=9)
+
+        poz = wypis.get("opis_pozegnania", "")
+        if poz:
+            doc.add_paragraph()
+            cytat_blok(poz, size=9)
+
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 8 — DIAGNOZY
+    # VIII. DIAGNOZA PSYCHIATRYCZNA
     # ══════════════════════════════════════════════════════════════════════════
-    heading("VIII. DIAGNOZA PSYCHIATRYCZNA", 2, RED, 11)
+    naglowek("VIII. DIAGNOZA PSYCHIATRYCZNA")
 
     dw = raport.get("diagnoza_wstepna", {})
-    if isinstance(dw, dict):
-        heading("Diagnoza Wstępna:", 3, DARK, 10)
-        p_diag = doc.add_paragraph()
-        r1 = p_diag.add_run(dw.get("nazwa_lacinska", ""))
-        r1.bold            = True
-        r1.font.size       = Pt(11)
-        r1.font.color.rgb  = RED
+    if isinstance(dw, dict) and dw.get("nazwa_lacinska"):
+        podnaglowek("Diagnoza Wstepna")
+        p_dg = doc.add_paragraph()
+        p_dg.paragraph_format.space_after = Pt(2)
+        r_dg1 = p_dg.add_run(dw.get("nazwa_lacinska", ""))
+        _set_font(r_dg1, bold=True, size=11, color=DKRED)
         if dw.get("nazwa_polska"):
-            r2 = p_diag.add_run(f" (pol. {dw['nazwa_polska']})")
-            r2.font.size       = Pt(10)
-            r2.font.color.rgb  = DARK
+            r_dg2 = p_dg.add_run(f"  /  pol.: {dw['nazwa_polska']}")
+            _set_font(r_dg2, size=10, italic=True)
         if dw.get("kod_dsm"):
-            field("Kod DSM", dw["kod_dsm"], size=9)
+            pole("Kod DSM", dw["kod_dsm"], size=9)
         if dw.get("opis_kliniczny"):
-            para(dw["opis_kliniczny"], size=10)
-    doc.add_paragraph()
+            maszyna(dw["opis_kliniczny"], size=9, space_before=4, space_after=4)
 
     dd = raport.get("diagnoza_dodatkowa", {})
-    if isinstance(dd, dict):
-        heading("Diagnoza Dodatkowa (współistniejąca):", 3, DARK, 10)
+    if isinstance(dd, dict) and dd.get("nazwa_lacinska"):
+        doc.add_paragraph()
+        podnaglowek("Diagnoza Dodatkowa (wspolistniejaca)")
         p_dd = doc.add_paragraph()
-        r1 = p_dd.add_run(dd.get("nazwa_lacinska", ""))
-        r1.bold           = True
-        r1.font.size      = Pt(11)
-        r1.font.color.rgb = RED
+        p_dd.paragraph_format.space_after = Pt(2)
+        r_dd1 = p_dd.add_run(dd.get("nazwa_lacinska", ""))
+        _set_font(r_dd1, bold=True, size=11, color=DKRED)
         if dd.get("nazwa_polska"):
-            r2 = p_dd.add_run(f" (pol. {dd['nazwa_polska']})")
-            r2.font.size      = Pt(10)
-            r2.font.color.rgb = DARK
+            r_dd2 = p_dd.add_run(f"  /  pol.: {dd['nazwa_polska']}")
+            _set_font(r_dd2, size=10, italic=True)
+        if dd.get("kod_dsm"):
+            pole("Kod DSM", dd["kod_dsm"], size=9)
         if dd.get("opis_kliniczny"):
-            para(dd["opis_kliniczny"], size=10)
-    doc.add_paragraph()
+            maszyna(dd["opis_kliniczny"], size=9, space_before=4, space_after=4)
 
     objawy = raport.get("objawy", [])
     if objawy:
-        heading("Objawy kliniczne:", 3, DARK, 10)
-        for obj in objawy:
-            p_obj = doc.add_paragraph(style="List Bullet")
-            p_obj.add_run(str(obj)).font.size = Pt(10)
-    doc.add_paragraph()
-    separator()
+        doc.add_paragraph()
+        podnaglowek("Objawy kliniczne")
+        for i, obj in enumerate(objawy, 1):
+            punkt_listy(str(obj), numer=i, size=9)
+
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 9 — ZALECENIA TYLERA
+    # IX. ZALECENIA TERAPEUTYCZNE
     # ══════════════════════════════════════════════════════════════════════════
-    heading("IX. ZALECENIA TERAPEUTYCZNE", 2, RED, 11)
+    naglowek("IX. ZALECENIA TERAPEUTYCZNE")
     zt = raport.get("zalecenia_tylera", {})
     if isinstance(zt, dict):
         if zt.get("naglowek"):
-            para(zt["naglowek"], bold=True, color=RED, size=10)
+            p_zth = doc.add_paragraph()
+            p_zth.paragraph_format.space_after = Pt(6)
+            r_zth = p_zth.add_run(str(zt["naglowek"]).upper())
+            _set_font(r_zth, bold=True, size=10, color=DKRED)
+
         for key in ["zadanie_1", "zadanie_2", "zadanie_3"]:
             if zt.get(key):
-                p_z = doc.add_paragraph(style="List Number")
-                p_z.add_run(str(zt[key])).font.size = Pt(10)
+                doc.add_paragraph()
+                maszyna(str(zt[key]), size=10, space_before=4, space_after=4)
+
         if zt.get("podpis"):
             doc.add_paragraph()
-            para(zt["podpis"], italic=True, color=GREY, size=9)
-    doc.add_paragraph()
-    separator()
+            maszyna("Podpisano:", bold=True, size=9)
+            podpis_odrecznie(str(zt["podpis"]), size=16)
+
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 10 — ROKOWANIE
+    # X. ROKOWANIE
     # ══════════════════════════════════════════════════════════════════════════
-    heading("X. ROKOWANIE", 2, RED, 11)
-    p_rok = doc.add_paragraph()
-    r_rok = p_rok.add_run(raport.get("rokowanie", ""))
-    r_rok.font.size      = Pt(10)
-    r_rok.font.color.rgb = RED
-    doc.add_paragraph()
-    separator()
+    naglowek("X. ROKOWANIE")
+    rok = raport.get("rokowanie", "")
+    if rok:
+        maszyna(rok, size=10, color=DKRED, space_after=4)
+
+    separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 11 — INCYDENTY SPECJALNE
+    # XI. INCYDENTY SPECJALNE
     # ══════════════════════════════════════════════════════════════════════════
     incydenty = raport.get("incydenty_specjalne", [])
     if incydenty:
-        heading("XI. INCYDENTY SPECJALNE (protokoły wewnętrzne)", 2, RED, 11)
-        for inc in incydenty:
-            p_inc = doc.add_paragraph(style="List Bullet")
-            p_inc.add_run(str(inc)).font.size = Pt(10)
-        doc.add_paragraph()
-        separator()
+        naglowek("XI. INCYDENTY SPECJALNE (protokoly wewnetrzne)")
+        for i, inc in enumerate(incydenty, 1):
+            doc.add_paragraph()
+            p_inc_h = doc.add_paragraph()
+            p_inc_h.paragraph_format.space_after = Pt(1)
+            r_inc_h = p_inc_h.add_run(f"PROTOKOL INCYDENTU NR {i}:")
+            _set_font(r_inc_h, bold=True, size=9, color=DKRED)
+            maszyna(str(inc), size=9, space_before=0, space_after=4)
+
+        separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 12 — PODPIS + NOTATKI
+    # XII. PODPIS I NOTATKI PERSONELU
     # ══════════════════════════════════════════════════════════════════════════
-    heading("XII. PODPIS I NOTATKI PERSONELU", 2, RED, 11)
-    field("Lekarz prowadzący", szpital.get("lekarz", "Dr. T. Durden, MD, PhD, FIGHT"))
+    naglowek("XII. PODPIS I NOTATKI PERSONELU")
+
+    pole("Lekarz prowadzacy", szpital.get("lekarz", "Dr. T. Durden, MD, PhD, FIGHT"))
+    doc.add_paragraph()
+    podpis_odrecznie("Tyler Durden", size=18)
+
     doc.add_paragraph()
 
     if raport.get("notatka_pielegniarki"):
-        para("Notatka pielęgniarki:", bold=True, size=9)
-        para(raport["notatka_pielegniarki"], italic=True, color=GREY, size=9)
+        podnaglowek("Notatka pielegn. dyżurnej")
+        maszyna(raport["notatka_pielegniarki"], italic=True, color=GREY, size=9)
         doc.add_paragraph()
 
     if raport.get("notatka_sprzataczki"):
-        para("Notatka sprzątaczki:", bold=True, size=9)
-        para(raport["notatka_sprzataczki"], italic=True, color=GREY, size=9)
+        podnaglowek("Notatka sprzataczki (zalaczona z urzedu)")
+        maszyna(raport["notatka_sprzataczki"], italic=True, color=GREY, size=9)
+        doc.add_paragraph()
+
+    # Podpis Marli
+    maszyna("Kontrasygnata administracyjna:", bold=True, size=9)
+    podpis_odrecznie("Marla Singer", size=15)
 
     # ══════════════════════════════════════════════════════════════════════════
     # ZAPIS
