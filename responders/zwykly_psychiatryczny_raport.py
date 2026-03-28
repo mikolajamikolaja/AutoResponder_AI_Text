@@ -122,8 +122,49 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
         current_app.logger.info("[psych-raport] JSON OK sekcja=%s", section)
         return result
     except Exception as e:
-        current_app.logger.warning("[psych-raport] JSON błąd sekcja=%s: %s | raw=%.150s",
-                                   section, e, raw)
+        # Proba naprawy ucietego JSON — zamknij brakujace nawiasy
+        current_app.logger.warning("[psych-raport] JSON blad sekcja=%s: %s | proba naprawy...", section, e)
+        try:
+            partial = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+            partial = re.sub(r'```\s*$', '', partial, flags=re.M).strip()
+            start = next((i for i, c in enumerate(partial) if c in '{['), None)
+            if start is not None:
+                partial = partial[start:]
+                stack = []
+                pairs = {'}': '{', ']': '['}
+                closers = {'{': '}', '[': ']'}
+                in_str = False
+                escape = False
+                last_valid = 0
+                for i, ch in enumerate(partial):
+                    if escape:
+                        escape = False
+                        continue
+                    if ch == '\\' and in_str:
+                        escape = True
+                        continue
+                    if ch == '"' and not escape:
+                        in_str = not in_str
+                        continue
+                    if in_str:
+                        continue
+                    if ch in '{[':
+                        stack.append(ch)
+                    elif ch in '}]':
+                        if stack and stack[-1] == pairs[ch]:
+                            stack.pop()
+                            if not stack:
+                                last_valid = i + 1
+                suffix = ''.join(closers[c] for c in reversed(stack))
+                if suffix:
+                    repaired = partial[:last_valid if last_valid else len(partial)] + suffix
+                    result = json.loads(repaired)
+                    current_app.logger.warning(
+                        "[psych-raport] JSON naprawiony sekcja=%s (doklejono '%s')", section, suffix)
+                    return result
+        except Exception as e2:
+            current_app.logger.warning("[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw=%.150s",
+                                       section, e2, raw)
         return None
 
 
@@ -417,12 +458,13 @@ def _deepseek_tone_check(cfg: dict, raport: dict) -> dict:
     sec = cfg.get("deepseek_1_tone_check", {})
     system = sec.get("system", "")
     instrukcje = "\n".join(sec.get("instrukcje", []))
+    raport_json = json.dumps(raport, ensure_ascii=False, separators=(',', ':'))
     user = (
-        f"RAPORT DO OCENY I POPRAWY:\n{json.dumps(raport, ensure_ascii=False, indent=2)}\n\n"
+        f"RAPORT DO OCENY I POPRAWY:\n{raport_json}\n\n"
         f"INSTRUKCJE:\n{instrukcje}\n\n"
         f"Zwróć TYLKO czysty JSON z poprawkami (ta sama struktura kluczy)."
     )
-    current_app.logger.info("[psych-raport] DeepSeek tone check START")
+    current_app.logger.info("[psych-raport] DeepSeek tone check START (~%d znaków)", len(user))
     raw = call_deepseek(system, user, MODEL_TYLER)
     if not raw:
         current_app.logger.warning("[psych-raport] DeepSeek tone check → brak odpowiedzi, skip")
@@ -443,13 +485,14 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
     sec = cfg.get("deepseek_2_completeness_check", {})
     system = sec.get("system", "")
     instrukcje = "\n".join(sec.get("instrukcje", []))
+    raport_json = json.dumps(raport, ensure_ascii=False, separators=(',', ':'))
     user = (
         f"ORYGINALNY EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"RAPORT DO SPRAWDZENIA:\n{json.dumps(raport, ensure_ascii=False, indent=2)}\n\n"
+        f"RAPORT DO SPRAWDZENIA:\n{raport_json}\n\n"
         f"INSTRUKCJE:\n{instrukcje}\n\n"
         f"Zwróć TYLKO czysty JSON z uzupełnionymi nawiązaniami do emaila."
     )
-    current_app.logger.info("[psych-raport] DeepSeek completeness check START")
+    current_app.logger.info("[psych-raport] DeepSeek completeness check START (~%d znaków)", len(user))
     raw = call_deepseek(system, user, MODEL_TYLER)
     if not raw:
         current_app.logger.warning("[psych-raport] DeepSeek completeness → brak odpowiedzi, skip")
@@ -552,13 +595,16 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tu
             try:
                 b64_pacjent    = f1.result(timeout=120)
             except Exception as e:
-                current_app.logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
+                with app_obj.app_context():
+                    app_obj.logger.warning("[psych-flux] photo_pacjent blad: %s", e)
             try:
                 b64_przedmioty = f2.result(timeout=120)
             except Exception as e:
-                current_app.logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
+                with app_obj.app_context():
+                    app_obj.logger.warning("[psych-flux] photo_przedmioty blad: %s", e)
     except Exception as e:
-        current_app.logger.error("[psych-flux] Błąd ThreadPoolExecutor: %s", e)
+        with app_obj.app_context():
+            app_obj.logger.error("[psych-flux] Blad ThreadPoolExecutor: %s", e)
 
     def _wrap(b64, suffix):
         if not b64:
@@ -1073,7 +1119,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         }
         for name, fut in futures.items():
             try:
-                result = fut.result(timeout=60)
+                result = fut.result(timeout=120)
                 if name == "pacjent":
                     sekcja_pacjent  = result
                 elif name == "depozyt":
@@ -1082,9 +1128,10 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
                     sekcja_diagnozy = result
                 elif name == "flux":
                     sekcja_flux     = result
-                current_app.logger.info("[psych-raport] Runda1 %s OK", name)
+                current_app.logger.info("[psych-raport] Runda1 %s OK keys=%s",
+                                        name, list(result.keys()) if isinstance(result, dict) else f"{len(result)} el.")
             except Exception as e:
-                current_app.logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
+                current_app.logger.error("[psych-raport] Runda1 %s TIMEOUT/BLAD: %s", name, e)
 
     data_przyjecia = sekcja_pacjent.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
     leki_lista     = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
@@ -1116,7 +1163,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         }
         for name, fut in futures2.items():
             try:
-                result = fut.result(timeout=60)
+                result = fut.result(timeout=120)
                 if name == "tydzien1":
                     dni_1_7      = result
                 elif name == "tydzien2":
