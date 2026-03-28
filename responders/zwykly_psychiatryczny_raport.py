@@ -524,27 +524,41 @@ def _generate_flux(prompt: str, label: str,
 
 
 def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tuple:
-    """Generuje oba zdjęcia równolegle. Zwraca (b64_pacjent, b64_przedmioty)."""
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    """
+    Generuje oba zdjęcia równolegle. Zwraca (photo_pacjent, photo_przedmioty).
+    Jeśli HF_TOKEN wyczerpany → zwraca None dla danego zdjęcia, nie blokuje całości.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from flask import current_app as flask_app
 
-    results = {}
+    ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
+    app_obj = flask_app._get_current_object()
 
     def gen_pacjent():
-        return _generate_flux(prompt_pacjent, "photo_pacjent", steps=28, guidance=7)
+        with app_obj.app_context():
+            return _generate_flux(prompt_pacjent, "photo_pacjent", steps=28, guidance=7)
 
     def gen_przedmioty():
-        return _generate_flux(prompt_przedmioty, "photo_przedmioty", steps=28, guidance=7)
+        with app_obj.app_context():
+            return _generate_flux(prompt_przedmioty, "photo_przedmioty", steps=28, guidance=7)
+
+    b64_pacjent    = None
+    b64_przedmioty = None
 
     try:
         with ThreadPoolExecutor(max_workers=2) as ex:
             f1 = ex.submit(gen_pacjent)
             f2 = ex.submit(gen_przedmioty)
-            results["pacjent"]     = f1.result(timeout=120)
-            results["przedmioty"]  = f2.result(timeout=120)
+            try:
+                b64_pacjent    = f1.result(timeout=120)
+            except Exception as e:
+                current_app.logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
+            try:
+                b64_przedmioty = f2.result(timeout=120)
+            except Exception as e:
+                current_app.logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
     except Exception as e:
-        current_app.logger.error("[psych-flux] Błąd równoległego generowania: %s", e)
-        results.setdefault("pacjent", None)
-        results.setdefault("przedmioty", None)
+        current_app.logger.error("[psych-flux] Błąd ThreadPoolExecutor: %s", e)
 
     def _wrap(b64, suffix):
         if not b64:
@@ -555,7 +569,7 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tu
             "filename":     f"psych_{suffix}_{ts}.jpg",
         }
 
-    return _wrap(results["pacjent"], "pacjent"), _wrap(results["przedmioty"], "przedmioty")
+    return _wrap(b64_pacjent, "pacjent"), _wrap(b64_przedmioty, "przedmioty")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1006,55 +1020,127 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
                  nouns_dict: dict, sender_name: str = "",
                  gender: str = "patient") -> dict:
     """
-    Główna funkcja modułu. Wywołuje 8 Groqów + 2 DeepSeeki + 2 FLUX równolegle.
-    Zwraca dict:
-        raport_pdf    → {base64, content_type, filename}
-        psych_photo_1 → {base64, content_type, filename}  (pacjent w kaftanie)
-        psych_photo_2 → {base64, content_type, filename}  (przedmioty)
+    Główna funkcja modułu.
+
+    Równoległość Groq:
+      Runda 1 (niezależne): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
+      Runda 2 (czekają na #2): #3 tydzień1 | #4 tydzień2 | #5 wypis
+      Runda 3 (czeka na #3+#4): #7 zalecenia
+      Potem: DeepSeek tone + completeness (sekwencyjnie)
+      Potem: FLUX oba zdjęcia równolegle (już tak było)
+      Potem: DOCX
+
+    Jeśli HF_TOKEN nie działa → psych_photo_1/2 = None, DOCX budowany bez zdjęć.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from flask import current_app as flask_app
+
     current_app.logger.info("[psych-raport] START build_raport")
+    app_obj = flask_app._get_current_object()
     cfg = _load_cfg()
     ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # ── GROQ #1 — pacjent ────────────────────────────────────────────────────
-    sekcja_pacjent = _sekcja_pacjent(cfg, body, sender_name)
-    data_przyjecia = sekcja_pacjent.get("data_przyjecia",
-                                        datetime.now().strftime("%d.%m.%Y"))
-    current_app.logger.info("[psych-raport] Groq#1 pacjent OK")
+    # ══════════════════════════════════════════════════════════════════════════
+    # RUNDA 1 — niezależne sekcje Groq równolegle
+    # ══════════════════════════════════════════════════════════════════════════
+    def _r1_pacjent():
+        with app_obj.app_context():
+            return _sekcja_pacjent(cfg, body, sender_name)
 
-    # ── GROQ #2 — depozyt + leki ─────────────────────────────────────────────
-    sekcja_dep_leki = _sekcja_depozyt_leki(cfg, body, nouns_dict)
-    leki_lista = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
-    current_app.logger.info("[psych-raport] Groq#2 depozyt+leki OK (%d leków)", len(leki_lista))
+    def _r1_depozyt():
+        with app_obj.app_context():
+            return _sekcja_depozyt_leki(cfg, body, nouns_dict)
 
-    # ── GROQ #3 — tydzień 1 ──────────────────────────────────────────────────
-    dni_1_7 = _sekcja_tydzien(cfg, body, leki_lista, 1, data_przyjecia)
-    current_app.logger.info("[psych-raport] Groq#3 tydzień1 OK (%d dni)", len(dni_1_7))
+    def _r1_diagnozy():
+        with app_obj.app_context():
+            return _sekcja_diagnozy(cfg, body, previous_body)
 
-    # ── GROQ #4 — tydzień 2 ──────────────────────────────────────────────────
-    dni_8_14 = _sekcja_tydzien(cfg, body, leki_lista, 2, data_przyjecia)
-    current_app.logger.info("[psych-raport] Groq#4 tydzień2 OK (%d dni)", len(dni_8_14))
+    def _r1_flux():
+        with app_obj.app_context():
+            return _sekcja_flux_prompty(cfg, body, nouns_dict, sender_name, gender)
 
-    # ── GROQ #5 — wypis ──────────────────────────────────────────────────────
-    sekcja_wypis = _sekcja_wypis(cfg, body, data_przyjecia)
-    current_app.logger.info("[psych-raport] Groq#5 wypis OK")
+    sekcja_pacjent  = {}
+    sekcja_dep_leki = {}
+    sekcja_diagnozy = {}
+    sekcja_flux     = {}
 
-    # ── GROQ #6 — diagnozy łacińskie ─────────────────────────────────────────
-    sekcja_diagnozy = _sekcja_diagnozy(cfg, body, previous_body)
-    current_app.logger.info("[psych-raport] Groq#6 diagnozy OK")
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {
+            "pacjent":  ex.submit(_r1_pacjent),
+            "depozyt":  ex.submit(_r1_depozyt),
+            "diagnozy": ex.submit(_r1_diagnozy),
+            "flux":     ex.submit(_r1_flux),
+        }
+        for name, fut in futures.items():
+            try:
+                result = fut.result(timeout=60)
+                if name == "pacjent":
+                    sekcja_pacjent  = result
+                elif name == "depozyt":
+                    sekcja_dep_leki = result
+                elif name == "diagnozy":
+                    sekcja_diagnozy = result
+                elif name == "flux":
+                    sekcja_flux     = result
+                current_app.logger.info("[psych-raport] Runda1 %s OK", name)
+            except Exception as e:
+                current_app.logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
 
-    # ── GROQ #7 — zalecenia + notatki ────────────────────────────────────────
-    sekcja_zalecenia = _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14)
-    current_app.logger.info("[psych-raport] Groq#7 zalecenia OK")
+    data_przyjecia = sekcja_pacjent.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
+    leki_lista     = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
 
-    # ── GROQ #8 — prompty FLUX ────────────────────────────────────────────────
-    sekcja_flux = _sekcja_flux_prompty(cfg, body, nouns_dict, sender_name, gender)
-    current_app.logger.info("[psych-raport] Groq#8 flux prompty OK")
+    # ══════════════════════════════════════════════════════════════════════════
+    # RUNDA 2 — zależą od depozyt (leki_lista) i data_przyjecia
+    # ══════════════════════════════════════════════════════════════════════════
+    def _r2_tydzien1():
+        with app_obj.app_context():
+            return _sekcja_tydzien(cfg, body, leki_lista, 1, data_przyjecia)
 
-    # ── Scal wszystkie sekcje w jeden raport ──────────────────────────────────
+    def _r2_tydzien2():
+        with app_obj.app_context():
+            return _sekcja_tydzien(cfg, body, leki_lista, 2, data_przyjecia)
+
+    def _r2_wypis():
+        with app_obj.app_context():
+            return _sekcja_wypis(cfg, body, data_przyjecia)
+
+    dni_1_7     = []
+    dni_8_14    = []
+    sekcja_wypis = {}
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures2 = {
+            "tydzien1": ex.submit(_r2_tydzien1),
+            "tydzien2": ex.submit(_r2_tydzien2),
+            "wypis":    ex.submit(_r2_wypis),
+        }
+        for name, fut in futures2.items():
+            try:
+                result = fut.result(timeout=60)
+                if name == "tydzien1":
+                    dni_1_7      = result
+                elif name == "tydzien2":
+                    dni_8_14     = result
+                elif name == "wypis":
+                    sekcja_wypis = result
+                current_app.logger.info("[psych-raport] Runda2 %s OK (%s elementów)",
+                                        name, len(result) if isinstance(result, list) else "?")
+            except Exception as e:
+                current_app.logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # RUNDA 3 — zależy od tydzien1 + tydzien2
+    # ══════════════════════════════════════════════════════════════════════════
+    try:
+        sekcja_zalecenia = _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14)
+        current_app.logger.info("[psych-raport] Runda3 zalecenia OK")
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
+        sekcja_zalecenia = {}
+
+    # ── Scal wszystkie sekcje ─────────────────────────────────────────────────
     raport = {}
     raport.update(sekcja_pacjent)
-    raport.update(sekcja_dep_leki.get("depozyt", {}))
     raport["depozyt"]                  = sekcja_dep_leki.get("depozyt", {})
     raport["farmakologia"]             = sekcja_dep_leki.get("farmakologia", {})
     raport["hospitalizacja_tydzien_1"] = dni_1_7
@@ -1065,31 +1151,30 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
 
     current_app.logger.info("[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport))
 
-    # ── DEEPSEEK #1 — tone check ──────────────────────────────────────────────
+    # ── DeepSeek tone check ───────────────────────────────────────────────────
     raport = _deepseek_tone_check(cfg, raport)
     current_app.logger.info("[psych-raport] DeepSeek#1 tone OK")
 
-    # ── DEEPSEEK #2 — completeness check ─────────────────────────────────────
+    # ── DeepSeek completeness check ──────────────────────────────────────────
     raport = _deepseek_completeness_check(cfg, raport, body)
     current_app.logger.info("[psych-raport] DeepSeek#2 completeness OK")
 
-    # ── FLUX — oba zdjęcia równolegle ─────────────────────────────────────────
+    # ── FLUX — oba zdjęcia równolegle (jeśli HF nie działa → None, budujemy DOCX bez zdjęć)
     prompt_pacjent    = sekcja_flux.get("prompt_pacjent", "")
     prompt_przedmioty = sekcja_flux.get("prompt_przedmioty", "")
     photo_1, photo_2  = _generate_photos_parallel(prompt_pacjent, prompt_przedmioty)
-    current_app.logger.info("[psych-raport] FLUX OK photo1=%s photo2=%s",
+    current_app.logger.info("[psych-raport] FLUX photo1=%s photo2=%s",
                             bool(photo_1), bool(photo_2))
 
-    # ── Buduj DOCX ────────────────────────────────────────────────────────────
+    # ── Buduj DOCX (zawsze — nawet bez zdjęć) ────────────────────────────────
     photo_1_b64 = photo_1["base64"] if photo_1 else None
     photo_2_b64 = photo_2["base64"] if photo_2 else None
     docx_b64    = _build_docx(raport, photo_1_b64, photo_2_b64, cfg)
 
     if not docx_b64:
         current_app.logger.error("[psych-raport] DOCX nie wygenerowany")
-        return {"raport_pdf": None, "psych_photo_1": None, "psych_photo_2": None}
+        return {"raport_pdf": None, "psych_photo_1": photo_1, "psych_photo_2": photo_2}
 
-    # Nazwa pliku z imieniem pacjenta
     imie = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
     safe = re.sub(r'[^a-zA-Z0-9_-]', '_', imie)[:30]
 

@@ -486,22 +486,8 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     }
   }
 
-  // ── Emotka PNG → Drive ─────────────────────────────────────────────────────
-  if (data.emoticon && data.emoticon.base64) {
-    try {
-      var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
-      if (folderId) {
-        DriveApp.getFolderById(folderId).createFile(Utilities.newBlob(
-          Utilities.base64Decode(data.emoticon.base64),
-          data.emoticon.content_type || "image/png",
-          data.emoticon.filename     || "emotka.png"
-        ));
-        console.log("[zwykly] Emotka zapisana na Drive: " + (data.emoticon.filename || "emotka.png"));
-      }
-    } catch (e) {
-      console.error("[zwykly] Błąd zapisu emotki na Drive: " + e.message);
-    }
-  }
+  // ── Emotka PNG → Drive (odłożone) ────────────────────────────────────────
+  _queueDriveFile("emotka", data.emoticon);
 
   // ── CV PDF Tyler (załącznik + Drive) ──────────────────────────────────────
   if (data.cv_pdf && data.cv_pdf.base64) {
@@ -516,19 +502,8 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     } catch (e) {
       console.error("[zwykly] Błąd CV PDF załącznik: " + e.message);
     }
-    try {
-      var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
-      if (folderId) {
-        DriveApp.getFolderById(folderId).createFile(Utilities.newBlob(
-          Utilities.base64Decode(data.cv_pdf.base64),
-          "application/pdf",
-          cvFilename
-        ));
-        console.log("[zwykly] CV PDF zapisany na Drive: " + cvFilename);
-      }
-    } catch (e) {
-      console.error("[zwykly] Błąd zapisu CV PDF na Drive: " + e.message);
-    }
+    // CV PDF → Drive (odłożone)
+    _queueDriveFile("cv_pdf", data.cv_pdf);
   }
 
   // ── Ankieta HTML (załącznik) ─────────────────────────────────────────────
@@ -588,6 +563,60 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
       console.log("[zwykly] Raport psychiatryczny dołączony: " + raportFilename + " (" + raportContentType + ")");
     } catch(e) { console.error("[zwykly] Błąd raport: " + e.message); }
+  }
+
+  // ── Zdjęcie psychiatryczne 1 — pacjent w kaftanie (inline + załącznik + Drive) ──
+  if (data.psych_photo_1 && data.psych_photo_1.base64) {
+    try {
+      var cid1      = "psych_photo_1";
+      var filename1 = data.psych_photo_1.filename || "psych_pacjent.jpg";
+      var mime1     = data.psych_photo_1.content_type || "image/jpeg";
+      var blob1     = Utilities.newBlob(
+        Utilities.base64Decode(data.psych_photo_1.base64), mime1, filename1
+      );
+      inlineImages[cid1] = blob1;
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.psych_photo_1.base64), mime1, filename1
+      ));
+      // Dodaj do HTML — sekcja pod trypykiem
+      triptychHtml += '<hr style="border:none;border-top:1px solid #888;margin:24px 0 10px;">';
+      triptychHtml += '<p style="font-size:11px;color:#888;text-align:center;margin:0 0 8px;letter-spacing:1px;">DOKUMENTACJA FOTOGRAFICZNA — PRZYJĘCIE / ODDZIAŁ B</p>';
+      triptychHtml += '<p style="text-align:center;"><img src="cid:' + cid1 + '"'
+        + ' alt="Dokumentacja fotograficzna — pacjent"'
+        + ' style="max-width:460px;border-radius:4px;border:1px solid #C8B89A;margin-bottom:6px;"></p>';
+      console.log("[zwykly] psych_photo_1 inline OK: " + filename1);
+    } catch(e) {
+      console.error("[zwykly] Błąd psych_photo_1 inline: " + e.message);
+    }
+    // psych_photo_1 → Drive (odłożone)
+    _queueDriveFile("psych_photo_1", data.psych_photo_1);
+  }
+
+  // ── Zdjęcie psychiatryczne 2 — dowody rzeczowe (inline + załącznik + Drive) ──
+  if (data.psych_photo_2 && data.psych_photo_2.base64) {
+    try {
+      var cid2      = "psych_photo_2";
+      var filename2 = data.psych_photo_2.filename || "psych_przedmioty.jpg";
+      var mime2     = data.psych_photo_2.content_type || "image/jpeg";
+      var blob2     = Utilities.newBlob(
+        Utilities.base64Decode(data.psych_photo_2.base64), mime2, filename2
+      );
+      inlineImages[cid2] = blob2;
+      attachments.push(Utilities.newBlob(
+        Utilities.base64Decode(data.psych_photo_2.base64), mime2, filename2
+      ));
+      // Dodaj do HTML pod zdjęciem 1
+      triptychHtml += '<p style="font-size:10px;color:#999;text-align:center;margin:4px 0 8px;">Fot. 1 — Pacjent w kaftanie bezpieczeństwa z przedmiotami z depozytu</p>';
+      triptychHtml += '<p style="text-align:center;"><img src="cid:' + cid2 + '"'
+        + ' alt="Dowody rzeczowe — przedmioty skonfiskowane"'
+        + ' style="max-width:460px;border-radius:4px;border:1px solid #C8B89A;margin-bottom:4px;"></p>';
+      triptychHtml += '<p style="font-size:10px;color:#999;text-align:center;margin:0 0 16px;">Fot. 2 — Przedmioty skonfiskowane przy przyjęciu. Protokół dowodów rzeczowych.</p>';
+      console.log("[zwykly] psych_photo_2 inline OK: " + filename2);
+    } catch(e) {
+      console.error("[zwykly] Błąd psych_photo_2 inline: " + e.message);
+    }
+    // psych_photo_2 → Drive (odłożone)
+    _queueDriveFile("psych_photo_2", data.psych_photo_2);
   }
 
   // ── Plakat SVG (załącznik) ───────────────────────────────────────────────
@@ -666,12 +695,11 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     });
 
     triptychHtml += '</tr></table>';
-
-    // ── Zapisz JPG na Google Drive (DRIVE_FOLDER_ID) ────────────────────────
-    _saveTylerJpgsToDrive(triptychImages);
   }
-  // ── Debug TXT → Drive ──────────────────────────────────────────────────────
-  _saveTylerDebugTxt(data.debug_txt);
+
+  // ── Tryptyk + Debug → Drive (odłożone) ────────────────────────────────────
+  _queueDriveTriptych(triptychImages);
+  _queueDriveFile("debug_txt", data.debug_txt);
 
   // ── Złóż HTML ──────────────────────────────────────────────────────────────
   var htmlBody = (data.reply_html || "<p>(Brak treści)</p>") + triptychHtml;
@@ -702,6 +730,138 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       console.error("[zwykly] sendEmail() też zawiódł: " + e2.message);
     }
   }
+
+  // ── Zaplanuj zapis Drive za 2 minuty ──────────────────────────────────────
+  _scheduleDriveFlush();
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// KOLEJKA DRIVE — zapis odłożony w czasie (omija timeout GAS)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Dodaje jeden plik do kolejki Drive w CacheService.
+ * fileObj = {base64, content_type, filename}
+ */
+function _queueDriveFile(key, fileObj) {
+  if (!fileObj || !fileObj.base64) return;
+  try {
+    var cache = CacheService.getScriptCache();
+    var existing = cache.get("driveq_keys") || "";
+    var keys = existing ? existing.split(",") : [];
+    var cacheKey = "driveq_" + key + "_" + Date.now();
+    // CacheService limit: 100KB per wpis — duże pliki dzielimy
+    var serialized = JSON.stringify({
+      base64:       fileObj.base64,
+      content_type: fileObj.content_type || "application/octet-stream",
+      filename:     fileObj.filename     || key + ".bin"
+    });
+    if (serialized.length > 90000) {
+      // Plik za duży dla Cache — pomijamy (i tak jest załącznikiem w mailu)
+      console.warn("[DriveQ] Plik za duży dla Cache, pomijam: " + (fileObj.filename || key));
+      return;
+    }
+    cache.put(cacheKey, serialized, 21600); // 6h TTL
+    keys.push(cacheKey);
+    cache.put("driveq_keys", keys.join(","), 21600);
+    console.log("[DriveQ] Dodano do kolejki: " + (fileObj.filename || key));
+  } catch(e) {
+    console.error("[DriveQ] Błąd kolejkowania " + key + ": " + e.message);
+  }
+}
+
+/**
+ * Dodaje listę obrazków tryptycznych do kolejki Drive.
+ */
+function _queueDriveTriptych(images) {
+  if (!images || !images.length) return;
+  images.forEach(function(imgObj, i) {
+    if (!imgObj || !imgObj.base64) return;
+    _queueDriveFile("triptych_" + i, imgObj);
+  });
+}
+
+/**
+ * Tworzy trigger czasowy uruchamiający __AAA_driveFlush za 2 minuty.
+ * Usuwa stare triggery driveFlush żeby nie piętrzył się ich stos.
+ */
+function _scheduleDriveFlush() {
+  try {
+    // Usuń poprzednie triggery driveFlush
+    ScriptApp.getProjectTriggers().forEach(function(t) {
+      if (t.getHandlerFunction() === "__AAA_driveFlush") {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+    // Utwórz nowy za 2 minuty
+    ScriptApp.newTrigger("__AAA_driveFlush")
+      .timeBased()
+      .after(2 * 60 * 1000)
+      .create();
+    console.log("[DriveQ] Trigger driveFlush zaplanowany za 2 min");
+  } catch(e) {
+    console.error("[DriveQ] Błąd tworzenia triggera: " + e.message);
+  }
+}
+
+/**
+ * Funkcja wywoływana przez trigger — odczytuje kolejkę z Cache i zapisuje na Drive.
+ * Uruchamia się automatycznie ~2 minuty po wysłaniu maila.
+ */
+function __AAA_driveFlush() {
+  var cache    = CacheService.getScriptCache();
+  var existing = cache.get("driveq_keys");
+  if (!existing) {
+    console.log("[DriveFlush] Kolejka pusta — nic do zapisania");
+    return;
+  }
+
+  var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
+  if (!folderId) {
+    console.error("[DriveFlush] Brak DRIVE_FOLDER_ID");
+    return;
+  }
+
+  var folder = DriveApp.getFolderById(folderId);
+  var keys   = existing.split(",").filter(Boolean);
+  var saved  = 0;
+  var failed = 0;
+
+  keys.forEach(function(cacheKey) {
+    try {
+      var raw = cache.get(cacheKey);
+      if (!raw) {
+        console.warn("[DriveFlush] Brak danych dla klucza: " + cacheKey);
+        failed++;
+        return;
+      }
+      var obj = JSON.parse(raw);
+      if (!obj.base64) { failed++; return; }
+      folder.createFile(Utilities.newBlob(
+        Utilities.base64Decode(obj.base64),
+        obj.content_type || "application/octet-stream",
+        obj.filename     || "plik.bin"
+      ));
+      console.log("[DriveFlush] Zapisano: " + obj.filename);
+      cache.remove(cacheKey);
+      saved++;
+    } catch(e) {
+      console.error("[DriveFlush] Błąd zapisu " + cacheKey + ": " + e.message);
+      failed++;
+    }
+  });
+
+  // Wyczyść listę kluczy
+  cache.remove("driveq_keys");
+  console.log("[DriveFlush] DONE: zapisano=" + saved + " błędów=" + failed);
+
+  // Usuń ten trigger (jednorazowy)
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === "__AAA_driveFlush") {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
 }
 
 
@@ -1343,6 +1503,8 @@ function __AAA_processEmails() {
   var knownSenders = _getKnownSenders();
   console.log("Znani nadawcy z historii: " + knownSenders.length);
 
+  var webhookCalled = false; // ← max 1 wywołanie webhookaresponse na wykonanie
+
   var threads = GmailApp.getInboxThreads(0, 80);
   for (var i = 0; i < threads.length; i++) {
     var thread = threads[i];
@@ -1381,6 +1543,8 @@ function __AAA_processEmails() {
         thread.markRead();
 
         var previousDataReply = findLastMessageBySender(fromEmail);
+        if (webhookCalled) { thread.markRead(); continue; }
+        webhookCalled = true;
         var responseReply = _callBackend(
           fromEmail, senderName, subject, plainBody, webhookUrl,
           false, false, false, false, false,
@@ -1408,6 +1572,8 @@ function __AAA_processEmails() {
         if (isAllowed) {
           thread.markRead();
           var previousDataAllowed = findLastMessageBySender(fromEmail);
+          if (webhookCalled) { thread.markRead(); continue; }
+          webhookCalled = true;
           var responseAllowed = _callBackend(
             fromEmail, senderName, subject, plainBody, webhookUrl,
             false, false, false, false, false,
@@ -1471,6 +1637,8 @@ function __AAA_processEmails() {
       thread.markRead();
 
       var previousDataJoker = findLastMessageBySender(fromEmail);
+      if (webhookCalled) { thread.markRead(); continue; }
+      webhookCalled = true;
       var responseJoker = _callBackend(
         fromEmail, senderName, subject, plainBody, webhookUrl,
         true, true, true, true, true,
@@ -1514,6 +1682,8 @@ function __AAA_processEmails() {
       smircData = _getSmircData(fromEmail);
 
       var previousData2 = findLastMessageBySender(fromEmail);
+      if (webhookCalled) { thread.markRead(); continue; }
+      webhookCalled = true;
       var response2 = _callBackend(
         fromEmail, senderName, subject, plainBody, webhookUrl,
         false, false, false, false, false,
@@ -1600,6 +1770,8 @@ function __AAA_processEmails() {
 
     thread.markRead();
 
+    if (webhookCalled) { continue; }
+    webhookCalled = true;
     var response = _callBackend(
       fromEmail,
       senderName,
