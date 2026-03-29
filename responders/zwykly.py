@@ -27,9 +27,12 @@ import io
 import json
 import random
 import base64
+import logging
 import requests
 from datetime import datetime
-from flask import current_app
+
+# Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
+logger = logging.getLogger(__name__)
 
 from core.ai_client import call_deepseek, extract_clean_text, sanitize_model_output, MODEL_TYLER
 from core.files import read_file_base64
@@ -149,12 +152,12 @@ def _load_prompt_json() -> dict:
     try:
         with open(PROMPT_JSON_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        current_app.logger.info("[zwykly] prompt.json wczytany OK")
+        logger.info("[zwykly] prompt.json wczytany OK")
         return data
     except FileNotFoundError:
-        current_app.logger.error("[zwykly] Brak prompt.json: %s — używam fallbacku", PROMPT_JSON_PATH)
+        logger.error("[zwykly] Brak prompt.json: %s — używam fallbacku", PROMPT_JSON_PATH)
     except json.JSONDecodeError as e:
-        current_app.logger.error("[zwykly] Błąd JSON w prompt.json: %s", e)
+        logger.error("[zwykly] Błąd JSON w prompt.json: %s", e)
     return _fallback_prompt_dict()
 
 
@@ -344,23 +347,36 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
 def _call_groq(system: str, user: str, max_tokens: int = 6000) -> str | None:
     """
-    Wywołuje Groq API z rotacją wszystkich kluczy.
-    Przy 429 przechodzi do następnego klucza.
+    Wywołuje Groq API RÓWNOLEGLE ze wszystkimi kluczami.
+    Bierze pierwszą poprawną odpowiedź (nie-429).
+    Drastycznie szybsze niż sekwencyjna rotacja przy rate-limitach.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
     groq_keys = _get_groq_keys()
     if not groq_keys:
-        current_app.logger.warning("[groq] Brak kluczy w env")
+        logger.warning("[groq] Brak kluczy w env")
         return None
-    current_app.logger.info("[groq] Dostępnych kluczy: %d", len(groq_keys))
-    for name, key in groq_keys:
-        result = _call_groq_single(key, system, user, max_tokens)
-        if result and result != "RATE_LIMIT":
-            current_app.logger.info("[groq] OK klucz=%s (%d znaków)", name, len(result))
-            return result
-        elif result == "RATE_LIMIT":
-            current_app.logger.warning("[groq] 429 klucz=%s → następny", name)
-            continue
-    current_app.logger.error("[groq] Wszystkie %d kluczy wyczerpane", len(groq_keys))
+    logger.info("[groq] Odpytywanie %d kluczy RÓWNOLEGLE", len(groq_keys))
+    with ThreadPoolExecutor(max_workers=len(groq_keys)) as ex:
+        futures = {
+            ex.submit(_call_groq_single, key, system, user, max_tokens): name
+            for name, key in groq_keys
+        }
+        for future in _as_completed(futures):
+            name = futures[future]
+            try:
+                result = future.result()
+            except Exception as e:
+                logger.warning("[groq] Wyjątek klucz=%s: %s", name, e)
+                continue
+            if result and result != "RATE_LIMIT":
+                logger.info("[groq] OK klucz=%s (%d znaków)", name, len(result))
+                for f in futures:
+                    f.cancel()
+                return result
+            elif result == "RATE_LIMIT":
+                logger.warning("[groq] 429 klucz=%s", name)
+    logger.error("[groq] Wszystkie %d kluczy wyczerpane", len(groq_keys))
     return None
 
 
@@ -372,11 +388,11 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tu
     result = _call_groq(system, user, max_tokens=max_tokens)
     if result:
         return result, "groq"
-    current_app.logger.warning("[zwykly] Wszystkie klucze Groq wyczerpane → DeepSeek")
+    logger.warning("[zwykly] Wszystkie klucze Groq wyczerpane → DeepSeek")
     result = call_deepseek(system, user, MODEL_TYLER)
     if result:
         return result, "deepseek"
-    current_app.logger.error("[zwykly] Groq i DeepSeek zawiodły!")
+    logger.error("[zwykly] Groq i DeepSeek zawiodły!")
     return None, "none"
 
 
@@ -436,7 +452,7 @@ def _parse_response(raw: str) -> tuple[str, str]:
 
         # Sprawdź czy odpowiedź zawiera sekcję Tylera — jeśli nie, JSON jest niekompletny
         if tekst and "### TYLER DURDEN" not in tekst:
-            current_app.logger.warning(
+            logger.warning(
                 "[zwykly] Brak sekcji TYLER DURDEN — odpowiedź niekompletna (%.80s)", tekst
             )
             tekst = ""  # wymusi fallback poniżej
@@ -444,11 +460,11 @@ def _parse_response(raw: str) -> tuple[str, str]:
         if not tekst:
             tekst = sanitize_model_output(raw)
 
-        current_app.logger.info("[zwykly] emocja=%s → plik=%s", emocja, emotion_key)
+        logger.info("[zwykly] emocja=%s → plik=%s", emocja, emotion_key)
         return tekst, emotion_key
 
     except Exception as e:
-        current_app.logger.warning("[zwykly] Błąd parsowania JSON: %s | raw=%.200s", e, raw)
+        logger.warning("[zwykly] Błąd parsowania JSON: %s | raw=%.200s", e, raw)
         return sanitize_model_output(raw), FALLBACK_EMOT
 
 
@@ -462,10 +478,10 @@ def _get_emoticon_and_pdf(emotion_key: str) -> tuple:
     pdf_b64 = read_file_base64(os.path.join(PDF_DIR, f"{emotion_key}.pdf"))
 
     if not png_b64:
-        current_app.logger.warning("[zwykly] Brak PNG dla %s, używam error.png", emotion_key)
+        logger.warning("[zwykly] Brak PNG dla %s, używam error.png", emotion_key)
         png_b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{FALLBACK_EMOT}.png"))
     if not pdf_b64:
-        current_app.logger.warning("[zwykly] Brak PDF dla %s, używam error.pdf", emotion_key)
+        logger.warning("[zwykly] Brak PDF dla %s, używam error.pdf", emotion_key)
         pdf_b64 = read_file_base64(os.path.join(PDF_DIR, f"{FALLBACK_EMOT}.pdf"))
 
     return png_b64, pdf_b64
@@ -486,17 +502,17 @@ def _load_style_config() -> dict:
 
         m = re.search(r'//\s*<STYLE_CONFIG>(.*?)//\s*</STYLE_CONFIG>', content, re.DOTALL)
         if not m:
-            current_app.logger.warning("[zwykly-img] Brak bloku STYLE_CONFIG w %s", STYLE_JS_PATH)
+            logger.warning("[zwykly-img] Brak bloku STYLE_CONFIG w %s", STYLE_JS_PATH)
             return {}
 
         config = json.loads(m.group(1).strip())
-        current_app.logger.info("[zwykly-img] Wczytano STYLE_CONFIG OK")
+        logger.info("[zwykly-img] Wczytano STYLE_CONFIG OK")
         return config
 
     except FileNotFoundError:
-        current_app.logger.warning("[zwykly-img] Brak pliku %s", STYLE_JS_PATH)
+        logger.warning("[zwykly-img] Brak pliku %s", STYLE_JS_PATH)
     except json.JSONDecodeError as e:
-        current_app.logger.error("[zwykly-img] Błąd parsowania STYLE_CONFIG: %s", e)
+        logger.error("[zwykly-img] Błąd parsowania STYLE_CONFIG: %s", e)
     return {}
 
 
@@ -595,16 +611,18 @@ def _extract_nouns_from_body(body: str) -> list:
 
 def _extract_nouns_groq(body: str) -> dict:
     """
-    Wysyła email do Groq (rotacja kluczy) z promptem z zwykly_znajdz_rzeczowniki.json.
-    Zwraca dict {rzecz001: 'kopalnia', rzecz002: 'pies', ...} lub {} przy błędzie.
+    Wysyła email do Groq RÓWNOLEGLE (wszystkie klucze naraz).
+    Zwraca dict {rzecz001: 'kopalnia', ...} lub {} przy błędzie.
     Fallback: DeepSeek.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
     NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
     try:
         with open(NOUNS_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[rzeczowniki] Brak zwykly_znajdz_rzeczowniki.json: %s", e)
+        logger.warning("[rzeczowniki] Brak zwykly_znajdz_rzeczowniki.json: %s", e)
         return {}
 
     system_msg = cfg.get("system", "")
@@ -612,15 +630,14 @@ def _extract_nouns_groq(body: str) -> dict:
     max_tokens = cfg.get("max_tokens", 3000)
     temperature = cfg.get("temperature", 0.1)
     user_msg = user_prefix + (body or "")
+    model = cfg.get("model", GROQ_MODEL)
 
     raw = None
 
-    # Groq rotacja kluczy
-    groq_keys = _get_groq_keys()
-    for name, key in groq_keys:
+    def _single_nouns_call(key: str):
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         payload = {
-            "model": cfg.get("model", GROQ_MODEL),
+            "model": model,
             "messages": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
@@ -628,27 +645,44 @@ def _extract_nouns_groq(body: str) -> dict:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        try:
-            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
-            if resp.status_code == 200:
-                raw = resp.json()["choices"][0]["message"]["content"].strip()
-                current_app.logger.info("[rzeczowniki] Groq OK klucz=%s (%d znaków)", name, len(raw))
-                break
-            elif resp.status_code == 429:
-                current_app.logger.warning("[rzeczowniki] 429 klucz=%s → następny", name)
-                continue
-            else:
-                current_app.logger.warning("[rzeczowniki] HTTP %s klucz=%s", resp.status_code, name)
-        except Exception as e:
-            current_app.logger.warning("[rzeczowniki] Wyjątek klucz=%s: %s", name, e)
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        elif resp.status_code == 429:
+            return "RATE_LIMIT"
+        return None
+
+    # Groq — wszystkie klucze równolegle
+    groq_keys = _get_groq_keys()
+    if groq_keys:
+        with ThreadPoolExecutor(max_workers=len(groq_keys)) as ex:
+            futures = {
+                ex.submit(_single_nouns_call, key): name
+                for name, key in groq_keys
+            }
+            for future in _as_completed(futures):
+                name = futures[future]
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.warning("[rzeczowniki] Wyjątek klucz=%s: %s", name, e)
+                    continue
+                if result and result != "RATE_LIMIT":
+                    logger.info("[rzeczowniki] Groq OK klucz=%s (%d znaków)", name, len(result))
+                    raw = result
+                    for f in futures:
+                        f.cancel()
+                    break
+                elif result == "RATE_LIMIT":
+                    logger.warning("[rzeczowniki] 429 klucz=%s", name)
 
     # Fallback DeepSeek
     if not raw:
-        current_app.logger.warning("[rzeczowniki] Groq zawiodło → DeepSeek")
+        logger.warning("[rzeczowniki] Groq zawiodło → DeepSeek")
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
 
     if not raw:
-        current_app.logger.error("[rzeczowniki] Brak odpowiedzi od AI")
+        logger.error("[rzeczowniki] Brak odpowiedzi od AI")
         return {}
 
     # Parsuj JSON
@@ -663,10 +697,10 @@ def _extract_nouns_groq(body: str) -> dict:
             raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
         # Filtruj — tylko klucze rzecz001, rzecz002 itd.
         nouns_dict = {k: v for k, v in result.items() if re.match(r'^rzecz\d+$', k) and isinstance(v, str)}
-        current_app.logger.info("[rzeczowniki] OK — %d rzeczowników", len(nouns_dict))
+        logger.info("[rzeczowniki] OK — %d rzeczowników", len(nouns_dict))
         return nouns_dict
     except Exception as e:
-        current_app.logger.warning("[rzeczowniki] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[rzeczowniki] Błąd JSON: %s | raw: %.200s", e, raw)
         return {}
 
 
@@ -690,9 +724,9 @@ def _append_nouns_to_debug_txt(debug_txt_dict: dict, nouns_dict: dict) -> dict:
         lines.append("")
         appended = existing + "\n".join(lines)
         debug_txt_dict["base64"] = base64.b64encode(appended.encode("utf-8")).decode("ascii")
-        current_app.logger.info("[rzeczowniki] Dopisano %d rzeczowników do _.txt", len(nouns_dict))
+        logger.info("[rzeczowniki] Dopisano %d rzeczowników do _.txt", len(nouns_dict))
     except Exception as e:
-        current_app.logger.warning("[rzeczowniki] Błąd dopisywania do _.txt: %s", e)
+        logger.warning("[rzeczowniki] Błąd dopisywania do _.txt: %s", e)
     return debug_txt_dict
 
 
@@ -785,31 +819,27 @@ def _detect_gender(body: str, sender_name: str = "") -> str:
     elif score_m > score_k:
         return "mezczyzna"
 
-    # ── 2. Groq — płeć z imienia i fragmentu emaila ───────────────────────────
+    # ── 2. Groq — płeć z imienia i fragmentu emaila (równolegle) ──────────────
     try:
-        groq_keys = _get_groq_keys()
-        if groq_keys:
-            system_gender = (
-                "Jesteś lingwistą. Na podstawie imienia i/lub fragmentu emaila określ płeć osoby. "
-                "Odpowiedz WYŁĄCZNIE jednym słowem: kobieta, mezczyzna lub nieznana."
-            )
-            user_gender = (
-                f"Imię osoby (sender_name): {sender_name or '(nieznane)'}\n"
-                f"Fragment emaila: {(body or '')[:400]}"
-            )
-            for name, key in groq_keys:
-                result = _call_groq_single(key, system_gender, user_gender, 10)
-                if result and result != "RATE_LIMIT":
-                    result_clean = result.strip().lower().replace(".", "")
-                    if "kobieta" in result_clean:
-                        current_app.logger.info("[gender] Groq → kobieta (imie=%s)", sender_name)
-                        return "kobieta"
-                    elif "mezczyzna" in result_clean or "mężczyzna" in result_clean:
-                        current_app.logger.info("[gender] Groq → mezczyzna (imie=%s)", sender_name)
-                        return "mezczyzna"
-                    break
+        system_gender = (
+            "Jesteś lingwistą. Na podstawie imienia i/lub fragmentu emaila określ płeć osoby. "
+            "Odpowiedz WYŁĄCZNIE jednym słowem: kobieta, mezczyzna lub nieznana."
+        )
+        user_gender = (
+            f"Imię osoby (sender_name): {sender_name or '(nieznane)'}\n"
+            f"Fragment emaila: {(body or '')[:400]}"
+        )
+        result = _call_groq(system_gender, user_gender, max_tokens=10)
+        if result:
+            result_clean = result.strip().lower().replace(".", "")
+            if "kobieta" in result_clean:
+                logger.info("[gender] Groq → kobieta (imie=%s)", sender_name)
+                return "kobieta"
+            elif "mezczyzna" in result_clean or "mężczyzna" in result_clean:
+                logger.info("[gender] Groq → mezczyzna (imie=%s)", sender_name)
+                return "mezczyzna"
     except Exception as e:
-        current_app.logger.warning("[gender] Groq błąd: %s", e)
+        logger.warning("[gender] Groq błąd: %s", e)
 
     return "nieznana"
 
@@ -906,7 +936,7 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
         return result
 
     except Exception as e:
-        current_app.logger.warning("[tyler-txt] Błąd dopisywania tekstu: %s", e)
+        logger.warning("[tyler-txt] Błąd dopisywania tekstu: %s", e)
         return image_obj
 
 
@@ -1060,7 +1090,7 @@ def _extract_tyler_rules(response_text: str) -> list:
         rule_text = rules.get(rule_idx, rules.get(p, ""))
         panel_rules.append(rule_text)
 
-    current_app.logger.info(
+    logger.info(
         "[tyler-rules] Wyciągnięto %d zasad z tekstu Tylera → %d paneli",
         len(rules), len([r for r in panel_rules if r])
     )
@@ -1080,12 +1110,12 @@ def _load_panel_wytyczne() -> dict:
     try:
         with open(PANEL_WYTYCZNE_JSON_PATH, encoding="utf-8") as f:
             data = json.load(f)
-        current_app.logger.info("[panel-wytyczne] Wczytano zwykly_panel_wytyczne.json OK")
+        logger.info("[panel-wytyczne] Wczytano zwykly_panel_wytyczne.json OK")
         return data
     except FileNotFoundError:
-        current_app.logger.error("[panel-wytyczne] Brak pliku %s — używam fallbacku", PANEL_WYTYCZNE_JSON_PATH)
+        logger.error("[panel-wytyczne] Brak pliku %s — używam fallbacku", PANEL_WYTYCZNE_JSON_PATH)
     except json.JSONDecodeError as e:
-        current_app.logger.error("[panel-wytyczne] Błąd JSON w zwykly_panel_wytyczne.json: %s", e)
+        logger.error("[panel-wytyczne] Błąd JSON w zwykly_panel_wytyczne.json: %s", e)
     return {
         "system_prompt_AI": (
             "You are a cinematic visual prompt engineer for FLUX image generation. "
@@ -1174,7 +1204,7 @@ def _generate_panel_prompt_from_rule(
 
     caption = rule_text[:120] if rule_text else f"Zasada {panel_index}"
 
-    current_app.logger.info(
+    logger.info(
         "[panel-rule] Panel %d/7 (%s): %.100s...",
         panel_index, prov, flux_prompt
     )
@@ -1292,7 +1322,7 @@ def _build_session_vars(
     # Jeśli PREVIOUS_BODY jest identyczny z BODY — to błąd webhooka, traktuj jako brak historii
     _prev = previous_body or ""
     if _prev.strip() and _prev.strip() == (body or "").strip():
-        current_app.logger.warning(
+        logger.warning(
             "[session_vars] PREVIOUS_BODY identyczny z BODY — traktuję jako brak historii"
         )
         _prev = ""
@@ -1322,25 +1352,19 @@ def _build_session_vars(
     if _user_person:
         try:
             _zdrobnienie = _user_person
-            _groq_keys_zdr = _get_groq_keys()
-            if _groq_keys_zdr:
-                _sys_zdr = (
+            _sys_zdr = (
                     "Jesteś lingwistą polskim. Podaj zdrobniałą/pieszczotliwą formę "
                     "podanego imienia polskiego. Odpowiedz WYŁĄCZNIE jednym słowem — "
                     "samo zdrobnienie, nic więcej."
                 )
-                _usr_zdr = f"Imię: {_user_person}"
-                for _n_zdr, _k_zdr in _groq_keys_zdr:
-                    _r_zdr = _call_groq_single(_k_zdr, _sys_zdr, _usr_zdr, 20)
-                    if _r_zdr and _r_zdr != "RATE_LIMIT":
-                        _zdrobnienie = _r_zdr.strip().split()[0]
-                        current_app.logger.info(
-                            "[zdrobnienie] %s → %s", _user_person, _zdrobnienie
-                        )
-                        break
+            _usr_zdr = f"Imię: {_user_person}"
+            _r_zdr = _call_groq(_sys_zdr, _usr_zdr, max_tokens=20)
+            if _r_zdr:
+                _zdrobnienie = _r_zdr.strip().split()[0]
+                logger.info("[zdrobnienie] %s → %s", _user_person, _zdrobnienie)
             vars_dict["USER_NAME_ZDROBNIENIE"] = _zdrobnienie
         except Exception as _e_zdr:
-            current_app.logger.warning("[zdrobnienie] Błąd: %s — fallback na imię", _e_zdr)
+            logger.warning("[zdrobnienie] Błąd: %s — fallback na imię", _e_zdr)
             vars_dict["USER_NAME_ZDROBNIENIE"] = _user_person
     else:
         vars_dict["USER_NAME_ZDROBNIENIE"] = ""
@@ -1534,7 +1558,7 @@ def _generate_panel_prompt(
             f"{panel_style}, {base_style}, {quality}"
         )
 
-    current_app.logger.info("[zwykly-img] Panel %d prompt (%s): %.120s",
+    logger.info("[zwykly-img] Panel %d prompt (%s): %.120s",
                             panel_index, prov, flux_prompt)
     return flux_prompt, caption, panel_used_vars
 
@@ -1568,7 +1592,7 @@ def _png_to_jpg(image_obj: dict, panel_index: int) -> dict:
         size_png_kb = len(raw_bytes) // 1024
         size_jpg_kb = len(buf.getvalue()) // 1024
 
-        current_app.logger.info(
+        logger.info(
             "[tyler-jpg] Panel %d: %dKB PNG → %dKB JPG (jakość=%d%%)",
             panel_index, size_png_kb, size_jpg_kb, TYLER_JPG_QUALITY
         )
@@ -1587,10 +1611,10 @@ def _png_to_jpg(image_obj: dict, panel_index: int) -> dict:
         return result
 
     except ImportError:
-        current_app.logger.error("[tyler-jpg] Pillow niedostępny — zwracam PNG")
+        logger.error("[tyler-jpg] Pillow niedostępny — zwracam PNG")
         return image_obj
     except Exception as e:
-        current_app.logger.warning("[tyler-jpg] Błąd konwersji: %s — zwracam PNG", e)
+        logger.warning("[tyler-jpg] Błąd konwersji: %s — zwracam PNG", e)
         return image_obj
 
 
@@ -1602,7 +1626,7 @@ def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
     """
     tokens = _get_hf_tokens()
     if not tokens:
-        current_app.logger.error("[flux-tyler] Brak tokenów HF!")
+        logger.error("[flux-tyler] Brak tokenów HF!")
         return None
 
     seed = random.randint(0, 2 ** 32 - 1)
@@ -1615,7 +1639,7 @@ def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
         }
     }
 
-    current_app.logger.info("[flux-tyler] Panel %d — %d tokenów dostępnych, seed=%d",
+    logger.info("[flux-tyler] Panel %d — %d tokenów dostępnych, seed=%d",
                             panel_index, len(tokens), seed)
 
     for name, token in tokens:
@@ -1624,13 +1648,13 @@ def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
             "Accept": "image/png"
         }
         try:
-            current_app.logger.info("[flux-tyler] Próbuję token: %s", name)
+            logger.info("[flux-tyler] Próbuję token: %s", name)
             resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
 
             remaining = resp.headers.get("X-Remaining-Requests")
 
             if resp.status_code == 200:
-                current_app.logger.info(
+                logger.info(
                     "[flux-tyler] ✓ Token %s: sukces (PNG %d B, pozostało: %s)",
                     name, len(resp.content), remaining or "?"
                 )
@@ -1644,23 +1668,23 @@ def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
                 }
 
             elif resp.status_code in (401, 403):
-                current_app.logger.warning("[flux-tyler] ✗ Token %s: nieważny (HTTP %d)",
+                logger.warning("[flux-tyler] ✗ Token %s: nieważny (HTTP %d)",
                                            name, resp.status_code)
             elif resp.status_code in (503, 529):
-                current_app.logger.warning("[flux-tyler] ⚠ Token %s: przeciążony (HTTP %d)",
+                logger.warning("[flux-tyler] ⚠ Token %s: przeciążony (HTTP %d)",
                                            name, resp.status_code)
             else:
-                current_app.logger.warning("[flux-tyler] ✗ Token %s: HTTP %d: %s",
+                logger.warning("[flux-tyler] ✗ Token %s: HTTP %d: %s",
                                            name, resp.status_code, resp.text[:100])
 
         except requests.exceptions.Timeout:
-            current_app.logger.warning("[flux-tyler] ⏱ Token %s: timeout (%ds)", name, HF_TIMEOUT)
+            logger.warning("[flux-tyler] ⏱ Token %s: timeout (%ds)", name, HF_TIMEOUT)
         except requests.exceptions.ConnectionError as e:
-            current_app.logger.warning("[flux-tyler] 🔌 Token %s: connection error: %s", name, str(e)[:80])
+            logger.warning("[flux-tyler] 🔌 Token %s: connection error: %s", name, str(e)[:80])
         except Exception as e:
-            current_app.logger.warning("[flux-tyler] ❌ Token %s: wyjątek: %s", name, str(e)[:80])
+            logger.warning("[flux-tyler] ❌ Token %s: wyjątek: %s", name, str(e)[:80])
 
-    current_app.logger.error("[flux-tyler] Wszystkie tokeny HF zawiodły dla panelu %d", panel_index)
+    logger.error("[flux-tyler] Wszystkie tokeny HF zawiodły dla panelu %d", panel_index)
     return None
 
 
@@ -1677,11 +1701,11 @@ def _generate_raw_email_image(body: str) -> dict | None:
     # Surowy prompt — tylko treść emaila, żadnego AI
     raw_prompt = body.strip()[:400]
 
-    current_app.logger.info("[raw-img] Generuję obrazek z surowej treści emaila (%.80s...)", raw_prompt)
+    logger.info("[raw-img] Generuję obrazek z surowej treści emaila (%.80s...)", raw_prompt)
 
     img = _generate_flux_image(raw_prompt, panel_index=97)
     if not img or not img.get("base64"):
-        current_app.logger.warning("[raw-img] Brak obrazka z surowej treści")
+        logger.warning("[raw-img] Brak obrazka z surowej treści")
         return None
 
     try:
@@ -1703,7 +1727,7 @@ def _generate_raw_email_image(body: str) -> dict | None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"tyler_raw_email_{ts}.jpg"
 
-        current_app.logger.info("[raw-img] OK: %s (%dKB)", filename, len(buf.getvalue()) // 1024)
+        logger.info("[raw-img] OK: %s (%dKB)", filename, len(buf.getvalue()) // 1024)
 
         return {
             "base64": jpg_b64,
@@ -1713,7 +1737,7 @@ def _generate_raw_email_image(body: str) -> dict | None:
         }
 
     except Exception as e:
-        current_app.logger.warning("[raw-img] Błąd konwersji: %s", e)
+        logger.warning("[raw-img] Błąd konwersji: %s", e)
         return img
 
 
@@ -1729,18 +1753,16 @@ def _generate_triptych(
     Jeśli HF_TOKEN nie działa → panel pomijany, zwracamy ile wygenerowano.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from flask import current_app as flask_app
 
     if session_vars is None:
         session_vars = {}
 
-    app_obj = flask_app._get_current_object()
     style_config = _load_style_config() or {}
     panel_rules  = _extract_tyler_rules(response_text)
 
     # Fallback: brak zasad → 1 panel z wytycznych JSON
     if not any(panel_rules):
-        current_app.logger.warning(
+        logger.warning(
             "[zwykly-img] Brak zasad Tylera — fallback: 1 panel z wytycznych JSON"
         )
         w = _load_panel_wytyczne()
@@ -1771,22 +1793,21 @@ def _generate_triptych(
         if not rule_text:
             return panel_idx, None, None, None, "(brak zasady)"
 
-        with app_obj.app_context():
-            flux_prompt, caption, used_vars = _generate_panel_prompt_from_rule(
-                panel_index=panel_idx,
-                rule_text=rule_text,
-                style_config=style_config,
-                body=body,
-                session_vars=session_vars,
-            )
-            image = _generate_flux_image(flux_prompt, panel_index=panel_idx)
-            if image:
-                image = _png_to_jpg(image, panel_index=panel_idx)
-                image = _add_text_below_image(image, caption, panel_idx)
-            return panel_idx, image, flux_prompt, used_vars, caption
+        flux_prompt, caption, used_vars = _generate_panel_prompt_from_rule(
+            panel_index=panel_idx,
+            rule_text=rule_text,
+            style_config=style_config,
+            body=body,
+            session_vars=session_vars,
+        )
+        image = _generate_flux_image(flux_prompt, panel_index=panel_idx)
+        if image:
+            image = _png_to_jpg(image, panel_index=panel_idx)
+            image = _add_text_below_image(image, caption, panel_idx)
+        return panel_idx, image, flux_prompt, used_vars, caption
 
     results = {}
-    current_app.logger.info("[zwykly-img] Generuję 7 paneli równolegle")
+    logger.info("[zwykly-img] Generuję 7 paneli równolegle")
 
     with ThreadPoolExecutor(max_workers=7) as ex:
         futures = {ex.submit(_gen_panel, i): i for i in range(1, 8)}
@@ -1795,12 +1816,12 @@ def _generate_triptych(
                 idx, img, prompt, uvars, caption = fut.result(timeout=120)
                 results[idx] = (img, prompt, uvars, caption)
                 if img:
-                    current_app.logger.info("[zwykly-img] Panel %d/7 OK", idx)
+                    logger.info("[zwykly-img] Panel %d/7 OK", idx)
                 else:
-                    current_app.logger.warning("[zwykly-img] Panel %d/7 brak obrazka (HF limit lub brak zasady)", idx)
+                    logger.warning("[zwykly-img] Panel %d/7 brak obrazka (HF limit lub brak zasady)", idx)
             except Exception as e:
                 i = futures[fut]
-                current_app.logger.error("[zwykly-img] Panel %d/7 błąd: %s", i, e)
+                logger.error("[zwykly-img] Panel %d/7 błąd: %s", i, e)
                 results[i] = (None, "", [], f"Zasada {i}")
 
     # Złóż w kolejności 1-7
@@ -1819,7 +1840,7 @@ def _generate_triptych(
         if img:
             images.append(img)
 
-    current_app.logger.info("[zwykly-img] Wygenerowano %d/7 paneli", len(images))
+    logger.info("[zwykly-img] Wygenerowano %d/7 paneli", len(images))
     return images, panel_prompts, panel_assignments
 
 
@@ -2032,7 +2053,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
         with open(ICON_FLUX_JSON_PATH, encoding="utf-8") as f:
             icon_cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[icon-flux] Brak zwykly_icon_flux.json: %s", e)
+        logger.warning("[icon-flux] Brak zwykly_icon_flux.json: %s", e)
         icon_cfg = {}
 
     style_base = icon_cfg.get("style_base", "minimalist black ink sketch, Fight Club zine style")
@@ -2042,27 +2063,15 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
 
     icon_prompt = None
     try:
-        groq_key = os.getenv("API_KEY_GROQ", "")
-        if groq_key:
-            headers = {
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": GROQ_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_groq},
-                    {"role": "user", "content": f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}"},
-                ],
-                "max_tokens": 150,
-                "temperature": 0.7,
-            }
-            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
-            if resp.status_code == 200:
-                icon_prompt = resp.json()["choices"][0]["message"]["content"].strip()
-                current_app.logger.info("[icon-flux] Groq prompt: %.100s", icon_prompt)
+        icon_prompt = _call_groq(
+            system_groq,
+            f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}",
+            max_tokens=150,
+        )
+        if icon_prompt:
+            logger.info("[icon-flux] Groq prompt: %.100s", icon_prompt)
     except Exception as e:
-        current_app.logger.warning("[icon-flux] Groq błąd: %s", e)
+        logger.warning("[icon-flux] Groq błąd: %s", e)
 
     if not icon_prompt:
         icon_prompt = call_deepseek(
@@ -2074,10 +2083,10 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
 
     if not icon_prompt or len(icon_prompt.strip()) < 10:
         icon_prompt = fallbacks.get(emotion_key, fallbacks.get("zlosc", style_base))
-        current_app.logger.warning("[icon-flux] Używam fallback promptu dla emocji: %s", emotion_key)
+        logger.warning("[icon-flux] Używam fallback promptu dla emocji: %s", emotion_key)
 
     full_prompt = f"{icon_prompt.strip()}, {style_base}"
-    current_app.logger.info("[icon-flux] Pełny prompt: %.150s", full_prompt)
+    logger.info("[icon-flux] Pełny prompt: %.150s", full_prompt)
 
     img = _generate_flux_image(full_prompt, panel_index=99)
     if img and img.get("base64"):
@@ -2090,7 +2099,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
             pil.save(buf, format="PNG", optimize=True)
             return base64.b64encode(buf.getvalue()).decode("ascii")
         except Exception as e:
-            current_app.logger.warning("[icon-flux] Błąd resize: %s — zwracam oryginał", e)
+            logger.warning("[icon-flux] Błąd resize: %s — zwracam oryginał", e)
             return img["base64"]
     return None
 
@@ -2104,7 +2113,7 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
         with open(CV_CONTENT_JSON_PATH, encoding="utf-8") as f:
             cv_cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[cv] Brak zwykly_cv_content.json: %s", e)
+        logger.warning("[cv] Brak zwykly_cv_content.json: %s", e)
         cv_cfg = {}
 
     system_msg = cv_cfg.get("system", "Generuj prześmiewcze CV w stylu Tylera Durdena. Zwróć TYLKO JSON.")
@@ -2126,7 +2135,7 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
     raw, _ = _call_ai_with_fallback(system_msg, user_msg, max_tokens=2000)
 
     if not raw:
-        current_app.logger.warning("[cv] Brak odpowiedzi od AI")
+        logger.warning("[cv] Brak odpowiedzi od AI")
         return None
 
     try:
@@ -2136,10 +2145,10 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
         cv_data = json.loads(clean.strip())
         if not isinstance(cv_data, dict):
             raise ValueError(f"[cv] Oczekiwano dict, dostałem {type(cv_data).__name__}")
-        current_app.logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
+        logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
         return cv_data
     except json.JSONDecodeError as e:
-        current_app.logger.warning("[cv] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[cv] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
 
@@ -2153,7 +2162,7 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
         with open(CV_PHOTO_FLUX_PATH, encoding="utf-8") as f:
             photo_cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[cv-photo] Brak zwykly_cv_photo_flux.json: %s", e)
+        logger.warning("[cv-photo] Brak zwykly_cv_photo_flux.json: %s", e)
         photo_cfg = {}
 
     system_groq = photo_cfg.get("system_for_groq", "Generate a FLUX portrait prompt for a CV photo.")
@@ -2173,26 +2182,9 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
 
     photo_prompt = None
     try:
-        groq_key = os.getenv("API_KEY_GROQ", "")
-        if groq_key:
-            headers = {
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": GROQ_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_groq},
-                    {"role": "user", "content": user_msg},
-                ],
-                "max_tokens": 120,
-                "temperature": 0.7,
-            }
-            resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=20)
-            if resp.status_code == 200:
-                photo_prompt = resp.json()["choices"][0]["message"]["content"].strip()
+        photo_prompt = _call_groq(system_groq, user_msg, max_tokens=120)
     except Exception as e:
-        current_app.logger.warning("[cv-photo] Groq błąd: %s", e)
+        logger.warning("[cv-photo] Groq błąd: %s", e)
 
     if not photo_prompt:
         photo_prompt = call_deepseek(system_groq, user_msg, MODEL_TYLER, timeout=20)
@@ -2201,7 +2193,7 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
         photo_prompt = f"Professional CV headshot portrait, {style_base}"
 
     full_prompt = f"{photo_prompt.strip()}, {style_base}"
-    current_app.logger.info("[cv-photo] Prompt: %.150s", full_prompt)
+    logger.info("[cv-photo] Prompt: %.150s", full_prompt)
 
     img = _generate_flux_image(full_prompt, panel_index=98)
     if img and img.get("base64"):
@@ -2219,7 +2211,7 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
             pil.save(buf, format="PNG")
             return base64.b64encode(buf.getvalue()).decode("ascii")
         except Exception as e:
-            current_app.logger.warning("[cv-photo] Błąd resize: %s", e)
+            logger.warning("[cv-photo] Błąd resize: %s", e)
             return img["base64"]
     return None
 
@@ -2238,11 +2230,11 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
         from reportlab.pdfbase.ttfonts import TTFont
         from reportlab.lib.utils import ImageReader
     except ImportError as e:
-        current_app.logger.error("[cv-pdf] Brak reportlab: %s", e)
+        logger.error("[cv-pdf] Brak reportlab: %s", e)
         return None
 
     FN, FB = _register_fonts()
-    current_app.logger.info("[cv-pdf] Czcionki: FN=%s FB=%s", FN, FB)
+    logger.info("[cv-pdf] Czcionki: FN=%s FB=%s", FN, FB)
 
     buf = io.BytesIO()
     W, H = A4
@@ -2318,7 +2310,7 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
                 mask="auto",
             )
         except Exception as e:
-            current_app.logger.warning("[cv-pdf] Błąd wklejania zdjęcia: %s", e)
+            logger.warning("[cv-pdf] Błąd wklejania zdjęcia: %s", e)
 
     c.setStrokeColorRGB(*RED)
     c.setLineWidth(2)
@@ -2531,7 +2523,7 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
 
     c.save()
     pdf_bytes = buf.getvalue()
-    current_app.logger.info("[cv-pdf] PDF wygenerowany: %d B", len(pdf_bytes))
+    logger.info("[cv-pdf] PDF wygenerowany: %d B", len(pdf_bytes))
     return base64.b64encode(pdf_bytes).decode("ascii")
 
 
@@ -2563,7 +2555,7 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
     raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=3000)
 
     if not raw or not raw.strip():
-        current_app.logger.warning("[zwykly] Brak wyjaśnienia od AI")
+        logger.warning("[zwykly] Brak wyjaśnienia od AI")
         return None
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2580,7 +2572,7 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
     content = header + raw.strip()
     b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
 
-    current_app.logger.info("[zwykly] Wyjaśnienie wygenerowane: %d znaków", len(content))
+    logger.info("[zwykly] Wyjaśnienie wygenerowane: %d znaków", len(content))
 
     return {
         "base64": b64,
@@ -2594,18 +2586,25 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_groq_keys() -> list:
-    """Zbiera wszystkie klucze Groq z env w kolejności."""
+    """
+    Zbiera wszystkie klucze Groq z env.
+    Obsługuje format: API_KEY_GROQ, API_KEY_GROQ_01..API_KEY_GROQ_09
+    (dokładnie taki jak w Render env).
+    """
     keys = []
+    # Klucz bazowy
     k = os.getenv("API_KEY_GROQ", "").strip()
     if k:
         keys.append(("API_KEY_GROQ", k))
+    # Klucze _01 do _09 (format Render)
     for i in range(1, 10):
         name = f"API_KEY_GROQ_{i:02d}"
         k = os.getenv(name, "").strip()
         if k:
             keys.append((name, k))
-    for i in range(1, 21):
-        name = f"API_KEY_GROQ{i}"
+    # Klucze _10 do _20 na przyszłość (ten sam format z zerem)
+    for i in range(10, 21):
+        name = f"API_KEY_GROQ_{i}"
         k = os.getenv(name, "").strip()
         if k:
             keys.append((name, k))
@@ -2631,10 +2630,10 @@ def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> 
         elif resp.status_code == 429:
             return "RATE_LIMIT"
         else:
-            current_app.logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:100])
+            logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:100])
             return None
     except Exception as e:
-        current_app.logger.warning("[groq] Wyjątek: %s", str(e)[:80])
+        logger.warning("[groq] Wyjątek: %s", str(e)[:80])
         return None
 
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -2651,7 +2650,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         with open(ANKIETA_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[ankieta] Brak JSON: %s", e)
+        logger.warning("[ankieta] Brak JSON: %s", e)
         return None, None
 
     system_msg = cfg.get("system", "")
@@ -2663,24 +2662,17 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = None
-    for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 4000)
-        if result and result != "RATE_LIMIT":
-            raw = result
-            current_app.logger.info("[ankieta] Groq OK klucz=%s", name)
-            break
-        elif result == "RATE_LIMIT":
-            continue
-
-    if not raw:
+    raw = _call_groq(system_msg, user_msg, max_tokens=4000)
+    if raw:
+        logger.info("[ankieta] Groq OK")
+    else:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
 
     if not raw:
-        current_app.logger.warning("[ankieta] Brak danych od AI")
+        logger.warning("[ankieta] Brak danych od AI")
         return None, None
 
-    current_app.logger.info("[ankieta] raw AI (pierwsze 300 znaków): %.300s", raw)
+    logger.info("[ankieta] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
@@ -2695,17 +2687,17 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
             last_bracket = clean.rfind('"}')
             if last_bracket > 0:
                 clean = clean[:last_bracket + 2] + ']}'  # zamknij pytania i root
-                current_app.logger.warning("[ankieta] JSON ucięty — próba naprawy")
+                logger.warning("[ankieta] JSON ucięty — próba naprawy")
                 data = json.loads(clean)
             else:
                 raise
         if not isinstance(data, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
-            current_app.logger.warning("[ankieta] JSON OK ale brak pytań — raw: %.200s", raw)
+            logger.warning("[ankieta] JSON OK ale brak pytań — raw: %.200s", raw)
             return None, None
     except Exception as e:
-        current_app.logger.warning("[ankieta] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[ankieta] Błąd JSON: %s | raw: %.200s", e, raw)
         return None, None
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2985,11 +2977,11 @@ function sprawdz() {{
             "content_type": "application/pdf",
             "filename": f"ankieta_{ts}.pdf",
         }
-        current_app.logger.info("[ankieta] OK AcroForm: %d pytan", len(pytania[:5]))
+        logger.info("[ankieta] OK AcroForm: %d pytan", len(pytania[:5]))
         return html_dict, pdf_dict
 
     except Exception as e:
-        current_app.logger.error("[ankieta] Błąd PDF: %s", e)
+        logger.error("[ankieta] Błąd PDF: %s", e)
         return html_dict, None
 
 
@@ -3003,7 +2995,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         with open(HOROSKOP_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[horoskop] Brak JSON: %s", e)
+        logger.warning("[horoskop] Brak JSON: %s", e)
         return None
 
     # Oblicz daty
@@ -3022,21 +3014,14 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
     )
 
-    raw = None
-    for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 2500)
-        if result and result != "RATE_LIMIT":
-            raw = result
-            break
-        elif result == "RATE_LIMIT":
-            continue
+    raw = _call_groq(system_msg, user_msg, max_tokens=2500)
 
     if not raw:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
         return None
 
-    current_app.logger.info("[horoskop] raw AI (pierwsze 300 znaków): %.300s", raw)
+    logger.info("[horoskop] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
@@ -3054,18 +3039,18 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         for wrong, right in KEY_MAP_HOROSKOP.items():
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
-                current_app.logger.info("[horoskop] znormalizowano '%s' → '%s'", wrong, right)
+                logger.info("[horoskop] znormalizowano '%s' → '%s'", wrong, right)
         if not data.get("dni"):
             for v in data.values():
                 if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
                     data["dni"] = v
-                    current_app.logger.info("[horoskop] wyciągnięto dni z zagnieżdżonej listy")
+                    logger.info("[horoskop] wyciągnięto dni z zagnieżdżonej listy")
                     break
         if not data.get("dni"):
-            current_app.logger.warning("[horoskop] JSON OK ale brak dni — raw: %.200s", raw)
+            logger.warning("[horoskop] JSON OK ale brak dni — raw: %.200s", raw)
             return None
     except Exception as e:
-        current_app.logger.warning("[horoskop] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[horoskop] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
     try:
@@ -3194,11 +3179,11 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        current_app.logger.info("[horoskop] OK")
+        logger.info("[horoskop] OK")
         return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"horoskop_{ts}.pdf"}
 
     except Exception as e:
-        current_app.logger.error("[horoskop] Błąd PDF: %s", e)
+        logger.error("[horoskop] Błąd PDF: %s", e)
         return None
 
 
@@ -3212,7 +3197,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         with open(KARTA_RPG_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[karta-rpg] Brak JSON: %s", e)
+        logger.warning("[karta-rpg] Brak JSON: %s", e)
         return None
 
     system_msg = cfg.get("system", "")
@@ -3224,21 +3209,14 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
 
-    raw = None
-    for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 2000)
-        if result and result != "RATE_LIMIT":
-            raw = result
-            break
-        elif result == "RATE_LIMIT":
-            continue
+    raw = _call_groq(system_msg, user_msg, max_tokens=2000)
     if not raw:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[karta-rpg] Brak odpowiedzi od AI")
+        logger.warning("[karta-rpg] Brak odpowiedzi od AI")
         return None
 
-    current_app.logger.info("[karta-rpg] raw AI (pierwsze 300 znaków): %.300s", raw)
+    logger.info("[karta-rpg] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
@@ -3263,12 +3241,12 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         for wrong, right in KEY_MAP_RPG.items():
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
-                current_app.logger.info("[karta-rpg] znormalizowano '%s' → '%s'", wrong, right)
+                logger.info("[karta-rpg] znormalizowano '%s' → '%s'", wrong, right)
         if not data.get("nazwa_postaci") and not data.get("statystyki"):
-            current_app.logger.warning("[karta-rpg] JSON pusty — raw: %.200s", raw)
+            logger.warning("[karta-rpg] JSON pusty — raw: %.200s", raw)
             return None
     except Exception as e:
-        current_app.logger.warning("[karta-rpg] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[karta-rpg] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
     try:
@@ -3430,11 +3408,11 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        current_app.logger.info("[karta-rpg] OK")
+        logger.info("[karta-rpg] OK")
         return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"karta_rpg_{ts}.pdf"}
 
     except Exception as e:
-        current_app.logger.error("[karta-rpg] Błąd PDF: %s", e)
+        logger.error("[karta-rpg] Błąd PDF: %s", e)
         return None
 
 
@@ -3449,7 +3427,7 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
         with open(PSYCHIATRYCZNY_OBRAZEK_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[psych-photo] Brak zwykly_psychiatryczny_obrazek.json: %s", e)
+        logger.warning("[psych-photo] Brak zwykly_psychiatryczny_obrazek.json: %s", e)
         return None
 
     prompt_template = cfg.get("prompt_template", "")
@@ -3478,17 +3456,17 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
     prompt = prompt.replace("{{GENDER}}", gender_desc)
     prompt = prompt.replace("{{NAME}}", sender_name or "unknown")
 
-    current_app.logger.info(
+    logger.info(
         "[psych-photo] Prompt (pierwsze 200 znaków): %.200s", prompt
     )
-    current_app.logger.info(
+    logger.info(
         "[psych-photo] Obiekty: %s | Płeć: %s", objects_str, gender
     )
 
     # ── Wywołaj FLUX z parametrami z JSON ────────────────────────────────────
     tokens = _get_hf_tokens()
     if not tokens:
-        current_app.logger.error("[psych-photo] Brak tokenów HF")
+        logger.error("[psych-photo] Brak tokenów HF")
         return None
 
     seed = random.randint(0, 2 ** 32 - 1)
@@ -3513,17 +3491,17 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
             resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
             if resp.status_code == 200:
                 raw_img = resp.content
-                current_app.logger.info("[psych-photo] FLUX OK token=%s (%d B)", name, len(raw_img))
+                logger.info("[psych-photo] FLUX OK token=%s (%d B)", name, len(raw_img))
                 break
             elif resp.status_code == 429:
-                current_app.logger.warning("[psych-photo] 429 token=%s → następny", name)
+                logger.warning("[psych-photo] 429 token=%s → następny", name)
             else:
-                current_app.logger.warning("[psych-photo] HTTP %d token=%s", resp.status_code, name)
+                logger.warning("[psych-photo] HTTP %d token=%s", resp.status_code, name)
         except Exception as e:
-            current_app.logger.warning("[psych-photo] Wyjątek token=%s: %s", name, e)
+            logger.warning("[psych-photo] Wyjątek token=%s: %s", name, e)
 
     if not raw_img:
-        current_app.logger.error("[psych-photo] Wszystkie tokeny HF zawiodły")
+        logger.error("[psych-photo] Wszystkie tokeny HF zawiodły")
         return None
 
     # ── Konwertuj PNG → JPG, zachowaj proporcje polaroid ─────────────────────
@@ -3533,10 +3511,10 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
         buf = io.BytesIO()
         pil.save(buf, format="JPEG", quality=92, optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        current_app.logger.info("[psych-photo] Konwersja JPG OK (%dKB)", len(buf.getvalue()) // 1024)
+        logger.info("[psych-photo] Konwersja JPG OK (%dKB)", len(buf.getvalue()) // 1024)
         return b64
     except Exception as e:
-        current_app.logger.warning("[psych-photo] Błąd konwersji: %s — zwracam PNG b64", e)
+        logger.warning("[psych-photo] Błąd konwersji: %s — zwracam PNG b64", e)
         return base64.b64encode(raw_img).decode("ascii")
 
 
@@ -3563,14 +3541,14 @@ def _build_raport_psychiatryczny(
         from docx.oxml.ns import qn
         from docx.oxml import OxmlElement
     except ImportError as e:
-        current_app.logger.error("[raport] Brak python-docx: %s", e)
+        logger.error("[raport] Brak python-docx: %s", e)
         return None
 
     try:
         with open(RAPORT_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[raport] Brak JSON: %s", e)
+        logger.warning("[raport] Brak JSON: %s", e)
         return None
 
     system_msg = cfg.get("system", "")
@@ -3582,22 +3560,16 @@ def _build_raport_psychiatryczny(
     context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
     context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
-    # DeepSeek PIERWSZY dla raportu
+    # DeepSeek PIERWSZY dla raportu, Groq fallback równolegle
     raw = call_deepseek(system_msg, context, MODEL_TYLER)
     if not raw:
-        for name, key in _get_groq_keys():
-            result = _call_groq_single(key, system_msg, context, 3500)
-            if result and result != "RATE_LIMIT":
-                raw = result
-                break
-            elif result == "RATE_LIMIT":
-                continue
+        raw = _call_groq(system_msg, context, max_tokens=3500)
 
     if not raw:
-        current_app.logger.warning("[raport] Brak odpowiedzi od AI")
+        logger.warning("[raport] Brak odpowiedzi od AI")
         return None
 
-    current_app.logger.info("[raport] raw AI (pierwsze 300 znaków): %.300s", raw)
+    logger.info("[raport] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
@@ -3631,10 +3603,10 @@ def _build_raport_psychiatryczny(
             if found_flat:
                 data["dane_pacjenta"] = found_flat
         if not data.get("diagnoza_wstepna") and not data.get("dane_pacjenta"):
-            current_app.logger.warning("[raport] JSON pusty — raw: %.200s", raw)
+            logger.warning("[raport] JSON pusty — raw: %.200s", raw)
             return None
     except Exception as e:
-        current_app.logger.warning("[raport] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[raport] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
     # ── Buduj DOCX ────────────────────────────────────────────────────────────
@@ -3814,13 +3786,13 @@ def _build_raport_psychiatryczny(
                 p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run_img = p_img.add_run()
                 run_img.add_picture(photo_stream, width=Cm(12))
-                current_app.logger.info("[raport] Zdjęcie wklejone do DOCX OK")
+                logger.info("[raport] Zdjęcie wklejone do DOCX OK")
             except Exception as e:
-                current_app.logger.warning("[raport] Błąd wklejania zdjęcia do DOCX: %s", e)
+                logger.warning("[raport] Błąd wklejania zdjęcia do DOCX: %s", e)
                 p_no_img = doc.add_paragraph("[Zdjęcie niedostępne]")
                 p_no_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
         else:
-            current_app.logger.warning("[raport] Brak zdjęcia psychiatrycznego — pomijam")
+            logger.warning("[raport] Brak zdjęcia psychiatrycznego — pomijam")
             p_no_img = doc.add_paragraph("[Zdjęcie niewygenertowane — błąd FLUX]")
             p_no_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -3829,7 +3801,7 @@ def _build_raport_psychiatryczny(
         doc.save(buf)
         docx_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        current_app.logger.info("[raport] DOCX OK")
+        logger.info("[raport] DOCX OK")
         return {
             "base64": docx_b64,
             "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -3837,7 +3809,7 @@ def _build_raport_psychiatryczny(
         }
 
     except Exception as e:
-        current_app.logger.error("[raport] Błąd DOCX: %s", e)
+        logger.error("[raport] Błąd DOCX: %s", e)
         return None
 
 
@@ -3851,7 +3823,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         with open(PLAKAT_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[plakat] Brak JSON: %s", e)
+        logger.warning("[plakat] Brak JSON: %s", e)
         return None
 
     system_msg = cfg.get("system", "")
@@ -3862,21 +3834,14 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj w 'plakat'."
     )
 
-    raw = None
-    for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 800)
-        if result and result != "RATE_LIMIT":
-            raw = result
-            break
-        elif result == "RATE_LIMIT":
-            continue
+    raw = _call_groq(system_msg, user_msg, max_tokens=800)
     if not raw:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[plakat] Brak odpowiedzi od AI")
+        logger.warning("[plakat] Brak odpowiedzi od AI")
         return None
 
-    current_app.logger.info("[plakat] raw AI (pierwsze 300 znaków): %.300s", raw)
+    logger.info("[plakat] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
@@ -3889,7 +3854,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
             raise ValueError(f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("glowne_zdanie") and isinstance(data.get("plakat"), dict):
             data.update(data.pop("plakat"))
-            current_app.logger.info("[plakat] wyciągnięto dane z zagnieżdżonego 'plakat'")
+            logger.info("[plakat] wyciągnięto dane z zagnieżdżonego 'plakat'")
         KEY_MAP_PLAKAT = {
             "zdanie": "glowne_zdanie", "main_sentence": "glowne_zdanie",
             "sentence": "glowne_zdanie", "tekst": "glowne_zdanie", "text": "glowne_zdanie",
@@ -3903,12 +3868,12 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         for wrong, right in KEY_MAP_PLAKAT.items():
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
-                current_app.logger.info("[plakat] znormalizowano '%s' → '%s'", wrong, right)
+                logger.info("[plakat] znormalizowano '%s' → '%s'", wrong, right)
         if not data.get("glowne_zdanie"):
-            current_app.logger.warning("[plakat] JSON bez glowne_zdanie — raw: %.200s", raw)
+            logger.warning("[plakat] JSON bez glowne_zdanie — raw: %.200s", raw)
             return None
     except Exception as e:
-        current_app.logger.warning("[plakat] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[plakat] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
     glowne = data.get("glowne_zdanie", "Nie jesteś wyjątkowy.")
@@ -4020,7 +3985,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
 
     svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    current_app.logger.info("[plakat] OK")
+    logger.info("[plakat] OK")
     return {"base64": svg_b64, "content_type": "image/svg+xml", "filename": f"plakat_{ts}.svg"}
 
 
@@ -4034,7 +3999,7 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         with open(GRA_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
     except Exception as e:
-        current_app.logger.warning("[gra] Brak JSON: %s", e)
+        logger.warning("[gra] Brak JSON: %s", e)
         return None
 
     system_msg = cfg.get("system", "")
@@ -4046,21 +4011,14 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = None
-    for name, key in _get_groq_keys():
-        result = _call_groq_single(key, system_msg, user_msg, 3000)
-        if result and result != "RATE_LIMIT":
-            raw = result
-            break
-        elif result == "RATE_LIMIT":
-            continue
+    raw = _call_groq(system_msg, user_msg, max_tokens=3000)
     if not raw:
         raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[gra] Brak odpowiedzi od AI")
+        logger.warning("[gra] Brak odpowiedzi od AI")
         return None
 
-    current_app.logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
+    logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
         clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
@@ -4072,10 +4030,10 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         if not isinstance(data, dict):
             raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
-            current_app.logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
+            logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
             return None
     except Exception as e:
-        current_app.logger.warning("[gra] Błąd JSON: %s | raw: %.200s", e, raw)
+        logger.warning("[gra] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
     tytul = data.get("tytul_gry", "Gra Tylera Durdena")
@@ -4232,7 +4190,7 @@ function pokazWynik() {{
 
     html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    current_app.logger.info("[gra] OK: %d pytań", len(pytania))
+    logger.info("[gra] OK: %d pytań", len(pytania))
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
 
@@ -4241,7 +4199,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     from flask import current_app as flask_app
     import re
 
-    current_app.logger.info("[zwykly] START - Optymalizacja Równoległa")
+    logger.info("[zwykly] START - Optymalizacja Równoległa")
     app_obj = flask_app._get_current_object()
 
     # --- INICJALIZACJA (Fix dla UnboundLocalError) ---
