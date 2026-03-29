@@ -4237,315 +4237,133 @@ function pokazWynik() {{
 
 
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "") -> dict:
-    """
-    Buduje sekcję 'zwykly' odpowiedzi.
-
-    Równoległość (ThreadPoolExecutor z app_context):
-      - Faza A: tryptyk (7 paneli FLUX naraz) + CV treść + raport + emotka FLUX — równolegle
-      - Faza B: ankieta / horoskop / karta / plakat / gra — równolegle
-      - Jeśli HF_TOKEN nie działa → FLUX zwraca None, reszta idzie dalej normalnie
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import ThreadPoolExecutor
     from flask import current_app as flask_app
+    import re
 
-    current_app.logger.info("[zwykly] START build_zwykly_section file=%s", __file__)
+    current_app.logger.info("[zwykly] START - Optymalizacja Równoległa")
     app_obj = flask_app._get_current_object()
 
-    # ── 0. Rzeczowniki przez Groq ─────────────────────────────────────────────
-    nouns_dict = _extract_nouns_groq(body)
-    current_app.logger.info("[zwykly] rzeczowniki Groq: %d słów", len(nouns_dict))
+    # --- INICJALIZACJA (Fix dla UnboundLocalError) ---
+    res_text = emotion_key = provider = None
+    nouns_dict = {}
+    png_b64 = cv_pdf_b64 = raport_pdf = psych_photo_1 = psych_photo_2 = log_psych = None
+    triptych_images = []
+    ankieta_html = ankieta_pdf = horoskop_pdf = karta_rpg_pdf = plakat_svg = gra_html = None
+    explanation_txt = debug_txt = ""
 
-    # ── 1. Załaduj i zrenderuj prompt ─────────────────────────────────────────
-    prompt_data = _load_prompt_json()
-    prompt_str  = _render_prompt(prompt_data, body, previous_body, sender_name=sender_name)
-    system_msg  = prompt_data.get("system", "Odpowiadaj wylacznie w formacie JSON.")
-    user_msg    = prompt_str
+    # ── KROK 1: Równoległe pozyskanie bazy (Tekst AI + Rzeczowniki) ──────────────
+    # To są jedyne rzeczy, których potrzebujemy, by ruszyć z resztą świata
+    def _get_ai_main():
+        with app_obj.app_context():
+            p_data = _load_prompt_json()
+            p_str = _render_prompt(p_data, body, previous_body, sender_name=sender_name)
+            raw, prov = _call_ai_with_fallback(p_data.get("system", ""), p_str, max_tokens=6000)
+            txt, emo = _parse_response(raw)
+            return txt, emo, prov, p_data, p_str
 
-    # ── 2. Wywołaj model (Groq → DeepSeek) ────────────────────────────────────
-    res_raw, provider = _call_ai_with_fallback(system_msg, user_msg, max_tokens=6000)
-    current_app.logger.info("[zwykly] Provider uzyty: %s", provider)
-
-    # ── 3. Parsuj odpowiedź ────────────────────────────────────────────────────
-    res_text, emotion_key = _parse_response(res_raw)
-
-    # ── 3b. Retry z DeepSeek jeśli odpowiedź niekompletna ─────────────────────
-    if not res_text and provider == "groq":
-        current_app.logger.warning("[zwykly] Groq zwrocil niekompletna odpowiedz — retry DeepSeek")
-        res_raw_retry = call_deepseek(system_msg, user_msg, MODEL_TYLER)
-        if res_raw_retry:
-            res_text, emotion_key = _parse_response(res_raw_retry)
-            if res_text:
-                provider  = "deepseek-retry"
-                res_raw   = res_raw_retry
-                current_app.logger.info("[zwykly] DeepSeek retry OK")
+    with ThreadPoolExecutor(max_workers=2) as setup_ex:
+        f_nouns = setup_ex.submit(_extract_nouns_groq, body)
+        f_main  = setup_ex.submit(_get_ai_main)
+        
+        nouns_dict = f_nouns.result()
+        res_text, emotion_key, provider, prompt_data, user_msg = f_main.result()
 
     if not res_text:
-        res_text = (
-            "### SOKRATES\n\nPrzepraszam, tym razem slowa do mnie nie przyszly.\n\n"
-            "— Sokrates\n\n---\n\n### TYLER DURDEN\n\n"
-            "System zawiodl. Ale to i tak lepiej — maszyny nie powinny za nas myslec.\n\n"
-            "— Tyler Durden"
-        )
+        res_text = "### TYLER DURDEN\n\nSystem zawiódł..."
 
-    # ── 4. Buduj session_vars ──────────────────────────────────────────────────
-    session_vars = _build_session_vars(
-        body=body,
-        sender_email=sender_email,
-        sender_name=sender_name,
-        previous_body=previous_body or "",
-        res_text=res_text,
-        emotion_key=emotion_key,
-        provider=provider,
-        nouns_dict=nouns_dict,
-    )
-    for k, v in nouns_dict.items():
-        session_vars[k.upper()] = v
-    current_app.logger.info(
-        "[zwykly] session_vars: %d zmiennych (TEXT_*=%d, SOKRATES_*=%d)",
-        len(session_vars),
-        len([k for k in session_vars if k.startswith("TEXT_")]),
-        len([k for k in session_vars if k.startswith("SOKRATES_")]),
-    )
+    # Budujemy session_vars (potrzebne do tryptyku)
+    session_vars = _build_session_vars(body, sender_email, sender_name, previous_body or "", res_text, emotion_key, provider, nouns_dict)
+    for k, v in nouns_dict.items(): session_vars[k.upper()] = v
 
-    # ── 5. HTML reply (szybkie, bez AI) ───────────────────────────────────────
-    reply_html = build_html_reply(res_text)
+    # ── KROK 2: WIELKA PULA (Wszystko naraz!) ───────────────────────────────────
+    # Uruchamiamy wszystkie ciężkie zadania w tym samym momencie
+    with ThreadPoolExecutor(max_workers=15) as ex:
+        # Definicje zadań (wrappery z contextem)
+        def task_tryptyk():
+            with app_obj.app_context():
+                imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars)
+                raw_img = _generate_raw_email_image(body)
+                if raw_img: imgs.append(raw_img)
+                return imgs
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # FAZA A — równoległe: tryptyk FLUX + emotka FLUX + CV treść + raport
-    # ══════════════════════════════════════════════════════════════════════════
+        def task_raport():
+            with app_obj.app_context():
+                try:
+                    # build_raport wewnętrznie robi własne rundy AI
+                    return build_raport(body, previous_body or "", res_text, nouns_dict, sender_name, session_vars.get("USER_GENDER", "patient"))
+                except Exception as e:
+                    return {"log_psych": {"error": str(e)}}
 
-    # Wartości domyślne — jeśli wątek zawoła, używamy tych
-    triptych_images   = []
-    panel_prompts     = []
-    panel_assignments = []
-    png_b64           = None
-    cv_data           = None
-    cv_photo_b64      = None
-    cv_pdf_b64        = None
-    raport_pdf        = None
-    psych_photo_1     = None
-    psych_photo_2     = None
+        def task_emotka():
+            with app_obj.app_context():
+                return _generate_icon_flux(body, emotion_key) or read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
 
-    gender_for_raport = session_vars.get("USER_GENDER", "patient")
-
-    def _tryptyk():
-        with app_obj.app_context():
-            imgs, prompts, assigns = _generate_triptych(
-                res_text, prompt_data, body, session_vars=session_vars
-            )
-            # czwarty obrazek — surowa treść emaila
-            raw_img = _generate_raw_email_image(body)
-            if raw_img:
-                imgs.append(raw_img)
-            return imgs, prompts, assigns
-
-    def _emotka():
-        with app_obj.app_context():
-            b64 = _generate_icon_flux(body, emotion_key)
-            if not b64:
-                b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
-            if not b64:
-                b64 = read_file_base64(os.path.join(EMOTKI_DIR, f"{FALLBACK_EMOT}.png"))
-            return b64
-
-    def _cv_content():
-        with app_obj.app_context():
-            return _generate_cv_content(body, previous_body, sender_email)
-
-    def _raport():
-        with app_obj.app_context():
-            try:
-                return build_raport(
-                    body=body,
-                    previous_body=previous_body or "",
-                    res_text=res_text,
-                    nouns_dict=nouns_dict,
-                    sender_name=sender_name or "",
-                    gender=gender_for_raport,
-                )
-            except Exception as e:
-                current_app.logger.error("[zwykly] Błąd build_raport w wątku: %s", e)
-                return {"raport_pdf": None, "psych_photo_1": None, "psych_photo_2": None}
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        f_tryptyk  = ex.submit(_tryptyk)
-        f_emotka   = ex.submit(_emotka)
-        f_cv       = ex.submit(_cv_content)
-        f_raport   = ex.submit(_raport)
-
-        try:
-            triptych_images, panel_prompts, panel_assignments = f_tryptyk.result(timeout=200)
-            current_app.logger.info("[zwykly] Tryptyk OK: %d paneli", len(triptych_images))
-        except Exception as e:
-            current_app.logger.error("[zwykly] Tryptyk zawiódł: %s", e)
-
-        try:
-            png_b64 = f_emotka.result(timeout=60)
-            current_app.logger.info("[zwykly] Emotka OK: %s", bool(png_b64))
-        except Exception as e:
-            current_app.logger.error("[zwykly] Emotka zawiodła: %s", e)
-
-        try:
-            cv_data = f_cv.result(timeout=60)
-            current_app.logger.info("[zwykly] CV treść OK: %s", bool(cv_data))
-        except Exception as e:
-            current_app.logger.error("[zwykly] CV treść zawiodła: %s", e)
-
-        try:
-            raport_result = f_raport.result(timeout=200)
-            raport_pdf    = raport_result.get("raport_pdf")
-            psych_photo_1 = raport_result.get("psych_photo_1")
-            psych_photo_2 = raport_result.get("psych_photo_2")
-            log_psych     = raport_result.get("log_psych")
-            current_app.logger.info("[zwykly] Raport OK: %s", bool(raport_pdf))
-        except Exception as e:
-            current_app.logger.error("[zwykly] Raport zawiódł: %s", e)
-
-    # CV zdjęcie + PDF — sekwencyjnie po CV treści (zależność)
-    if cv_data:
-        try:
-            def _cv_photo():
-                with app_obj.app_context():
-                    return _generate_cv_photo(body, cv_data)
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                cv_photo_b64 = ex.submit(_cv_photo).result(timeout=60)
-        except Exception as e:
-            current_app.logger.error("[zwykly] CV zdjęcie zawiodło: %s", e)
-        try:
-            cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo_b64)
-        except Exception as e:
-            current_app.logger.error("[zwykly] CV PDF zawiodło: %s", e)
-
-    current_app.logger.info(
-        "[zwykly] Faza A: png=%s cv=%s tryptyk=%d raport=%s",
-        bool(png_b64), bool(cv_pdf_b64), len(triptych_images), bool(raport_pdf)
-    )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # FAZA B — równoległe: ankieta / horoskop / karta / plakat / gra / debug
-    # ══════════════════════════════════════════════════════════════════════════
-
-    ankieta_html  = None
-    ankieta_pdf   = None
-    horoskop_pdf  = None
-    karta_rpg_pdf = None
-    plakat_svg    = None
-    gra_html      = None
-    explanation_txt = None
-    debug_txt       = None
-
-    def _ankieta():
-        with app_obj.app_context():
-            return _build_ankieta(res_text, body)
-
-    def _horoskop():
-        with app_obj.app_context():
-            return _build_horoskop(body, res_text)
-
-    def _karta():
-        with app_obj.app_context():
-            return _build_karta_rpg(body, res_text)
-
-    def _plakat():
-        with app_obj.app_context():
-            return _build_plakat_svg(res_text, body)
-
-    def _gra():
-        with app_obj.app_context():
-            return _build_gra_html(body, res_text)
-
-    def _explanation():
-        with app_obj.app_context():
-            return _build_explanation_txt(res_text, body)
-
-    def _debug():
-        with app_obj.app_context():
-            dtxt = _build_debug_txt(
-                body=body,
-                provider=provider,
-                emotion_key=emotion_key,
-                res_raw=res_raw or "",
-                res_text=res_text,
-                triptych_images=triptych_images,
-                panel_prompts=panel_prompts,
-                system_msg=system_msg,
-                user_msg=user_msg,
-                session_vars=session_vars,
-                panel_assignments=panel_assignments,
-            )
-            if nouns_dict:
-                dtxt = _append_nouns_to_debug_txt(dtxt, nouns_dict)
-            return dtxt
-
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        fb = {
-            "ankieta":     ex.submit(_ankieta),
-            "horoskop":    ex.submit(_horoskop),
-            "karta":       ex.submit(_karta),
-            "plakat":      ex.submit(_plakat),
-            "gra":         ex.submit(_gra),
-            "explanation": ex.submit(_explanation),
-            "debug":       ex.submit(_debug),
+        # Submitujemy WSZYSTKO
+        fut = {
+            "tryptyk": ex.submit(task_tryptyk),
+            "emotka":  ex.submit(task_emotka),
+            "cv":      ex.submit(lambda: _generate_cv_content(body, previous_body, sender_email)),
+            "raport":  ex.submit(task_raport),
+            "ankieta": ex.submit(lambda: _build_ankieta(res_text, body)),
+            "horo":    ex.submit(lambda: _build_horoskop(body, res_text)),
+            "rpg":     ex.submit(lambda: _build_karta_rpg(body, res_text)),
+            "gra":     ex.submit(lambda: _build_gra_html(body, res_text)),
+            "expl":    ex.submit(lambda: _build_explanation_txt(res_text, body))
         }
-        for name, fut in fb.items():
-            try:
-                result = fut.result(timeout=90)
-                if name == "ankieta":
-                    ankieta_html, ankieta_pdf = result
-                elif name == "horoskop":
-                    horoskop_pdf = result
-                elif name == "karta":
-                    karta_rpg_pdf = result
-                elif name == "plakat":
-                    plakat_svg = result
-                elif name == "gra":
-                    gra_html = result
-                elif name == "explanation":
-                    explanation_txt = result
-                elif name == "debug":
-                    debug_txt = result
-            except Exception as e:
-                current_app.logger.error("[zwykly] Faza B '%s' zawiodła: %s", name, e)
 
-    current_app.logger.info(
-        "[zwykly] Faza B: ankieta=%s horoskop=%s karta=%s plakat=%s gra=%s",
-        bool(ankieta_html), bool(horoskop_pdf), bool(karta_rpg_pdf),
-        bool(plakat_svg), bool(gra_html)
-    )
+        # Odbieramy wyniki (z timeoutami)
+        try: triptych_images = fut["tryptyk"].result(timeout=240)
+        except: pass
 
-    # ── Zwróć wszystko ────────────────────────────────────────────────────────
-    if isinstance(cv_data, dict):
-        imie_nazwisko = cv_data.get("imie_nazwisko", "CV")
-    else:
-        imie_nazwisko = "CV"
-    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', imie_nazwisko)[:30]
+        try: png_b64 = fut["emotka"].result(timeout=60)
+        except: pass
 
+        try:
+            r_res = fut["raport"].result(timeout=250)
+            raport_pdf = r_res.get("raport_pdf")
+            psych_photo_1 = r_res.get("psych_photo_1")
+            psych_photo_2 = r_res.get("psych_photo_2")
+            log_psych = r_res.get("log_psych")
+        except: 
+            log_psych = {"error": "Timeout raportu"}
+
+        try:
+            cv_data = fut["cv"].result(timeout=60)
+            if cv_data:
+                # To jedyna sekwencja: Foto CV zależy od treści CV
+                cv_photo = _generate_cv_photo(body, cv_data)
+                cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo)
+        except: pass
+
+        # Odbiór reszty (Ankieta, Horoskop itd.)
+        try: ankieta_html, ankieta_pdf = fut["ankieta"].result(timeout=60)
+        except: pass
+        try: horoskop_pdf = fut["horo"].result(timeout=60)
+        except: pass
+        try: karta_rpg_pdf = fut["rpg"].result(timeout=60)
+        except: pass
+        try: gra_html = fut["gra"].result(timeout=60)
+        except: pass
+        try: explanation_txt = fut["expl"].result(timeout=40)
+        except: pass
+
+    # ── FINALIZACJA ────────────────────────────────────────────────────────────
+    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', sender_name)[:30] or "Pacjent"
+    
     return {
-        "reply_html": reply_html,
-        "emoticon": {
-            "base64":        png_b64,
-            "content_type":  "image/png",
-            "filename":      f"emotka_{emotion_key}.png",
-        },
-        "cv_pdf": {
-            "base64":        cv_pdf_b64,
-            "content_type":  "application/pdf",
-            "filename":      f"CV_{safe_name}_Tyler.pdf",
-        },
-        "detected_emotion": emotion_key,
-        "provider":         provider,
-        "triptych":         triptych_images,
-        "triptych_for_drive": triptych_images,
-        "debug_txt":        debug_txt,
-        "explanation_txt":  explanation_txt,
-        "ankieta_html":     ankieta_html,
-        "ankieta_pdf":      ankieta_pdf,
-        "horoskop_pdf":     horoskop_pdf,
-        "karta_rpg_pdf":    karta_rpg_pdf,
-        "log_psych":        log_psych,
-        "raport_pdf":       raport_pdf,
-        "psych_photo_1":    psych_photo_1,
-        "psych_photo_2":    psych_photo_2,
-        "plakat_svg":       plakat_svg,
-        "gra_html":         gra_html,
+        "reply_html": build_html_reply(res_text),
+        "emoticon": {"base64": png_b64, "content_type": "image/png", "filename": f"emo_{emotion_key}.png"} if png_b64 else None,
+        "cv_pdf": {"base64": cv_pdf_b64, "content_type": "application/pdf", "filename": f"CV_{safe_name}.pdf"} if cv_pdf_b64 else None,
+        "raport_pdf": raport_pdf,
+        "psych_photo_1": psych_photo_1,
+        "psych_photo_2": psych_photo_2,
+        "log_psych": log_psych, # Zmienna zawsze istnieje (Fix OK)
+        "triptych": triptych_images,
+        "ankieta_html": ankieta_html,
+        "horoskop_pdf": horoskop_pdf,
+        "karta_rpg_pdf": karta_rpg_pdf,
+        "gra_html": gra_html,
+        "explanation_txt": explanation_txt,
+        "provider": provider
     }
