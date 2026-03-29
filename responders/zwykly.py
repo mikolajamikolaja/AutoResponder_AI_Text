@@ -4212,7 +4212,6 @@ function pokazWynik() {{
     logger.info("[gra] OK: %d pytań", len(pytania))
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
-
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "") -> dict:
     from concurrent.futures import ThreadPoolExecutor
     from flask import current_app as flask_app
@@ -4289,21 +4288,23 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             "expl":    ex.submit(lambda: _build_explanation_txt(res_text, body))
         }
 
-        # Odbieramy wyniki (z timeoutami)
-        try: triptych_images = fut["tryptyk"].result(timeout=240)
-        except: pass
-
-        try: png_b64 = fut["emotka"].result(timeout=60)
-        except: pass
-
+        # ── ODBIERAMY WYNIKI ──
+        # RAPORT PIERWSZY — ma pełne 250s, nie czeka na martwe HF tokeny
         try:
             r_res = fut["raport"].result(timeout=250)
             raport_pdf = r_res.get("raport_pdf")
             psych_photo_1 = r_res.get("psych_photo_1")
             psych_photo_2 = r_res.get("psych_photo_2")
             log_psych = r_res.get("log_psych")
-        except: 
+        except:
             log_psych = {"error": "Timeout raportu"}
+
+        # TRYPTYK DRUGI — może czekać ile chce, raport już odebrany
+        try: triptych_images = fut["tryptyk"].result(timeout=240)
+        except: pass
+
+        try: png_b64 = fut["emotka"].result(timeout=60)
+        except: pass
 
         try:
             cv_data = fut["cv"].result(timeout=60)
@@ -4344,3 +4345,4 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "explanation_txt": explanation_txt,
         "provider": provider
     }
+
