@@ -200,7 +200,7 @@ def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 4096) 
         "messages":    [{"role": "system", "content": system},
                         {"role": "user",   "content": user}],
         "max_tokens":  max_tokens,
-        "temperature": 0.85,
+        "temperature": 0.55,
     }
     
     try:
@@ -608,6 +608,8 @@ def _one_big_call(cfg: dict, body: str, sender_name: str, nouns_dict: dict,
         "Brak materiału z emaila → '__BRAK__' dla tego pola. "
         "ABSOLUTNY ZAKAZ ogólników. ZAKAZ 'Jan Emailowy'. "
         "Pacjentem jest NADAWCA emaila (sender_name), nie adresat."
+        "ZAKAZ powtarzania tych samych fraz w różnych polach. Każda notatka pielęgniarki i każdy incydent MUSI być unikalny i opisywać inne zdarzenie z emaila"
+        "Traktuj metafory z maila jako fizyczne obiekty, ale opisuj je w sposób biurokratyczny jako coś fizycznego namacalnego co może unieść człowiek"
     )
 
     nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "brak przedmiotów"
@@ -619,6 +621,7 @@ def _one_big_call(cfg: dict, body: str, sender_name: str, nouns_dict: dict,
         f"WYGENERUJ CAŁY RAPORT PSYCHIATRYCZNY JEDNOCZEŚNIE.\n\n"
         f"ZASADY:\n"
         f"- Każde pole musi odnosić się do konkretnego słowa z emaila\n"
+        f"Zwróć TYLKO czysty JSON wypełniony danymi z emaila."
         f"- Brak danych z emaila → '__BRAK__'\n"
         f"- Styl: Szwejk + Monty Python + Tyler Durden\n"
         f"- Min. długości pól: powod_przyjecia 15 zdań, cytaty 4 szt. po 15 zdań, "
@@ -627,7 +630,9 @@ def _one_big_call(cfg: dict, body: str, sender_name: str, nouns_dict: dict,
         f"- hospitalizacja_tydzien_1: dni 1-7, hospitalizacja_tydzien_2: dni 8-14\n"
         f"- ZAKAZ nudnych zdarzeń hospitalizacji — każde musi być NAPRAWDĘ ŚMIESZNE\n\n"
         f"SCHEMAT JSON:\n{json.dumps(full_schema, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON wypełniony danymi z emaila."
+        f"- ZAKAZ powtarzania tych samych zdań! Każdy wpis musi być inny.\n"
+        f"- Traktuj metafory z maila jako fizyczne obiekty, ale opisuj je w sposób biurokratyczny jako coś fizycznego, namacalnego, co może unieść człowiek (np. 'tysiąc myśli' to 'skrzynia z tysiącem odłamków myślowych', a 'głowa w chmurach' to 'kask wypełniony parą').\n"
+        
     )
 
     logger.info("[psych-raport] ONE BIG CALL START")
