@@ -5,8 +5,8 @@ Moduł obsługujący CAŁY pipeline raportu psychiatrycznego.
 
 ARCHITEKTURA FALLBACK (v4 — ATOMOWA):
   Dla każdego wywołania AI:
-    1. Groq, klucz GROQ_API_KEY
-    2. Groq, klucz GROQ_API_KEY1 ... GROQ_API_KEY(N)
+    1. Groq, klucz API_KEY_GROQ
+    2. Groq, klucz API_KEY_GROQ ... API_KEY_GROQ_01 aż do  API_KEY_GROQ_09
     3. DeepSeek awaryjny (ten sam prompt)
     4. Pole = [BRAK DANYCH]   ← JEDYNA dopuszczalna wartość zastępcza
 
@@ -200,16 +200,14 @@ def _czy_brak(wartosc) -> bool:
     return False
 
 
-def _zbierz_braki(raport: dict, prefix: str = "") -> list:
-    """Zbiera klucze z wartościami [BRAK DANYCH] do logu."""
-    braki = []
-    for k, v in raport.items():
-        sciezka = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            braki.extend(_zbierz_braki(v, sciezka))
-        elif _czy_brak(v):
-            braki.append(sciezka)
-    return braki
+def _get_groq_keys() -> list:
+    keys = []
+    for i in range(1, 10):  # 1 → 9
+        name = f"API_KEY_GROQ_{i:02d}"  # 01, 02, ..., 09
+        val  = os.getenv(name, "").strip()
+        if val:
+            keys.append((name, val))
+    return keys
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -293,7 +291,7 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
             current_app.logger.info("[psych-raport] %s → DeepSeek OK", section_name)
             if log:
                 log.sekcja(log_numer, section_name, user, "deepseek/awaryjny",
-                           "DEEPSEEK_API_KEY", ds_result, "OK (DeepSeek awaryjny)")
+                           "API_KEY_DEEPSEEK", ds_result, "OK (DeepSeek awaryjny)")
             return ds_result
     except Exception as e:
         current_app.logger.error("[psych-raport] %s → DeepSeek wyjątek: %s", section_name, e)
