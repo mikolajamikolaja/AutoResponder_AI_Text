@@ -1,0 +1,291 @@
+Poniżej kompletna specyfikacja — gotowa do wysłania programiście:
+
+---
+
+# SPEC v1.0 — System raportów psychiatrycznych
+## Projekt: "Szpital im. Tylera Durdena"
+
+---
+
+## 1. CZYM JEST TEN SYSTEM
+
+Moduł backendowy (Python/Flask) generujący **fikcyjny, satyryczny raport psychiatryczny** na podstawie emaila użytkownika. Raport jest humorystyczny w bardzo konkretnym stylu (patrz sekcja 4) i trafia do użytkownika jako plik `.docx` + plik `log_psych.txt`.
+
+Raport **nie jest** ogólnym tekstem — każde zdanie musi nawiązywać do konkretnych słów, sytuacji i przedmiotów z emaila wejściowego. To jest nienaruszalna zasada całego systemu.
+
+---
+
+## 2. DANE WEJŚCIOWE
+
+```python
+body:          str   # pełna treść emaila użytkownika
+previous_body: str   # poprzedni email (może być None)
+res_text:      str   # odpowiedź Tylera+Sokratesa wygenerowana wcześniej w pipeline
+nouns_dict:    dict  # słownik rzeczowników wyciągniętych z emaila
+sender_name:   str   # imię i nazwisko nadawcy
+gender:        str   # "male" / "female" / "patient"
+```
+
+---
+
+## 3. DANE WYJŚCIOWE
+
+Funkcja `build_raport()` zwraca dict:
+
+```python
+{
+    "raport_pdf":    { "base64": str, "content_type": str, "filename": str },
+    "psych_photo_1": { "base64": str, ... } | None,
+    "psych_photo_2": { "base64": str, ... } | None,
+    "log_psych":     { "base64": str, "content_type": "text/plain", "filename": "log_psych.txt" }
+}
+```
+
+---
+
+## 4. STYL OBOWIĄZKOWY — trójca
+
+Każda sekcja raportu musi łączyć trzy głosy:
+
+**A. Dzielny Wojak Szwejk**
+Formalna, biurokratyczna powaga stosowana do kompletnych absurdów. Szczegółowe, urzędowe opisy banalnych rzeczy. Naiwna logika prowadząca do absurdalnych wniosków. Komisje, protokoły, podpisy, formularze — traktowane śmiertelnie poważnie.
+
+**B. Monty Python**
+Surrealistyczne zwroty akcji. Nieoczekiwana logika. Komisja psychiatryczna zatwierdza nonsens z pełną powagą. Absurd jako procedura.
+
+**C. Tyler Durden (Fight Club)**
+Nihilizm. Demaskowanie planów, działek, poddaszy, list punktowych jako klatek. Człowiek jest niewolnikiem tego co posiada i czego planuje. Każdy przedmiot pacjenta = dowód zniewolenia. Każdy plan = złudzenie. Używany jako podtekst i filozoficzna pointa — nie jako dosłowne cytaty z filmu (chyba że w sekcji X-bis).
+
+---
+
+## 5. ZASADA ATOMOWOŚCI — NAJWAŻNIEJSZA REGUŁA
+
+> **Nigdy nie generuj zmyślonych, ogólnych danych.**
+
+Każde pole w raporcie musi nawiązywać do konkretnego słowa lub zdania z emaila wejściowego (`body`).
+
+Jeśli AI nie jest w stanie wygenerować danych nawiązujących do emaila — pole otrzymuje wartość:
+
+```
+[BRAK DANYCH]
+```
+
+Wyświetlane w DOCX jako **czerwony tekst `[BRAK DANYCH]`**.
+
+**Nie ma statycznych fallbacków z hardkodowanym tekstem.** Szczególny zakaz: żadnych generycznych cytatów w stylu "Nie pamiętam co napisałem" ani opisów w stylu "Pacjent zgłosił się o 14:37" — chyba że te konkretne słowa są w emailu.
+
+---
+
+## 6. STRATEGIA ODPORNOŚCI — FALLBACK CHAIN
+
+Dla każdego wywołania AI obowiązuje następująca kolejność prób, **bez wyjątków**:
+
+```
+Próba 1:   Groq, klucz GROQ_API_KEY
+Próba 2:   Groq, klucz GROQ_API_KEY1
+Próba 3:   Groq, klucz GROQ_API_KEY2
+...
+Próba N:   Groq, klucz GROQ_API_KEY(N-1)
+Próba N+1: DeepSeek (ten sam prompt, ten sam schemat JSON)
+Próba N+2: Pole = [BRAK DANYCH]  ← jedyny dopuszczalny fallback tekstowy
+```
+
+**Groq rate limit (HTTP 429):** natychmiast przeskocz do następnego klucza, nie czekaj.
+
+**Groq error (inny):** ponów ten sam klucz max 2 razy, potem następny klucz.
+
+**DeepSeek** używany w dwóch rolach:
+- Awaryjnie: zastępuje Groq gdy wszystkie klucze zawiodą (ten sam prompt)
+- Standardowo: tone check + completeness check po złożeniu wszystkich sekcji (niezależnie od tego czy Groq działał)
+
+---
+
+## 7. PIPELINE — KOLEJNOŚĆ WYWOŁAŃ
+
+```
+START
+ │
+ ├─ [sync] Groq #0: filtr rzeczowników → tylko fizycznie unoszalne
+ │
+ ├─ [sync] Groq skierowanie → sekcja "Skierowanie do szpitala"
+ │
+ ├─ [równolegle, 4 wątki]
+ │   ├─ Groq #1 → dane pacjenta + powód przyjęcia + cytaty z izby
+ │   ├─ Groq #2 → depozyt + farmakologia
+ │   ├─ Groq #6 → diagnozy łacińskie + objawy
+ │   └─ Groq #8 → prompty FLUX
+ │
+ ├─ [równolegle, 3 wątki — czekają na wynik Groq #2]
+ │   ├─ Groq #3 → hospitalizacja dni 1–7
+ │   ├─ Groq #4 → hospitalizacja dni 8–14
+ │   └─ Groq #5 → karta wypisu
+ │
+ ├─ [sync — czeka na Groq #3 i #4]
+ │   └─ Groq #7 → zalecenia Tylera, rokowanie, notatki, incydenty
+ │
+ ├─ [sync — czeka na Groq #7]
+ │   └─ Groq #9 → leczenie specjalne (8 zasad Tylera jako metody)
+ │
+ ├─ [sync] DeepSeek tone check → poprawia styl jeśli zbyt ogólny
+ ├─ [sync] DeepSeek completeness check → poprawia pola bez nawiązania do emaila
+ │
+ ├─ [równolegle, 2 wątki] FLUX → 2 zdjęcia
+ │
+ └─ DOCX builder + log builder → zwróć dict
+```
+
+---
+
+## 8. SEKCJE DOCX — SZCZEGÓŁOWY OPIS
+
+### Nagłówek
+Szpital Psychiatryczny im. Tylera Durdena, adres, oddział, lekarz prowadzący, numer historii choroby, data przyjęcia. Styl: wycentrowany, poważny.
+
+### Skierowanie do szpitala
+Instytucja kierująca, lekarz kierujący, rozpoznanie wstępne (łacińska nazwa nawiązująca do emaila), min. 8 powodów skierowania (każdy = cytat/parafraza z emaila + wyjaśnienie dlaczego to dowód choroby — min. 3 zdania), obserwacje wstępne, podpis odręczny.
+
+### I. Dane pacjenta
+Imię i nazwisko (= sender_name + wymyślone nazwisko nawiązujące do emaila), wiek (ZAWSZE poetycko-żartobliwy opis nawiązujący do emaila — nigdy "nieokreślony"), adres (kreatywny, z emaila), zawód (z emaila + ironia Szwejka), stan cywilny (absurd Monty Pythona), nr ubezpieczenia.
+
+### II. Powód przyjęcia
+Minimum 15 zdań. Każde zdanie nawiązuje do konkretnego słowa lub sytuacji z emaila. Styl: urzędowa powaga (Szwejk) + surrealistyczne zwroty logiczne (Monty Python). Tyler Durden w podtekście: plan pacjenta = złudzenie, jego rzeczy = łańcuchy.
+
+### III. Cytaty z izby przyjęć
+Minimum 4 cytaty. Każdy cytat = parafraza lub dosłowny fragment z emaila jako wypowiedź pacjenta. Do każdego cytatu: komentarz kliniczny minimum 15 zdań (Szwejk: analiza każdego słowa z pedanterią, każde słowo = dowód choroby). Zakaz cytatu "Nie pamiętam co napisałem" — chyba że te słowa są w emailu.
+
+### IV. Protokół depozytu — przedmioty skonfiskowane
+Tylko fizycznie unoszalne przedmioty (lub ich unoszalne reprezentacje). Każdy przedmiot z dwoma elementami:
+1. Żartobliwa cecha udziwniona (powiązana z emailem): np. "mleko — trzymane w słoiku po ogórkach, etykieta wymyta, na dnie coś nieidentyfikowalnego"
+2. Jedno zdanie: dlaczego posiadanie tego przedmiotu działa na niekorzyść pacjenta (nawet jeśli to dobry przedmiot — np. Biblia pomalowana w serduszka flamastrem jest dowodem herezji klinicznej)
+
+Konwersja nieunoszalnych rzeczowników: fabryka → fabryka z klocków LEGO, dom → domek z zapałek i tektury, działka → plastikowa miarka budowlana + slajdy gruntowe w kopercie, poddasze → makieta z zapałek, zlew → kawałek ceramiki pomalowany w kwiatki flamastrem, Fiat → model 1:18 ze sklejki, fontanna → plastikowa miniaturka na baterie, ulica → kawałek asfaltu w folii bąbelkowej, przestrzeń/rodzina/raty → [BRAK DANYCH] (nieunoszalne, brak fizycznej reprezentacji)
+
+### V. Farmakologia
+Format akapitowy (bez tabel — jak stary dokument medyczny). Jeden lek per rzeczownik z emaila. Pola: nazwa leku (wymyślona, nawiązuje do rzeczownika), "Przedmioty odebrane" (zamiast "Rzeczownik źródłowy"), wskazanie (min. 2 zdania, nawiązuje do emaila), dawkowanie (nigdy "1x dziennie, do odwołania" — zawsze żartobliwe i powiązane z emailem, np. "po każdym spojrzeniu na działkę przez okno").
+
+### VI. Przebieg hospitalizacji — 14 dni
+Każdy z 14 dni = osobna karta: data, zdarzenie (min. 4–5 zdań, MUSI być śmieszne i absurdalne — zakaz "pacjent milczał" i "pacjent siedział"), podany lek, stan pacjenta (nihilistyczny), nota lekarska (2–3 zdania). Dni 8–14: eskalacja absurdu — pacjent staje się coraz bardziej formalny, składa pisma, organizuje zebrania, negocjuje warunki wypisu.
+
+### VII. Karta wypisu
+Stan przy wypisie: min. 10 zdań. Powód wypisu: min. 10 zdań, biurokratyczny absurd (Monty Python + Szwejk). Zalecenia po wypisie: min. 15 punktów, każdy konkretny i nawiązujący do innego słowa z emaila. Opis pożegnania: 4–5 zdań, absurdalne i melancholijne.
+
+### VIII. Diagnoza psychiatryczna
+Diagnoza wstępna: łacińska nazwa z rdzeniem słowa z emaila, polska nazwa (żartobliwa), kod DSM (wymyślony), opis kliniczny min. 15 zdań. Diagnoza dodatkowa (współistniejąca): analogicznie. Min. 8 objawów, każdy z pseudo-łacińską nazwą i opisem 3–4 zdania.
+
+### IX. Zalecenia terapeutyczne (Tyler Durden)
+3 konkretne zadania nawiązujące do przedmiotów z emaila, każde min. 5–6 zdań (co, jak, gdzie, przy jakich świadkach, w jakiej kolejności). Podpis odręczny: Tyler Durden.
+
+### X. Rokowanie
+Min. 5–6 zdań. Bezlitosne, nawiązuje do konkretnych słów z emaila, Tyler demaskuje każdy plan jako złudzenie. Ostatnie zdanie: filozoficzna pointa.
+
+### X-bis. Leczenie specjalne
+8 zasad Tylera z `res_text` przetworzone jako metody terapeutyczne. Każda metoda: dosłowne przytoczenie zasady Tylera + wyjaśnienie dlaczego ta zasada leczy tego konkretnego pacjenta + absurdalna procedura stosowania (gdzie, kiedy, przy jakich świadkach) + żartobliwe dawkowanie. Styl: Szwejk + Monty Python.
+
+### XI. Incydenty specjalne
+Min. 10 incydentów, każdy 4–5 zdań. NAPRAWDĘ absurdalne i śmieszne, nawiązują do konkretnych słów z emaila, podane z formalną powagą protokołu szpitalnego.
+
+### XII. Podpis i notatki personelu
+Podpis odręczny: Tyler Durden. Min. 10 notatek pielęgniarek (różne imiona, różne daty, 3–4 zdania, absurdalne, nawiązują do emaila). Min. 10 notatek sprzątaczki (różne daty, 2–3 zdania, co znalazła). Kontrasygnata: Marla Singer (podpis odręczny).
+
+---
+
+## 9. FORMAT DOCX
+
+- Czcionka treści: Courier New 10pt (efekt maszynopisu)
+- Nagłówki sekcji: Courier New Bold 11pt, ciemna czerwień (`#8B0000`)
+- Podnagłówki: Courier New Bold 10pt
+- Notatki marginalne, opisy: 8–9pt, szarość (`#666666`)
+- Podpisy: czcionka odręczna (Caveat lub Dancing Script), 14–18pt
+- Pola `[BRAK DANYCH]`: czerwony tekst, Courier New Bold
+- Styl ogólny: wyblakły, instytucjonalny, jakby skanowany z teczki
+
+---
+
+## 10. LOG (`log_psych.txt`)
+
+Plik tekstowy generowany równolegle z DOCX. Wysyłany użytkownikowi jako drugi załącznik obok DOCX.
+
+Struktura:
+
+```
+═══════════════════════════════════════════════
+LOG RAPORTU PSYCHIATRYCZNEGO
+Data: DD.MM.YYYY HH:MM:SS
+Nadawca: [sender_name]
+═══════════════════════════════════════════════
+
+[1] TREŚĆ EMAILA WEJŚCIOWEGO
+---
+[pełna treść body]
+
+[2] RZECZOWNIKI WEJŚCIOWE (nouns_dict)
+---
+[lista przed filtrem]
+
+[3] FILTR FIZYCZNOŚCI — WYNIK
+---
+[lista po filtrze + co zostało przekonwertowane i jak]
+
+[4–12] Dla każdej sekcji Groq:
+  [X] SEKCJA: [nazwa]
+  → PROMPT WYSŁANY:
+    [pełny prompt]
+  → MODEL: [groq-xyz / deepseek / FALLBACK]
+  → KLUCZ: [nazwa zmiennej klucza lub "deepseek"]
+  → ODPOWIEDŹ SUROWA:
+    [raw response]
+  → WYNIK PARSOWANIA: [OK / BŁĄD: opis / BRAK DANYCH]
+
+[13] DEEPSEEK TONE CHECK
+  → zmiany wprowadzone: [lista pól przepisanych]
+
+[14] DEEPSEEK COMPLETENESS CHECK
+  → zmiany wprowadzone: [lista pól przepisanych]
+
+[15] FLUX
+  → photo_1: [OK / BRAK]
+  → photo_2: [OK / BRAK]
+
+[16] DOCX
+  → rozmiar: [X KB]
+  → pola [BRAK DANYCH]: [lista sekcji z brakami]
+
+═══════════════════════════════════════════════
+KONIEC LOGU
+═══════════════════════════════════════════════
+```
+
+---
+
+## 11. TECHNICZNE WYMAGANIA IMPLEMENTACYJNE
+
+- Python 3.11+, Flask
+- `python-docx` do budowania DOCX
+- `ThreadPoolExecutor` do równoległości (rundy 1 i 2)
+- Groq API: rotacja kluczy ze zmiennych środowiskowych `GROQ_API_KEY`, `GROQ_API_KEY1`, ..., `GROQ_API_KEYn`
+- DeepSeek API: klucz ze zmiennej `DEEPSEEK_API_KEY`
+- HuggingFace FLUX: klucz `HF_TOKEN`
+- Każdy prompt do AI: zawiera pełną treść emaila + sender_name + nouns_dict (żaden Groq nie może "zapomnieć" o emailu)
+- Timeout Groq: 45s per próba
+- Timeout DeepSeek: 60s
+- Wszystkie odpowiedzi AI: oczekiwany format JSON, parser z auto-naprawą uciętych JSON-ów
+
+---
+
+## 12. CZEGO NIE WOLNO
+
+- Hardkodować żadnych tekstów które trafią do DOCX
+- Używać statycznych fallbacków z gotowym tekstem (jedyny fallback = `[BRAK DANYCH]`)
+- Pisać "nieokreślony" dla wieku
+- Pisać "1x dziennie, do odwołania" dla dawkowania
+- Używać tabel w sekcjach V (farmakologia) i IV (depozyt)
+- Wstawiać cytatu "Nie pamiętam co napisałem" jeśli nie ma go w emailu
+- Pisać zdarzeń hospitalizacji bez humoru ("pacjent milczał", "pacjent siedział")
+- Umieszczać w depozycie rzeczowników nieunoszalnych bez ich fizycznej reprezentacji
+- Wymieniać w depozycie pojęć abstrakcyjnych (przestrzeń, raty, rodzina) — te dostają `[BRAK DANYCH]`
+
+---
+
+To jest kompletny dokument. Możesz go wysłać programiście — zawiera wszystko czego potrzebuje żeby napisać system od zera bez zaglądania do Twojego obecnego kodu.
+
+Chcesz żebym teraz przeszedł do konkretnych zmian w istniejącym kodzie, czy najpierw coś doprecyzujemy w specyfikacji?
