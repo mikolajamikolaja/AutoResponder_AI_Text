@@ -1252,6 +1252,42 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SKIEROWANIE DO SZPITALA
+    # ══════════════════════════════════════════════════════════════════════════
+    skier = raport.get("skierowanie", {})
+    if isinstance(skier, dict) and skier.get("instytucja_kierujaca"):
+        naglowek("SKIEROWANIE DO SZPITALA PSYCHIATRYCZNEGO")
+        pole("Instytucja kierująca", skier.get("instytucja_kierujaca", ""))
+        pole("Lekarz kierujący", skier.get("lekarz_kierujacy", ""))
+        pole("Pacjent", skier.get("pacjent_imie_nazwisko", ""))
+        pole("Data skierowania", skier.get("data_skierowania", ""))
+        pole("Rozpoznanie wstępne", skier.get("rozpzowanie_wstepne", ""))
+
+        powody = skier.get("powody_skierowania", [])
+        if powody:
+            doc.add_paragraph()
+            podnaglowek("Powody skierowania")
+            if isinstance(powody, list):
+                for i, p in enumerate(powody, 1):
+                    punkt_listy(str(p), numer=i, size=9)
+            else:
+                maszyna(str(powody), size=9)
+
+        obs = skier.get("obserwacje_wstepne", "")
+        if obs:
+            doc.add_paragraph()
+            podnaglowek("Obserwacje wstępne lekarza kierującego")
+            maszyna(obs, size=9, space_after=4)
+
+        podpis_skier = skier.get("podpis_lekarza", "")
+        if podpis_skier:
+            doc.add_paragraph()
+            maszyna("Podpisano:", bold=True, size=9)
+            podpis_odrecznie(podpis_skier, size=14)
+
+        separator_lekki()
+
+    # ══════════════════════════════════════════════════════════════════════════
     # I. DANE PACJENTA
     # ══════════════════════════════════════════════════════════════════════════
     naglowek("I. DANE PACJENTA")
@@ -1555,6 +1591,117 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         separator_lekki()
 
     # ══════════════════════════════════════════════════════════════════════════
+    # X-bis: LECZENIE SPECJALNE — zasady Tylera jako metody terapeutyczne
+    # ══════════════════════════════════════════════════════════════════════════
+    leczenie = raport.get("leczenie_specjalne", {})
+    # Jeśli nie ma dedykowanego pola, wyciągnij zasady z zalecenia_tylera
+    zt_spec = raport.get("zalecenia_tylera", {})
+    zasady_spec = []
+    if isinstance(leczenie, dict) and leczenie.get("zasady"):
+        zasady_spec = leczenie["zasady"]
+    elif isinstance(leczenie, list):
+        zasady_spec = leczenie
+    else:
+        # Fallback — zbierz zadania_1/2/3 z zalecenia_tylera jako zasady
+        for key in ["zadanie_1", "zadanie_2", "zadanie_3"]:
+            if isinstance(zt_spec, dict) and zt_spec.get(key):
+                zasady_spec.append(zt_spec[key])
+
+    if zasady_spec:
+        naglowek("X-BIS. LECZENIE SPECJALNE — METODY TERAPEUTYCZNE WG DR. T. DURDENA")
+
+        # Tytuł i wstęp z Groq (jeśli dostępne)
+        if isinstance(leczenie, dict):
+            wstep_txt = leczenie.get("wstep", "")
+            if wstep_txt:
+                p_intro = doc.add_paragraph()
+                p_intro.paragraph_format.space_after = Pt(6)
+                r_intro = p_intro.add_run(str(wstep_txt))
+                _set_font(r_intro, italic=True, size=9, color=GREY)
+            else:
+                p_intro = doc.add_paragraph()
+                p_intro.paragraph_format.space_after = Pt(6)
+                r_intro = p_intro.add_run(
+                    "Na podstawie analizy dokumentacji i aplikacji nihilistycznej metody terapeutycznej "
+                    "dr. Tylera Durdena, komisja psychiatryczna zatwierdza poniższy protokół leczenia specjalnego. "
+                    "Każda z zasad stanowi obowiązkowy element terapii."
+                )
+                _set_font(r_intro, italic=True, size=9, color=GREY)
+
+        for idx, zasada in enumerate(zasady_spec, 1):
+            doc.add_paragraph()
+            p_z_h = doc.add_paragraph()
+            p_z_h.paragraph_format.space_before = Pt(6)
+            p_z_h.paragraph_format.space_after = Pt(1)
+            r_z_h = p_z_h.add_run(f"METODA TERAPEUTYCZNA NR {idx}:")
+            _set_font(r_z_h, bold=True, size=10, color=DKRED)
+
+            if isinstance(zasada, dict):
+                zasada_txt = zasada.get("zasada_tylera", str(zasada))
+                metoda_txt = zasada.get("metoda_terapeutyczna", "")
+                dawkowanie_txt = zasada.get("dawkowanie", "")
+                podpis_txt = zasada.get("podpis_komisji", "")
+            else:
+                zasada_txt = str(zasada)
+                metoda_txt = ""
+                dawkowanie_txt = ""
+                podpis_txt = ""
+
+            # Zasada Tylera
+            maszyna(zasada_txt, size=9, space_before=2, space_after=2)
+
+            # Metoda terapeutyczna
+            if metoda_txt:
+                p_m = doc.add_paragraph()
+                p_m.paragraph_format.left_indent = Cm(0.5)
+                p_m.paragraph_format.space_after = Pt(2)
+                r_m_l = p_m.add_run("Metoda terapeutyczna: ")
+                _set_font(r_m_l, bold=True, size=9)
+                r_m_v = p_m.add_run(str(metoda_txt))
+                _set_font(r_m_v, size=9)
+
+            # Dawkowanie
+            if dawkowanie_txt:
+                p_d = doc.add_paragraph()
+                p_d.paragraph_format.left_indent = Cm(0.5)
+                p_d.paragraph_format.space_after = Pt(2)
+                r_d_l = p_d.add_run("Dawkowanie: ")
+                _set_font(r_d_l, bold=True, size=9)
+                r_d_v = p_d.add_run(str(dawkowanie_txt))
+                _set_font(r_d_v, italic=True, size=9, color=GREY)
+
+            # Podpis komisji
+            if podpis_txt:
+                p_pd = doc.add_paragraph()
+                p_pd.paragraph_format.left_indent = Cm(0.5)
+                p_pd.paragraph_format.space_after = Pt(2)
+                r_pd = p_pd.add_run(str(podpis_txt))
+                _set_font(r_pd, italic=True, size=8, color=DKRED)
+
+            # Komentarz terapeutyczny w stylu Szwejka (gdy brak metody z Groq)
+            if not metoda_txt:
+                p_kom = doc.add_paragraph()
+                p_kom.paragraph_format.left_indent = Cm(0.8)
+                p_kom.paragraph_format.space_after = Pt(4)
+                r_kom = p_kom.add_run(
+                    f"Nota terapeutyczna: Komisja stwierdza z pełną powagą kliniczną, iż zastosowanie "
+                    f"powyższej metody nr {idx} stanowi fundament procesu leczenia. "
+                    "Pacjent zobowiązany jest do złamania niniejszego zakazu w sposób publiczny, "
+                    "udokumentowany i nieodwołalny — najlepiej w obecności co najmniej trzech świadków "
+                    "oraz protokolanta z legitymacją szpitalną."
+                )
+                _set_font(r_kom, italic=True, size=8, color=GREY)
+
+        # Zamknięcie sekcji X-bis
+        if isinstance(leczenie, dict) and leczenie.get("zamkniecie"):
+            p_zam = doc.add_paragraph()
+            p_zam.paragraph_format.space_before = Pt(6)
+            r_zam = p_zam.add_run(str(leczenie["zamkniecie"]))
+            _set_font(r_zam, italic=True, bold=True, size=10, color=DKRED)
+
+        separator_lekki()
+
+    # ══════════════════════════════════════════════════════════════════════════
     # XII. PODPIS I NOTATKI PERSONELU
     # ══════════════════════════════════════════════════════════════════════════
     naglowek("XII. PODPIS I NOTATKI PERSONELU")
@@ -1565,14 +1712,51 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
 
     doc.add_paragraph()
 
-    if raport.get("notatka_pielegniarki"):
-        podnaglowek("Notatka pielegn. dyżurnej")
-        maszyna(raport["notatka_pielegniarki"], italic=True, color=GREY, size=9)
+    # Notatki pielęgniarek — lista 10+
+    notatki_piel = raport.get("notatki_pielegniarek", [])
+    if not notatki_piel and raport.get("notatka_pielegniarki"):
+        # fallback na pojedynczą notatkę
+        notatki_piel = [{"imie_pielegniarki": "Pielęgniarka dyżurna", "data": "", "tresc": raport["notatka_pielegniarki"]}]
+    if notatki_piel:
+        doc.add_paragraph()
+        podnaglowek("Notatki pielęgniarek dyżurnych")
+        for nota in notatki_piel:
+            if isinstance(nota, dict):
+                imie_p = nota.get("imie_pielegniarki", "Pielęgniarka")
+                data_p = nota.get("data", "")
+                tresc_p = nota.get("tresc", "")
+                p_np = doc.add_paragraph()
+                p_np.paragraph_format.space_before = Pt(4)
+                p_np.paragraph_format.space_after = Pt(1)
+                r_np = p_np.add_run(f"{imie_p}" + (f"  /  {data_p}" if data_p else "") + ":")
+                _set_font(r_np, bold=True, size=9, color=FADED)
+                if tresc_p:
+                    nota_kursywa(tresc_p, size=9)
+            elif isinstance(nota, str):
+                nota_kursywa(nota, size=9)
         doc.add_paragraph()
 
-    if raport.get("notatka_sprzataczki"):
-        podnaglowek("Notatka sprzataczki (zalaczona z urzedu)")
-        maszyna(raport["notatka_sprzataczki"], italic=True, color=GREY, size=9)
+    # Notatki sprzątaczki — lista 10+
+    notatki_sprz = raport.get("notatki_sprzataczki", [])
+    if not notatki_sprz and raport.get("notatka_sprzataczki"):
+        notatki_sprz = [{"data": "", "tresc": raport["notatka_sprzataczki"]}]
+    if notatki_sprz:
+        doc.add_paragraph()
+        podnaglowek("Notatki sprzątaczki (dołączone z urzędu)")
+        for nota in notatki_sprz:
+            if isinstance(nota, dict):
+                data_s = nota.get("data", "")
+                tresc_s = nota.get("tresc", "")
+                if data_s:
+                    p_ns = doc.add_paragraph()
+                    p_ns.paragraph_format.space_before = Pt(4)
+                    p_ns.paragraph_format.space_after = Pt(0)
+                    r_ns = p_ns.add_run(f"{data_s}:")
+                    _set_font(r_ns, bold=True, size=8, color=FADED)
+                if tresc_s:
+                    nota_kursywa(tresc_s, size=8)
+            elif isinstance(nota, str):
+                nota_kursywa(nota, size=8)
         doc.add_paragraph()
 
     # Podpis Marli
@@ -1587,6 +1771,76 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
     current_app.logger.info("[psych-docx] DOCX OK (%dKB)", len(buf.getvalue()) // 1024)
     return b64
+
+
+def _sekcja_leczenie_specjalne(cfg: dict, body: str, res_text: str,
+                                sender_name: str = "",
+                                nouns_dict: dict = None) -> dict:
+    """
+    Groq #9 — Leczenie Specjalne.
+    8 zasad Tylera z res_text jako metody terapeutyczne — styl Szwejk/Monty Python.
+    Nawiązuje do konkretnych zasad z odpowiedzi AI i słów z emaila.
+    """
+    sec = cfg.get("groq_9_leczenie_specjalne", {})
+    system = sec.get("system", "")
+    if not system:
+        current_app.logger.warning("[psych-raport] Brak groq_9_leczenie_specjalne w JSON, skip")
+        return {}
+
+    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    kontekst = _email_kontekst(body, sender_name, nouns_dict)
+
+    # Wyciągnij zasady Tylera z res_text
+    zasady_raw = ""
+    if res_text and "### TYLER DURDEN" in res_text:
+        tyler_sec = res_text.split("### TYLER DURDEN", 1)[1]
+        # Weź pierwsze 3000 znaków sekcji Tylera (zasady + manifesty)
+        zasady_raw = tyler_sec[:3000]
+    elif res_text:
+        zasady_raw = res_text[:3000]
+
+    user = (
+        f"{kontekst}\n"
+        f"ZASADY I MANIFESTY TYLERA DURDENA (wygenerowane dla tego pacjenta):\n"
+        f"{zasady_raw}\n\n"
+        f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
+        f"Na podstawie POWYŻSZYCH ZASAD TYLERA (nie wymyślaj nowych) stwórz 8 metod terapeutycznych. "
+        f"Każda metoda MUSI cytować konkretną zasadę Tylera z powyższego tekstu. "
+        f"Każda metoda MUSI nawiązywać do konkretnego słowa z emaila pacjenta. "
+        f"Styl: Szwejk + Monty Python — biurokratyczna powaga wobec absurdalnych procedur. "
+        f"Dawkowanie: żartobliwe, nawiązujące do emaila, ZAKAZ '1x dziennie'. "
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw = _call_groq_with_retry(system, user, 3500, "leczenie_specjalne")
+    result = _parse_json_safe(raw, "leczenie_specjalne") if raw else None
+
+    if not result:
+        if raw:
+            current_app.logger.error("[psych-raport] leczenie_specjalne → parse None | raw=%.300s", raw)
+        # Fallback — generuj z zasad Tylera w prostszej formie
+        return {
+            "leczenie_specjalne": {
+                "tytul": "PROTOKÓŁ LECZENIA SPECJALNEGO WG METODY DURDEN",
+                "wstep": "Komisja stwierdza że pacjent potrzebuje dokładnie odwrotności tego czego chce.",
+                "zasady": [
+                    {
+                        "numer": i,
+                        "zasada_tylera": f"Zasada {i}: nie mówi się o tym.",
+                        "metoda_terapeutyczna": (
+                            "Pacjent zobowiązany jest do dokładnego złamania powyższego zakazu. "
+                            "Procedura: w godzinach 10:00–10:15 pacjent mówi o tym głośno, "
+                            "na korytarzu, przy co najmniej dwóch świadkach z legitymacją szpitalną. "
+                            "Protokół podpisuje pielęgniarka dyżurna i dozorca budynku."
+                        ),
+                        "dawkowanie": "Raz w tygodniu, do momentu gdy komisja uzna że pacjent nie rozumie dlaczego.",
+                        "podpis_komisji": "Dr. T. Durden, Ordynator ds. Wyzwolenia"
+                    }
+                    for i in range(1, 9)
+                ],
+                "zamkniecie": "Komisja nie gwarantuje skuteczności. Komisja gwarantuje wyłącznie protokół."
+            }
+        }
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1732,6 +1986,16 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
         sekcja_zalecenia = {}
 
+    # ── Leczenie specjalne (zasady Tylera jako metody) ────────────────────────
+    sekcja_leczenie = {}
+    try:
+        sekcja_leczenie = _sekcja_leczenie_specjalne(
+            cfg, body, res_text, sender_name, nouns_dict
+        )
+        current_app.logger.info("[psych-raport] Leczenie specjalne OK")
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Leczenie specjalne błąd: %s", e)
+
     # ── Scal wszystkie sekcje ─────────────────────────────────────────────────
     raport = {}
     raport.update(sekcja_pacjent)
@@ -1743,6 +2007,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     raport.update(sekcja_wypis)
     raport.update(sekcja_diagnozy)
     raport.update(sekcja_zalecenia)
+    raport["leczenie_specjalne"]       = sekcja_leczenie.get("leczenie_specjalne", {})
 
     current_app.logger.info("[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport))
 
