@@ -1063,11 +1063,7 @@ def _generate_flux(prompt: str, label: str,
 
 def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str,
                                log: PsychLog) -> tuple:
-    import logging
-from flask import current_app  # używane tylko w _generate_photos_parallel
-
-# Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
-logger = logging.getLogger(__name__) as flask_app
+    from flask import current_app as flask_app
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     app_obj = flask_app._get_current_object()
 
@@ -1740,11 +1736,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     Zwraca:
       {raport_pdf, psych_photo_1, psych_photo_2, log_psych}
     """
-    import logging
-from flask import current_app  # używane tylko w _generate_photos_parallel
-
-# Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
-logger = logging.getLogger(__name__) as flask_app
+    from flask import current_app as flask_app
 
     logger.info("[psych-raport] START build_raport sender=%s", sender_name)
     app_obj = flask_app._get_current_object()
