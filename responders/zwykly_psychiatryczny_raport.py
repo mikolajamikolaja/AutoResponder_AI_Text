@@ -3,27 +3,21 @@ responders/zwykly_psychiatryczny_raport.py
 
 Moduł obsługujący CAŁY pipeline raportu psychiatrycznego.
 
-ARCHITEKTURA FALLBACK (v4 — ATOMOWA):
-  Dla każdego wywołania AI:
-    1. Groq, klucz API_KEY_GROQ
-    2. Groq, klucz API_KEY_GROQ ... API_KEY_GROQ_01 aż do  API_KEY_GROQ_09
-    3. DeepSeek awaryjny (ten sam prompt)
-    4. Pole = [BRAK DANYCH]   ← JEDYNA dopuszczalna wartość zastępcza
+ARCHITEKTURA v5 — ONE BIG CALL:
+  Zamiast 9 osobnych wywołań Groq → JEDNO duże wywołanie które zwraca
+  cały raport naraz. Fallback: DeepSeek.
 
-  Brak hardkodowanych fallbacków tekstowych. Brak statycznych opisów.
-  Każde pole musi nawiązywać do emaila lub zawierać [BRAK DANYCH].
+  Kolejność:
+    1. Filtr rzeczowników (1 call Groq)
+    2. Skierowanie (1 call Groq)
+    3. ONE BIG CALL — cały raport naraz (1 call Groq/DeepSeek)
+    4. Leczenie specjalne (1 call Groq — potrzebuje res_text)
+    5. DeepSeek tone check
+    6. DeepSeek completeness check
+    7. FLUX 2 zdjęcia równolegle
+    8. DOCX + LOG
 
-RÓWNOLEGŁOŚĆ:
-  Runda 1 (niezależne): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
-  Runda 2 (czekają na #2): #3 tydzień1 | #4 tydzień2 | #5 wypis
-  Runda 3 (czeka na #3+#4): #7 zalecenia
-  Potem: Groq #9 leczenie specjalne
-  Potem: DeepSeek tone + completeness (sekwencyjnie, zawsze)
-  Potem: FLUX oba zdjęcia równolegle
-  Potem: DOCX + LOG
-
-WYJŚCIE:
-  {raport_pdf, psych_photo_1, psych_photo_2, log_psych}
+  Łącznie: max 4 calle AI zamiast 9+
 """
 
 import os
@@ -34,11 +28,10 @@ import base64
 import random
 import requests
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import logging
-from flask import current_app  # używane tylko w _generate_photos_parallel
+from flask import current_app
 
-# Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
 logger = logging.getLogger(__name__)
 
 from core.ai_client import call_deepseek, MODEL_TYLER
@@ -52,18 +45,12 @@ from core.config import (
     MAX_DLUGOSC_EMAIL,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STAŁE
-# ─────────────────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 RAPORT_JSON = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 
-# Marker atomowy — jedyna dopuszczalna wartość gdy brak danych z emaila
-BRAK        = "[BRAK DANYCH]"
-# Marker wewnętrzny zwracany przez Groq — zamieniany na BRAK przed DOCX
-_GROQ_BRAK  = "__BRAK__"
-# Marker dla nieunoszalnych przedmiotów
+BRAK         = "[BRAK DANYCH]"
+_GROQ_BRAK   = "__BRAK__"
 _NIEUNOSZALNE = "__NIEUNOSZALNE__"
 
 
@@ -72,14 +59,10 @@ _NIEUNOSZALNE = "__NIEUNOSZALNE__"
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PsychLog:
-    """
-    Buduje log_psych.txt — kompletny zapis pipeline.
-    Wysyłany użytkownikowi jako załącznik obok DOCX.
-    """
     def __init__(self, sender_name: str, body: str):
         self._lines = []
         self._ts = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        self._braki = []  # sekcje które dostały [BRAK DANYCH]
+        self._braki = []
         self._header(sender_name, body)
 
     def _header(self, sender_name: str, body: str):
@@ -158,7 +141,6 @@ class PsychLog:
         ]
 
     def build(self) -> dict:
-        """Zwraca dict z base64 pliku txt."""
         tekst = "\n".join(self._lines)
         b64 = base64.b64encode(tekst.encode("utf-8")).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -170,14 +152,10 @@ class PsychLog:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — konwersja markerów wewnętrznych
+# HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _zamien_braki(obj):
-    """
-    Rekurencyjnie zamienia '__BRAK__' i '__NIEUNOSZALNE__' na BRAK = '[BRAK DANYCH]'.
-    Działa na dict, list, str.
-    """
     if isinstance(obj, dict):
         return {k: _zamien_braki(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -190,21 +168,17 @@ def _zamien_braki(obj):
 
 
 def _czy_brak(wartosc) -> bool:
-    """Zwraca True jeśli wartość to marker braku."""
     if wartosc is None:
         return True
     if wartosc == BRAK:
         return True
     if isinstance(wartosc, str) and wartosc.strip() == "":
         return True
-    if isinstance(wartosc, list) and all(
-        isinstance(i, str) and i in (BRAK, _GROQ_BRAK, "") for i in wartosc
-    ):
-        return True
     return False
 
 
 def _get_groq_keys() -> list:
+    """Pobiera klucze Groq z env — identyczne nazwy jak w zwykly.py."""
     keys = []
     k = os.getenv("API_KEY_GROQ", "").strip()
     if k:
@@ -214,19 +188,6 @@ def _get_groq_keys() -> list:
         k = os.getenv(name, "").strip()
         if k:
             keys.append((name, k))
-    return keys
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — Groq rotacja kluczy + DeepSeek awaryjny
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _get_groq_keys() -> list:
-    keys = []
-    for i in range(40):
-        name = f"GROQ_API_KEY{i}" if i else "GROQ_API_KEY"
-        val  = os.getenv(name, "").strip()
-        if val:
-            keys.append((name, val))
     return keys
 
 
@@ -256,41 +217,25 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
                             log: PsychLog = None,
                             log_numer: int = 0) -> str | None:
     """
-    Fallback chain:
-      1. Wszystkie klucze Groq (rotacja, rate limit → następny klucz)
-      2. DeepSeek awaryjny (ten sam prompt)
-      3. None → pole dostanie [BRAK DANYCH]
-
-    Loguje każdą próbę do PsychLog.
+    Fallback chain — SEKWENCYJNY:
+      1. Klucze Groq po kolei (następny tylko gdy 429)
+      2. DeepSeek awaryjny
+      3. None
     """
     keys = _get_groq_keys()
 
-    # ── Próba przez wszystkie klucze Groq ────────────────────────────────────
-    for attempt in range(3):
-        for key_name, key_val in keys:
-            result = _call_groq_single(key_val, system, user, max_tokens)
-            if result and result != "RATE_LIMIT":
-                logger.info(
-                    "[psych-raport] %s OK (groq/%s attempt=%d)", section_name, key_name, attempt + 1
-                )
-                if log:
-                    log.sekcja(log_numer, section_name, user, f"groq/{GROQ_MODEL}",
-                               key_name, result, "OK")
-                return result
-            if result == "RATE_LIMIT":
-                logger.warning(
-                    "[psych-raport] %s RATE_LIMIT klucz=%s → następny", section_name, key_name
-                )
-                continue
-        logger.warning(
-            "[psych-raport] %s — wszystkie Groq zawiodły attempt=%d/%d",
-            section_name, attempt + 1, 3
-        )
+    for key_name, key_val in keys:
+        result = _call_groq_single(key_val, system, user, max_tokens)
+        if result and result != "RATE_LIMIT":
+            logger.info("[psych-raport] %s OK (groq/%s)", section_name, key_name)
+            if log:
+                log.sekcja(log_numer, section_name, user, f"groq/{GROQ_MODEL}",
+                           key_name, result, "OK")
+            return result
+        if result == "RATE_LIMIT":
+            logger.warning("[psych-raport] %s 429 klucz=%s → następny", section_name, key_name)
 
-    # ── DeepSeek awaryjny ────────────────────────────────────────────────────
-    logger.warning(
-        "[psych-raport] %s → DeepSeek awaryjny", section_name
-    )
+    logger.warning("[psych-raport] %s → DeepSeek awaryjny", section_name)
     try:
         ds_result = call_deepseek(system, user, MODEL_TYLER)
         if ds_result:
@@ -302,10 +247,7 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
     except Exception as e:
         logger.error("[psych-raport] %s → DeepSeek wyjątek: %s", section_name, e)
 
-    # ── Ostateczny fallback — brak danych ────────────────────────────────────
-    logger.error(
-        "[psych-raport] %s → BRAK DANYCH (wszystkie AI zawiodły)", section_name
-    )
+    logger.error("[psych-raport] %s → BRAK DANYCH", section_name)
     if log:
         log.sekcja(log_numer, section_name, user, "BRAK", "BRAK", "",
                    "BRAK DANYCH — wszystkie AI zawiodły")
@@ -313,41 +255,29 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — parsowanie JSON
+# PARSOWANIE JSON
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_json_safe(raw: str, section: str) -> dict | list | None:
-    """
-    Wyciąga JSON z odpowiedzi AI. Obsługuje:
-    - czysty JSON
-    - JSON owinięty w ```json...```
-    - JSON poprzedzony tekstem
-    - ucięty JSON (próba naprawy)
-    """
     if not raw:
         return None
     try:
         clean = re.sub(r'^```[a-z]*\s*', '', raw.strip(), flags=re.M)
         clean = re.sub(r'\s*```\s*$', '', clean, flags=re.M).strip()
-
         start_idx = next((i for i, ch in enumerate(clean) if ch in '{['), None)
         if start_idx is not None:
             clean = clean[start_idx:]
-
         end_idx = len(clean)
         for i in range(len(clean) - 1, -1, -1):
             if clean[i] in '}]':
                 end_idx = i + 1
                 break
         clean = clean[:end_idx]
-
         result = json.loads(clean.strip())
         logger.info("[psych-raport] JSON OK sekcja=%s", section)
         return result
     except Exception as e:
-        logger.warning(
-            "[psych-raport] JSON błąd sekcja=%s: %s | próba naprawy...", section, e
-        )
+        logger.warning("[psych-raport] JSON błąd sekcja=%s: %s | próba naprawy...", section, e)
         try:
             partial = re.sub(r'^```[a-z]*\s*', '', raw.strip(), flags=re.M)
             partial = re.sub(r'\s*```\s*$', '', partial, flags=re.M).strip()
@@ -383,34 +313,11 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
                 if suffix:
                     repaired = partial[:last_valid if last_valid else len(partial)] + suffix
                     result = json.loads(repaired)
-                    logger.warning(
-                        "[psych-raport] JSON naprawiony sekcja=%s (doklejono '%s')", section, suffix
-                    )
+                    logger.warning("[psych-raport] JSON naprawiony sekcja=%s", section)
                     return result
         except Exception as e2:
-            logger.warning(
-                "[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw=%.300s",
-                section, e2, raw
-            )
+            logger.warning("[psych-raport] JSON naprawa nieudana sekcja=%s: %s", section, e2)
         return None
-
-
-def _extract_list_from_result(result, min_len: int = 5) -> list | None:
-    if isinstance(result, list) and len(result) >= min_len:
-        return result
-    if isinstance(result, dict):
-        for v in result.values():
-            if isinstance(v, list) and len(v) >= min_len:
-                return v
-        for v in result.values():
-            if isinstance(v, dict):
-                for vv in v.values():
-                    if isinstance(vv, list) and len(vv) >= min_len:
-                        return vv
-        for v in result.values():
-            if isinstance(v, list) and len(v) > 0:
-                return v
-    return None
 
 
 def _merge_dicts(base: dict, override: dict) -> dict:
@@ -439,7 +346,7 @@ def _load_cfg() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# KONTEKST EMAILA — wstrzykiwany do każdego promptu
+# KONTEKST EMAILA
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _email_kontekst(body: str, sender_name: str = "", nouns_dict: dict = None,
@@ -477,9 +384,7 @@ def _email_kontekst(body: str, sender_name: str = "", nouns_dict: dict = None,
             lines.append(f"PRZEDMIOTY Z EMAILA (fizyczne reprezentacje): {nouns_str}\n")
 
     if previous_body and previous_body.strip() != body.strip():
-        lines.append(
-            f"POPRZEDNIA WIADOMOŚĆ OD PACJENTA:\n{previous_body[:800]}\n"
-        )
+        lines.append(f"POPRZEDNIA WIADOMOŚĆ OD PACJENTA:\n{previous_body[:800]}\n")
 
     if extra:
         lines.append(extra)
@@ -493,7 +398,7 @@ def _email_kontekst(body: str, sender_name: str = "", nouns_dict: dict = None,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #0 — filtr rzeczowników fizycznych
+# FILTR RZECZOWNIKÓW (1 call)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _filtruj_rzeczowniki_fizyczne(cfg: dict, body: str, nouns_dict: dict,
@@ -530,19 +435,15 @@ def _filtruj_rzeczowniki_fizyczne(cfg: dict, body: str, nouns_dict: dict,
     if not fizyczne:
         return nouns_dict
 
-    # Usuń nieunoszalne z dict
     oczyszczone = {k: v for k, v in fizyczne.items()
                    if v not in (_NIEUNOSZALNE, BRAK)}
 
-    logger.info(
-        "[psych-raport] filtr_rzeczownikow OK — %d fizycznych (usunięto %d nieunoszalnych)",
-        len(oczyszczone), len(fizyczne) - len(oczyszczone)
-    )
+    logger.info("[psych-raport] filtr OK — %d fizycznych", len(oczyszczone))
     return oczyszczone if oczyszczone else nouns_dict
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ skierowanie
+# SKIEROWANIE (1 call)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_skierowanie(cfg: dict, body: str, sender_name: str,
@@ -550,335 +451,246 @@ def _sekcja_skierowanie(cfg: dict, body: str, sender_name: str,
     sec = cfg.get("groq_skierowanie", {})
     system = sec.get("system", "")
     if not system:
-        return {"skierowanie": {k: BRAK for k in
-                ["instytucja_kierujaca", "lekarz_kierujacy", "pacjent_imie_nazwisko",
-                 "data_skierowania", "rozpzowanie_wstepne", "powody_skierowania",
-                 "obserwacje_wstepne", "podpis_lekarza"]}}
+        return {}
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     kontekst = _email_kontekst(body, sender_name, nouns_dict)
     user = f"{kontekst}\nSCHEMAT JSON:\n{schema}\n\nZwróć TYLKO czysty JSON."
-    raw = _call_ai_with_fallback(system, user, 1500, "skierowanie", log, 5)
+    raw = _call_ai_with_fallback(system, user, 2000, "skierowanie", log, 5)
     result = _parse_json_safe(raw, "skierowanie") if raw else None
     if not result:
-        return {"skierowanie": {
-            "instytucja_kierujaca": BRAK, "lekarz_kierujacy": BRAK,
-            "pacjent_imie_nazwisko": sender_name or BRAK,
-            "data_skierowania": datetime.now().strftime("%d.%m.%Y"),
-            "rozpzowanie_wstepne": BRAK, "powody_skierowania": [BRAK],
-            "obserwacje_wstepne": BRAK, "podpis_lekarza": BRAK
-        }}
+        return {}
     return _zamien_braki(result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #1 — dane pacjenta + powód + cytaty
+# ONE BIG CALL — cały raport naraz
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_pacjent(cfg: dict, body: str, sender_name: str,
-                    nouns_dict: dict, log: PsychLog) -> dict:
-    sec = cfg.get("groq_1_pacjent", {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    kontekst = _email_kontekst(body, sender_name, nouns_dict)
-    user = (
-        f"{kontekst}\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
-        f"PAMIĘTAJ:\n"
-        f"  - imie_nazwisko = '{sender_name}' + wymyślone nazwisko z emaila\n"
-        f"  - ZAKAZ 'Jan Emailowy'\n"
-        f"  - cytaty = TYLKO parafrazy REALNYCH zdań z emaila\n"
-        f"  - ZAKAZ cytatu 'Nie pamiętam co napisałem'\n"
-        f"  - Brak danych z emaila → '__BRAK__'\n"
-        f"Zwróć TYLKO czysty JSON."
-    )
-    raw = _call_ai_with_fallback(system, user, 2500, "pacjent", log, 6)
-    result = _parse_json_safe(raw, "pacjent") if raw else None
+def _build_full_schema(cfg: dict, data_przyjecia: str) -> dict:
+    """Buduje jeden duży schema JSON ze wszystkich sekcji raportu."""
 
-    if not result:
-        # Atomowy fallback — tylko sender_name, reszta BRAK
-        return {
-            "numer_historii_choroby": f"NY-2026-{random.randint(10000, 99999)}",
-            "data_przyjecia": datetime.now().strftime("%d.%m.%Y"),
-            "dane_pacjenta": {
-                "imie_nazwisko": sender_name or BRAK,
-                "wiek": BRAK,
-                "adres": BRAK,
-                "zawod": BRAK,
-                "stan_cywilny": BRAK,
-                "numer_ubezpieczenia": f"PL-PSY-{random.randint(10000, 99999)}",
-            },
-            "powod_przyjecia": BRAK,
-            "cytaty_z_przyjecia": [BRAK],
-        }
-
-    result = _zamien_braki(result)
-
-    # Zawsze podmień imię na sender_name
-    if sender_name and isinstance(result.get("dane_pacjenta"), dict):
-        dp = result["dane_pacjenta"]
-        if not dp.get("imie_nazwisko") or "jan emailowy" in str(dp.get("imie_nazwisko", "")).lower():
-            dp["imie_nazwisko"] = sender_name
-    return result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GROQ #2 — depozyt + leki
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict,
-                          sender_name: str, log: PsychLog) -> dict:
-    sec = cfg.get("groq_2_depozyt_leki", {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    kontekst = _email_kontekst(body, sender_name, nouns_dict)
-    user = (
-        f"{kontekst}\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
-        f"JEDEN lek per przedmiot. Dawkowanie żartobliwe z emaila. "
-        f"Nieunoszalne przedmioty → pomiń. Brak danych → '__BRAK__'. "
-        f"Zwróć TYLKO czysty JSON."
-    )
-    raw = _call_ai_with_fallback(system, user, 3000, "depozyt_leki", log, 7)
-    result = _parse_json_safe(raw, "depozyt_leki") if raw else None
-    if not result:
-        return {
-            "depozyt": {"lista_przedmiotow": [BRAK], "protokol_depozytu": BRAK},
-            "farmakologia": {
-                "leki": [{"nazwa": BRAK, "rzeczownik_zrodlowy": BRAK,
-                           "wskazanie": BRAK, "dawkowanie": BRAK}],
-                "nota_farmaceutyczna": BRAK,
-            }
-        }
-    return _zamien_braki(result)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GROQ #3/#4 — hospitalizacja tydzień 1 i 2
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
-                    data_przyjecia: str, sender_name: str,
-                    nouns_dict: dict, log: PsychLog) -> list:
-    sec_key = f"groq_{2 + tydzien}_tydzien{tydzien}"
-    sec = cfg.get(sec_key, {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-
+    # Daty hospitalizacji
     try:
         base_date = datetime.strptime(data_przyjecia, "%d.%m.%Y")
     except Exception:
         base_date = datetime.now()
-    start_day = (tydzien - 1) * 7 + 1
-    daty = [(base_date + timedelta(days=start_day - 1 + i)).strftime("%d.%m.%Y")
-            for i in range(7)]
-    daty_str = "\n".join(f"Dzień {start_day + i}: {d}" for i, d in enumerate(daty))
 
-    leki_str = json.dumps(leki, ensure_ascii=False, indent=2) if leki else "[]"
-    kontekst = _email_kontekst(
-        body, sender_name, nouns_dict,
-        extra=(
-            f"LISTA LEKÓW (rotuj dla dni):\n{leki_str}\n\n"
-            f"DATY HOSPITALIZACJI:\n{daty_str}\n"
-        )
-    )
-    user = (
-        f"{kontekst}\n"
-        f"SCHEMAT JSON (tablica 7 obiektów dla dni {start_day}-{start_day+6}):\n{schema}\n\n"
-        f"Każdy dzień INNE absurdalne zdarzenie nawiązujące do emaila. "
-        f"ZAKAZ nudnych zdarzeń. Brak materiału z emaila → '__BRAK__'. "
-        f"Zwróć TYLKO czysty JSON z tablicą 7 obiektów."
-    )
-    section_name = f"tydzien{tydzien}"
-    raw = _call_ai_with_fallback(system, user, 4096, section_name, log, 8 + tydzien - 1)
+    daty_t1 = [(base_date + timedelta(days=i)).strftime("%d.%m.%Y") for i in range(7)]
+    daty_t2 = [(base_date + timedelta(days=7 + i)).strftime("%d.%m.%Y") for i in range(7)]
+    data_wypisu = (base_date + timedelta(days=14)).strftime("%d.%m.%Y")
 
-    if not raw:
-        return _fallback_dni_brak(start_day, daty)
-
-    result = _parse_json_safe(raw, section_name)
-    if result is None:
-        logger.error("[psych-raport] %s parse None", section_name)
-        return _fallback_dni_brak(start_day, daty)
-
-    lista = _extract_list_from_result(result, min_len=5)
-    if lista is not None:
-        return [_zamien_braki(d) for d in lista]
-
-    return _fallback_dni_brak(start_day, daty)
-
-
-def _fallback_dni_brak(start_day: int, daty: list) -> list:
-    """Atomowy fallback — wszystkie pola [BRAK DANYCH]."""
-    return [
+    tydzien1_schema = [
         {
-            "dzien": start_day + i,
-            "data": daty[i],
-            "zdarzenie": BRAK,
-            "lek": BRAK,
-            "stan_pacjenta": BRAK,
-            "nota_lekarska": BRAK,
+            "dzien": i + 1,
+            "data": daty_t1[i],
+            "zdarzenie": "Min. 4-5 zdań. NAPRAWDĘ ŚMIESZNE. Nawiązuje do emaila. Jeśli brak → '__BRAK__'",
+            "lek": "Nazwa leku z farmakologii + dawka lub '__BRAK__'",
+            "stan_pacjenta": "Jedno zdanie nihilistyczne lub '__BRAK__'",
+            "nota_lekarska": "2-3 zdania obserwacji lub '__BRAK__'"
         }
         for i in range(7)
     ]
 
+    tydzien2_schema = [
+        {
+            "dzien": i + 8,
+            "data": daty_t2[i],
+            "zdarzenie": "Min. 4-5 zdań. Eskalacja absurdu. Nawiązuje do emaila. Brak → '__BRAK__'",
+            "lek": "Nazwa leku + dawka (w tygodniu 2 dawki rosną) lub '__BRAK__'",
+            "stan_pacjenta": "Jedno zdanie kliniczne lub '__BRAK__'",
+            "nota_lekarska": "2-3 zdania — lekarz traci wiarę w psychiatrię lub '__BRAK__'"
+        }
+        for i in range(7)
+    ]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GROQ #5 — wypis
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str,
-                  sender_name: str, nouns_dict: dict, log: PsychLog) -> dict:
-    sec = cfg.get("groq_5_wypis", {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    try:
-        base_date = datetime.strptime(data_przyjecia, "%d.%m.%Y")
-        data_wypisu = (base_date + timedelta(days=14)).strftime("%d.%m.%Y")
-    except Exception:
-        data_wypisu = datetime.now().strftime("%d.%m.%Y")
-    kontekst = _email_kontekst(
-        body, sender_name, nouns_dict,
-        extra=f"DATA WYPISU (dzień 15): {data_wypisu}\n"
-    )
-    user = (
-        f"{kontekst}\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
-        f"Każde zalecenie MUSI nawiązywać do emaila. Brak danych → '__BRAK__'. "
-        f"Zwróć TYLKO czysty JSON."
-    )
-    raw = _call_ai_with_fallback(system, user, 2000, "wypis", log, 10)
-    result = _parse_json_safe(raw, "wypis") if raw else None
-    if not result:
-        return {"wypis": {
+    return {
+        "dane_pacjenta_i_powod": {
+            "numer_historii_choroby": "Losowy numer NY-2026-XXXXX",
+            "data_przyjecia": data_przyjecia,
+            "dane_pacjenta": {
+                "imie_nazwisko": "sender_name + wymyślone nazwisko z emaila. ZAKAZ 'Jan Emailowy'.",
+                "wiek": "NIGDY 'nieokreślony'. Poetycko-żartobliwy opis z emaila. Brak → '__BRAK__'",
+                "adres": "Twórczy adres z emaila. Brak → '__BRAK__'",
+                "zawod": "Z emaila z ironią Szwejka. Brak → '__BRAK__'",
+                "stan_cywilny": "Z emaila lub wywnioskowany z absurdem. Brak → '__BRAK__'",
+                "numer_ubezpieczenia": "Losowy PL-PSY-XXXXX"
+            },
+            "powod_przyjecia": "MINIMUM 15 zdań. KAŻDE nawiązuje do konkretnego słowa z emaila. Brak → '__BRAK__'",
+            "cytaty_z_przyjecia": "Lista MINIMUM 4 cytatów. Format: '\"[parafraza emaila]\" — Nota kliniczna nr [X]/2026: [komentarz min. 15 zdań Szwejka]'. Brak → ['__BRAK__']"
+        },
+        "depozyt_i_leki": {
+            "depozyt": {
+                "lista_przedmiotow": "Lista stringów. Format: '[rzecz] — [żartobliwa cecha z emaila] — [zdanie dlaczego szkodzi pacjentowi]'. Brak → ['__BRAK__']",
+                "protokol_depozytu": "4-5 zdań oficjalnego protokołu Szwejka. Brak → '__BRAK__'"
+            },
+            "farmakologia": {
+                "leki": "Lista: [{nazwa: 'NazwaLeku Xmg', rzeczownik_zrodlowy: 'słowo z emaila', wskazanie: '2 zdania z emaila', dawkowanie: 'żartobliwe z emaila — NIE: 1x dziennie'}]. Brak → [{nazwa: '__BRAK__', rzeczownik_zrodlowy: '__BRAK__', wskazanie: '__BRAK__', dawkowanie: '__BRAK__'}]",
+                "nota_farmaceutyczna": "4-5 zdań nihilistycznych z emaila. Brak → '__BRAK__'"
+            }
+        },
+        "hospitalizacja_tydzien_1": tydzien1_schema,
+        "hospitalizacja_tydzien_2": tydzien2_schema,
+        "wypis": {
             "dzien_wypisu": f"Dzień 15, {data_wypisu}",
-            "stan_przy_wypisie": BRAK,
-            "powod_wypisu": BRAK,
-            "zalecenia_po_wypisie": [BRAK],
-            "opis_pozegnania": BRAK,
-        }}
-    return _zamien_braki(result)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GROQ #6 — diagnozy łacińskie
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str,
-                     sender_name: str, nouns_dict: dict, log: PsychLog) -> dict:
-    sec = cfg.get("groq_6_diagnozy_lacina", {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    kontekst = _email_kontekst(body, sender_name, nouns_dict, previous_body)
-    user = (
-        f"{kontekst}\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
-        f"Nazwy łacińskie MUSZĄ zawierać rdzeń słowa z emaila. "
-        f"Opis kliniczny — każde zdanie nawiązuje do emaila. Brak → '__BRAK__'. "
-        f"Zwróć TYLKO czysty JSON."
-    )
-    raw = _call_ai_with_fallback(system, user, 2000, "diagnozy", log, 11)
-    result = _parse_json_safe(raw, "diagnozy") if raw else None
-    if not result:
-        return {
+            "stan_przy_wypisie": "Min. 10 zdań z emaila. Styl Szwejka. Brak → '__BRAK__'",
+            "powod_wypisu": "Min. 10 zdań. Biurokratyczny absurd Monty Pythona z emaila. Brak → '__BRAK__'",
+            "zalecenia_po_wypisie": "Lista MINIMUM 15 punktów. Każdy z emaila, absurdalny, z medyczną powagą. Brak → ['__BRAK__']",
+            "opis_pozegnania": "4-5 zdań. Absurdalne i melancholijne. Brak → '__BRAK__'"
+        },
+        "diagnozy": {
             "diagnoza_wstepna": {
-                "nazwa_lacinska": BRAK, "nazwa_polska": BRAK,
-                "kod_dsm": BRAK, "opis_kliniczny": BRAK,
+                "nazwa_lacinska": "Wymyślona łacińska nazwa z rdzeniem słowa z emaila lub '__BRAK__'",
+                "nazwa_polska": "Zabawne polskie tłumaczenie lub '__BRAK__'",
+                "kod_dsm": "Wymyślony kod DSM-TD-2026-XXX",
+                "opis_kliniczny": "Min. 15 zdań. Naukowy absurd. Każde zdanie z emaila. Brak → '__BRAK__'"
             },
             "diagnoza_dodatkowa": {
-                "nazwa_lacinska": BRAK, "nazwa_polska": BRAK,
-                "kod_dsm": BRAK, "opis_kliniczny": BRAK,
+                "nazwa_lacinska": "Druga diagnoza, inny rdzeń z emaila lub '__BRAK__'",
+                "nazwa_polska": "Polskie tłumaczenie lub '__BRAK__'",
+                "kod_dsm": "Wymyślony kod",
+                "opis_kliniczny": "Min. 15 zdań z emaila. Brak → '__BRAK__'"
             },
-            "objawy": [BRAK],
-        }
-    return _zamien_braki(result)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GROQ #7 — zalecenia + notatki + rokowanie + incydenty
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list,
-                      sender_name: str, nouns_dict: dict, log: PsychLog) -> dict:
-    sec = cfg.get("groq_7_zalecenia_notatki", {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-
-    zdarzenia = []
-    for d in (dni_1_7 or []) + (dni_8_14 or []):
-        if isinstance(d, dict) and d.get("zdarzenie") and d["zdarzenie"] != BRAK:
-            zdarzenia.append(f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:200]}")
-    zdarzenia_str = "\n".join(zdarzenia[:12]) if zdarzenia else "(brak)"
-
-    kontekst = _email_kontekst(
-        body, sender_name, nouns_dict,
-        extra=f"ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n"
-    )
-    user = (
-        f"{kontekst}\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
-        f"Zadania Tylera nawiązują do konkretnych przedmiotów z emaila. "
-        f"Notatki pielęgniarek nawiązują do zdarzeń. Min. 10 notatek pielęgniarek. "
-        f"Min. 10 notatek sprzątaczki. Min. 10 incydentów. Brak → '__BRAK__'. "
-        f"Zwróć TYLKO czysty JSON."
-    )
-    raw = _call_ai_with_fallback(system, user, 3000, "zalecenia", log, 12)
-    result = _parse_json_safe(raw, "zalecenia") if raw else None
-    if not result:
-        return {
+            "objawy": ["Min. 8 objawów. Format: 'NazwaObjawu (pseudo-łacińska z emaila): [3-4 zdania]'. Brak → ['__BRAK__']"]
+        },
+        "zalecenia_i_notatki": {
             "zalecenia_tylera": {
-                "naglowek": "RACHUNEK ZA WYZWOLENIE",
-                "zadanie_1": BRAK, "zadanie_2": BRAK, "zadanie_3": BRAK,
-                "podpis": "Tyler Durden",
+                "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIA OBOWIĄZKOWE",
+                "zadanie_1": "ZNISZCZENIE: [konkretny przedmiot z emaila] — min. 5-6 zdań. Brak → '__BRAK__'",
+                "zadanie_2": "UPOKORZENIE: [konkretny plan z emaila] — min. 5-6 zdań. Brak → '__BRAK__'",
+                "zadanie_3": "DESTRUKCJA: [konkretna rzecz z emaila] — min. 5-6 zdań. Brak → '__BRAK__'",
+                "podpis": "Tyler Durden"
             },
-            "rokowanie": BRAK,
-            "notatki_pielegniarek": [{"imie_pielegniarki": BRAK, "data": "", "tresc": BRAK}],
-            "notatki_sprzataczki": [{"data": "", "tresc": BRAK}],
-            "incydenty_specjalne": [BRAK],
+            "rokowanie": "Min. 5-6 zdań. Bezlitosne. Z emaila. Brak → '__BRAK__'",
+            "notatki_pielegniarek": "Lista MINIMUM 10: {imie_pielegniarki: 'imię (nie Kazimiera)', data: 'DD.MM.YYYY', tresc: '3-4 zdania absurdalnej notatki z emaila'}. Brak → [{imie_pielegniarki: '__BRAK__', data: '', tresc: '__BRAK__'}]",
+            "notatki_sprzataczki": "Lista MINIMUM 10: {data: 'DD.MM.YYYY', tresc: '2-3 zdania co znalazła, z emaila'}. Brak → [{data: '', tresc: '__BRAK__'}]",
+            "incydenty_specjalne": "Lista MINIMUM 10 incydentów. Każdy: 4-5 zdań — NAPRAWDĘ ABSURDALNY, z emaila, z powagą protokołu. Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'. Brak → ['__BRAK__']"
+        },
+        "flux_prompty": {
+            "prompt_pacjent": "Prompt FLUX po angielsku max 200 słów. MUSI: (1) CRITICAL OBJECTS VISIBLE z emaila, (2) pacjent w kaftanie, (3) 4 polaroidy na stole szpitalnym, (4) faded desaturated colors, 35mm grain, 1990s documentary, top-down view.",
+            "prompt_przedmioty": "Prompt FLUX po angielsku max 200 słów. MUSI: (1) lista przedmiotów z emaila, (2) stół szpitalny lub taca, (3) zimne fluorescencyjne światło, (4) etykiety z numerami, (5) cold clinical evidence photo, top-down view."
         }
-    return _zamien_braki(result)
+    }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GROQ #8 — prompty FLUX
-# ─────────────────────────────────────────────────────────────────────────────
+def _one_big_call(cfg: dict, body: str, sender_name: str, nouns_dict: dict,
+                  previous_body: str, gender: str, log: PsychLog) -> dict:
+    """
+    JEDNO duże wywołanie AI zamiast 7 osobnych.
+    Zwraca surowy dict z wszystkimi sekcjami raportu.
+    """
+    data_przyjecia = datetime.now().strftime("%d.%m.%Y")
+    full_schema = _build_full_schema(cfg, data_przyjecia)
 
-def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
-                          sender_name: str, gender: str, log: PsychLog) -> dict:
-    sec = cfg.get("groq_8_flux_prompty", {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    nouns_filtered = {k: v for k, v in (nouns_dict or {}).items()
-                      if v not in (BRAK, _GROQ_BRAK, _NIEUNOSZALNE)}
-    nouns_str = ", ".join(nouns_filtered.values()) if nouns_filtered else "personal belongings"
-    user = (
-        f"EMAIL PACJENTA:\n{body[:800]}\n\n"
-        f"PRZEDMIOTY Z EMAILA: {nouns_str}\n"
-        f"PŁEĆ PACJENTA: {gender}\n"
-        f"IMIĘ PACJENTA: {sender_name or 'unknown'}\n\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
-        f"Zwróć TYLKO czysty JSON z dwoma promptami po angielsku."
+    system = (
+        "Jesteś psychiatrą i pisarzem Szpitala Psychiatrycznego im. Tylera Durdena. "
+        "Styl: Dzielny Wojak Szwejk + Monty Python + filozofia Tylera Durdena. "
+        "Zwróć WYŁĄCZNIE czysty JSON zgodny ze schematem. "
+        "KAŻDE pole MUSI nawiązywać do konkretnych słów z emaila. "
+        "Brak materiału z emaila → '__BRAK__' dla tego pola. "
+        "ABSOLUTNY ZAKAZ ogólników. ZAKAZ 'Jan Emailowy'. "
+        "Pacjentem jest NADAWCA emaila (sender_name), nie adresat."
     )
-    raw = _call_ai_with_fallback(system, user, 600, "flux_prompty", log, 13)
-    result = _parse_json_safe(raw, "flux_prompty") if raw else None
+
+    nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "brak przedmiotów"
+
+    user = (
+        f"{_email_kontekst(body, sender_name, nouns_dict, previous_body)}\n"
+        f"PŁEĆ PACJENTA: {gender}\n"
+        f"PRZEDMIOTY Z EMAILA: {nouns_str}\n\n"
+        f"WYGENERUJ CAŁY RAPORT PSYCHIATRYCZNY JEDNOCZEŚNIE.\n\n"
+        f"ZASADY:\n"
+        f"- Każde pole musi odnosić się do konkretnego słowa z emaila\n"
+        f"- Brak danych z emaila → '__BRAK__'\n"
+        f"- Styl: Szwejk + Monty Python + Tyler Durden\n"
+        f"- Min. długości pól: powod_przyjecia 15 zdań, cytaty 4 szt. po 15 zdań, "
+        f"diagnoza 15 zdań, wypis 10 zdań, zalecenia 15 punktów, "
+        f"notatki pielęgniarek 10 szt., notatki sprzątaczki 10 szt., incydenty 10 szt.\n"
+        f"- hospitalizacja_tydzien_1: dni 1-7, hospitalizacja_tydzien_2: dni 8-14\n"
+        f"- ZAKAZ nudnych zdarzeń hospitalizacji — każde musi być NAPRAWDĘ ŚMIESZNE\n\n"
+        f"SCHEMAT JSON:\n{json.dumps(full_schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON wypełniony danymi z emaila."
+    )
+
+    logger.info("[psych-raport] ONE BIG CALL START")
+    raw = _call_ai_with_fallback(system, user, 8000, "one_big_call", log, 10)
+
+    if not raw:
+        logger.error("[psych-raport] ONE BIG CALL — brak odpowiedzi")
+        return {}
+
+    result = _parse_json_safe(raw, "one_big_call")
     if not result or not isinstance(result, dict):
-        objects_critical = f"CRITICAL OBJECTS: {nouns_str}."
-        return {
-            "prompt_pacjent": (
-                f"{objects_critical} Top-down documentary photo of a round wooden psychiatric "
-                f"examination table. Four Polaroid photos scattered, each showing "
-                f"a {gender} in a white canvas straitjacket surrounded by: {nouns_str}. "
-                f"Faded desaturated colors, 35mm grain, 1990s documentary style."
-            ),
-            "prompt_przedmioty": (
-                f"{objects_critical} Top-down clinical evidence photo. Metal hospital tray "
-                f"with objects laid out as evidence: {nouns_str}. Numbered evidence tags. "
-                f"Cold fluorescent lighting, 1990s police evidence room, hyper-realistic."
-            )
-        }
+        logger.error("[psych-raport] ONE BIG CALL — błąd parsowania")
+        return {}
+
+    # Upewnij się że wszystkie klucze istnieją
+    for key in full_schema.keys():
+        if key not in result:
+            result[key] = _GROQ_BRAK
+            logger.warning("[psych-raport] ONE BIG CALL — brak klucza '%s', wstawiam BRAK", key)
+
+    logger.info("[psych-raport] ONE BIG CALL OK — %d kluczy", len(result))
     return result
 
 
+def _flatten_big_call_result(data: dict, sender_name: str) -> dict:
+    """
+    Rozpakowuje wynik ONE BIG CALL do płaskiego słownika raportu
+    identycznego z tym co produkowały poprzednie osobne calle.
+    """
+    raport = {}
+
+    # dane_pacjenta_i_powod
+    dpip = data.get("dane_pacjenta_i_powod", {})
+    if isinstance(dpip, dict):
+        raport["numer_historii_choroby"] = dpip.get("numer_historii_choroby",
+                                                     f"NY-2026-{random.randint(10000,99999)}")
+        raport["data_przyjecia"] = dpip.get("data_przyjecia",
+                                            datetime.now().strftime("%d.%m.%Y"))
+        dp = dpip.get("dane_pacjenta", {})
+        if isinstance(dp, dict):
+            if sender_name and (not dp.get("imie_nazwisko") or
+                                "jan emailowy" in str(dp.get("imie_nazwisko", "")).lower()):
+                dp["imie_nazwisko"] = sender_name
+        raport["dane_pacjenta"] = dp
+        raport["powod_przyjecia"] = dpip.get("powod_przyjecia", BRAK)
+        raport["cytaty_z_przyjecia"] = dpip.get("cytaty_z_przyjecia", [BRAK])
+
+    # depozyt_i_leki
+    dil = data.get("depozyt_i_leki", {})
+    if isinstance(dil, dict):
+        raport["depozyt"] = dil.get("depozyt", {})
+        raport["farmakologia"] = dil.get("farmakologia", {})
+
+    # tygodnie hospitalizacji
+    raport["hospitalizacja_tydzien_1"] = data.get("hospitalizacja_tydzien_1", [])
+    raport["hospitalizacja_tydzien_2"] = data.get("hospitalizacja_tydzien_2", [])
+
+    # wypis
+    wypis = data.get("wypis", {})
+    raport["wypis"] = wypis
+
+    # diagnozy
+    diag = data.get("diagnozy", {})
+    if isinstance(diag, dict):
+        raport["diagnoza_wstepna"] = diag.get("diagnoza_wstepna", {})
+        raport["diagnoza_dodatkowa"] = diag.get("diagnoza_dodatkowa", {})
+        raport["objawy"] = diag.get("objawy", [])
+
+    # zalecenia i notatki
+    zan = data.get("zalecenia_i_notatki", {})
+    if isinstance(zan, dict):
+        raport["zalecenia_tylera"] = zan.get("zalecenia_tylera", {})
+        raport["rokowanie"] = zan.get("rokowanie", BRAK)
+        raport["notatki_pielegniarek"] = zan.get("notatki_pielegniarek", [])
+        raport["notatki_sprzataczki"] = zan.get("notatki_sprzataczki", [])
+        raport["incydenty_specjalne"] = zan.get("incydenty_specjalne", [])
+
+    return raport
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #9 — leczenie specjalne
+# LECZENIE SPECJALNE (1 call — potrzebuje res_text)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_leczenie_specjalne(cfg: dict, body: str, res_text: str,
@@ -893,8 +705,7 @@ def _sekcja_leczenie_specjalne(cfg: dict, body: str, res_text: str,
 
     zasady_raw = ""
     if res_text and "### TYLER DURDEN" in res_text:
-        tyler_sec = res_text.split("### TYLER DURDEN", 1)[1]
-        zasady_raw = tyler_sec[:3000]
+        zasady_raw = res_text.split("### TYLER DURDEN", 1)[1][:3000]
     elif res_text:
         zasady_raw = res_text[:3000]
 
@@ -911,22 +722,20 @@ def _sekcja_leczenie_specjalne(cfg: dict, body: str, res_text: str,
     result = _parse_json_safe(raw, "leczenie_specjalne") if raw else None
 
     if not result:
-        return {
-            "leczenie_specjalne": {
-                "tytul": "PROTOKÓŁ LECZENIA SPECJALNEGO WG METODY DURDEN",
-                "wstep": BRAK,
-                "zasady": [{"numer": i, "zasada_tylera": BRAK,
-                             "metoda_terapeutyczna": BRAK,
-                             "dawkowanie": BRAK,
-                             "podpis_komisji": "Dr. T. Durden"} for i in range(1, 9)],
-                "zamkniecie": BRAK,
-            }
-        }
+        return {"leczenie_specjalne": {
+            "tytul": "PROTOKÓŁ LECZENIA SPECJALNEGO WG METODY DURDEN",
+            "wstep": BRAK,
+            "zasady": [{"numer": i, "zasada_tylera": BRAK,
+                        "metoda_terapeutyczna": BRAK,
+                        "dawkowanie": BRAK,
+                        "podpis_komisji": "Dr. T. Durden"} for i in range(1, 9)],
+            "zamkniecie": BRAK,
+        }}
     return _zamien_braki(result)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DEEPSEEK — tone + completeness (zawsze, niezależnie od Groq)
+# DEEPSEEK tone + completeness
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _deepseek_tone_check(cfg: dict, raport: dict, log: PsychLog) -> dict:
@@ -934,9 +743,8 @@ def _deepseek_tone_check(cfg: dict, raport: dict, log: PsychLog) -> dict:
     system = sec.get("system", "")
     instrukcje = "\n".join(sec.get("instrukcje", []))
     raport_json = json.dumps(raport, ensure_ascii=False, separators=(',', ':'))
-    max_chars = 12000
-    if len(raport_json) > max_chars:
-        raport_json = raport_json[:max_chars] + "...}"
+    if len(raport_json) > 12000:
+        raport_json = raport_json[:12000] + "...}"
     user = (
         f"RAPORT DO OCENY:\n{raport_json}\n\n"
         f"INSTRUKCJE:\n{instrukcje}\n\n"
@@ -964,9 +772,8 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str,
     system = sec.get("system", "")
     instrukcje = "\n".join(sec.get("instrukcje", []))
     raport_json = json.dumps(raport, ensure_ascii=False, separators=(',', ':'))
-    max_chars = 12000
-    if len(raport_json) > max_chars:
-        raport_json = raport_json[:max_chars] + "...}"
+    if len(raport_json) > 12000:
+        raport_json = raport_json[:12000] + "...}"
     user = (
         f"ORYGINALNY EMAIL:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"RAPORT DO SPRAWDZENIA:\n{raport_json}\n\n"
@@ -993,8 +800,6 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str,
 # FLUX
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Globalny set tokenów HF wyczerpanych (402/401/403) w tej sesji — shared z zwykly.py
-# Importujemy ze zwykly żeby czarna lista była wspólna
 try:
     from responders.zwykly import _HF_DEAD_TOKENS
 except ImportError:
@@ -1002,12 +807,9 @@ except ImportError:
 
 
 def _get_hf_tokens() -> list:
-    """Pobiera tokeny HF pomijając te na czarnej liście sesji."""
     names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(40)]
     all_tokens = [(n, v) for n in names if (v := os.getenv(n, "").strip())]
     active = [(n, v) for n, v in all_tokens if n not in _HF_DEAD_TOKENS]
-    if len(all_tokens) != len(active):
-        logger.debug("[psych-flux] Pomijam %d martwych tokenów HF", len(all_tokens) - len(active))
     return active
 
 
@@ -1047,12 +849,11 @@ def _generate_flux(prompt: str, label: str,
                     return base64.b64encode(resp.content).decode("ascii")
             elif resp.status_code == 402:
                 _HF_DEAD_TOKENS.add(name)
-                logger.warning("[psych-flux] 402 token=%s — wyczerpane kredyty, czarna lista (%d łącznie)",
+                logger.warning("[psych-flux] 402 token=%s — czarna lista (%d łącznie)",
                                name, len(_HF_DEAD_TOKENS))
             elif resp.status_code in (401, 403):
                 _HF_DEAD_TOKENS.add(name)
-                logger.warning("[psych-flux] HTTP %d token=%s — nieważny, czarna lista",
-                               resp.status_code, name)
+                logger.warning("[psych-flux] HTTP %d token=%s — czarna lista", resp.status_code, name)
             elif resp.status_code == 429:
                 continue
             else:
@@ -1085,16 +886,13 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str,
             try:
                 b64_pacjent = f1.result(timeout=120)
             except Exception as e:
-                with app_obj.app_context():
-                    app_obj.logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
+                logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
             try:
                 b64_przedmioty = f2.result(timeout=120)
             except Exception as e:
-                with app_obj.app_context():
-                    app_obj.logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
+                logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
     except Exception as e:
-        with app_obj.app_context():
-            app_obj.logger.error("[psych-flux] ThreadPoolExecutor błąd: %s", e)
+        logger.error("[psych-flux] ThreadPoolExecutor błąd: %s", e)
 
     log.flux(bool(b64_pacjent), bool(b64_przedmioty))
 
@@ -1108,7 +906,24 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DOCX BUILDER
+# ZBIERANIE BRAKÓW
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _zbierz_braki(obj, prefix="") -> list:
+    braki = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            braki += _zbierz_braki(v, f"{prefix}.{k}" if prefix else k)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            braki += _zbierz_braki(v, f"{prefix}[{i}]")
+    elif obj == BRAK:
+        braki.append(prefix)
+    return braki
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DOCX BUILDER — bez zmian względem oryginału
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _build_docx(raport: dict, photo_pacjent_b64: str | None,
@@ -1136,7 +951,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     GREY  = RGBColor(0x55, 0x55, 0x55)
     LGREY = RGBColor(0x99, 0x99, 0x99)
     FADED = RGBColor(0x33, 0x33, 0x33)
-    RED   = RGBColor(0xCC, 0x00, 0x00)   # kolor [BRAK DANYCH]
+    RED   = RGBColor(0xCC, 0x00, 0x00)
 
     TW = "Courier New"
     TS = 10
@@ -1154,7 +969,6 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         p.paragraph_format.space_before = Pt(space_before)
         p.paragraph_format.space_after  = Pt(space_after)
         tekst = str(text) if text else ""
-        # Obsługa [BRAK DANYCH] — czerwony
         if tekst == BRAK:
             r = p.add_run(BRAK)
             _font(r, bold=True, color=RED, size=size)
@@ -1270,9 +1084,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         except Exception as e:
             logger.warning("[psych-docx] Błąd zdjęcia: %s", e)
 
-    # ══════════════════════════════════════════════════════════════════════════
     # NAGŁÓWEK
-    # ══════════════════════════════════════════════════════════════════════════
     p_nazwa = doc.add_paragraph()
     p_nazwa.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r_nazwa = p_nazwa.add_run(szpital.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena").upper())
@@ -1300,14 +1112,12 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     p_nr.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r_nr = p_nr.add_run(
         f"Nr: {nr}   |   Data przyjecia: {data_przyj}   |   "
-        f"Lekarz: {szpital.get('lekarz', 'Dr. T. Durden')}"
+        f"Lekarz: {szpital.get('lekarz', 'Dr. T. Durden, MD, PhD, FIGHT')}"
     )
     _font(r_nr, size=9, color=GREY)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # SKIEROWANIE
-    # ══════════════════════════════════════════════════════════════════════════
     skier = raport.get("skierowanie", {})
     if isinstance(skier, dict) and skier.get("instytucja_kierujaca"):
         naglowek("SKIEROWANIE DO SZPITALA PSYCHIATRYCZNEGO")
@@ -1316,7 +1126,6 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         pole("Pacjent", skier.get("pacjent_imie_nazwisko", BRAK))
         pole("Data skierowania", skier.get("data_skierowania", BRAK))
         pole("Rozpoznanie wstępne", skier.get("rozpzowanie_wstepne", BRAK))
-
         powody = skier.get("powody_skierowania", [])
         if powody:
             doc.add_paragraph()
@@ -1326,13 +1135,11 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                     punkt_listy(str(p), numer=i, size=9)
             else:
                 maszyna(str(powody), size=9)
-
         obs = skier.get("obserwacje_wstepne", "")
         if obs:
             doc.add_paragraph()
             podnaglowek("Obserwacje wstępne")
             maszyna(obs, size=9, space_after=4)
-
         podpis_skier = skier.get("podpis_lekarza", "")
         if podpis_skier and podpis_skier != BRAK:
             doc.add_paragraph()
@@ -1340,9 +1147,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             podpis_odrecznie(podpis_skier, size=14)
         separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # I. DANE PACJENTA
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("I. DANE PACJENTA")
     dp = raport.get("dane_pacjenta", {})
     pole("Imię i nazwisko",  dp.get("imie_nazwisko", BRAK))
@@ -1359,17 +1164,12 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                      "Fot. 1 — Pacjent w kaftanie bezpieczenstwa. Oddzial B. Material dowodowy.")
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # II. POWÓD PRZYJĘCIA
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("II. POWOD PRZYJECIA")
-    powod = raport.get("powod_przyjecia", BRAK)
-    maszyna(powod, size=10, space_after=4)
+    maszyna(raport.get("powod_przyjecia", BRAK), size=10, space_after=4)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # III. CYTATY Z IZBY PRZYJĘĆ
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("III. CYTATY Z IZBY PRZYJEC")
     cytaty = raport.get("cytaty_z_przyjecia", [BRAK])
     if isinstance(cytaty, list):
@@ -1380,9 +1180,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         cytat_blok(str(cytaty), size=9)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # IV. PROTOKÓŁ DEPOZYTU
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("IV. PROTOKOL DEPOZYTU — PRZEDMIOTY SKONFISKOWANE")
     dep = raport.get("depozyt", {})
     if isinstance(dep, dict):
@@ -1402,9 +1200,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                      "Fot. 2 — Przedmioty skonfiskowane. Protokol dowodow rzeczowych.")
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # V. FARMAKOLOGIA
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("V. FARMAKOLOGIA — PELNA LISTA LEKOW")
     farm = raport.get("farmakologia", {})
     leki_lista = farm.get("leki", []) if isinstance(farm, dict) else []
@@ -1448,9 +1244,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         nota_kursywa(nota_farm, size=9)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # VI. PRZEBIEG HOSPITALIZACJI
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("VI. PRZEBIEG HOSPITALIZACJI — 14 DNI")
     dni_all = (raport.get("hospitalizacja_tydzien_1", []) or []) + \
               (raport.get("hospitalizacja_tydzien_2", []) or [])
@@ -1467,8 +1261,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         r_dzien = p_dzien.add_run(f"DZIEN {dzien}   /   {data}")
         _font(r_dzien, bold=True, size=10, color=DKRED)
 
-        zdarz = d.get("zdarzenie", BRAK)
-        maszyna(zdarz, size=9, space_before=2, space_after=2)
+        maszyna(d.get("zdarzenie", BRAK), size=9, space_before=2, space_after=2)
 
         for field_label, field_key in [("Podano", "lek"), ("Ocena", "stan_pacjenta")]:
             val = str(d.get(field_key, BRAK))
@@ -1488,20 +1281,15 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             nota_kursywa(nota, size=8)
         separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # VII. KARTA WYPISU
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("VII. KARTA WYPISU")
     wypis = raport.get("wypis", {})
     if isinstance(wypis, dict):
         pole("Dzień wypisu", wypis.get("dzien_wypisu", BRAK))
         pole("Powód wypisu", wypis.get("powod_wypisu", BRAK))
-
-        stan_wip = wypis.get("stan_przy_wypisie", BRAK)
         doc.add_paragraph()
         podnaglowek("Stan pacjenta przy wypisie")
-        maszyna(stan_wip, size=10, space_after=4)
-
+        maszyna(wypis.get("stan_przy_wypisie", BRAK), size=10, space_after=4)
         doc.add_paragraph()
         podnaglowek("Zalecenia po wypisie")
         zal = wypis.get("zalecenia_po_wypisie", [BRAK])
@@ -1510,19 +1298,15 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                 punkt_listy(str(z), numer=i, size=9)
         elif zal:
             maszyna(str(zal), size=9)
-
         poz = wypis.get("opis_pozegnania", BRAK)
         doc.add_paragraph()
         cytat_blok(poz, size=9)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # VIII. DIAGNOZA PSYCHIATRYCZNA
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("VIII. DIAGNOZA PSYCHIATRYCZNA")
-
     for diag_key, diag_label in [("diagnoza_wstepna", "Diagnoza Wstępna"),
-                                   ("diagnoza_dodatkowa", "Diagnoza Dodatkowa (współistniejąca)")]:
+                                   ("diagnoza_dodatkowa", "Diagnoza Dodatkowa")]:
         dg = raport.get(diag_key, {})
         if isinstance(dg, dict):
             podnaglowek(diag_label)
@@ -1550,9 +1334,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             punkt_listy(str(obj), numer=i, size=9)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # IX. ZALECENIA TERAPEUTYCZNE
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("IX. ZALECENIA TERAPEUTYCZNE")
     zt = raport.get("zalecenia_tylera", {})
     if isinstance(zt, dict):
@@ -1561,29 +1343,23 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             p_zth.paragraph_format.space_after = Pt(6)
             r_zth = p_zth.add_run(str(zt["naglowek"]).upper())
             _font(r_zth, bold=True, size=10, color=DKRED)
-
         for key in ["zadanie_1", "zadanie_2", "zadanie_3"]:
             if zt.get(key):
                 doc.add_paragraph()
                 maszyna(str(zt[key]), size=10, space_before=4, space_after=4)
-
         if zt.get("podpis") and zt["podpis"] != BRAK:
             doc.add_paragraph()
             maszyna("Podpisano:", bold=True, size=9)
             podpis_odrecznie(str(zt["podpis"]), size=16)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # X. ROKOWANIE
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("X. ROKOWANIE")
     rok = raport.get("rokowanie", BRAK)
     maszyna(rok, size=10, color=DKRED if rok != BRAK else RED, space_after=4)
     separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # X-bis. LECZENIE SPECJALNE
-    # ══════════════════════════════════════════════════════════════════════════
+    # X-BIS. LECZENIE SPECJALNE
     leczenie = raport.get("leczenie_specjalne", {})
     zasady_spec = []
     if isinstance(leczenie, dict) and leczenie.get("zasady"):
@@ -1593,7 +1369,6 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
 
     if zasady_spec:
         naglowek("X-BIS. LECZENIE SPECJALNE — METODY TERAPEUTYCZNE WG DR. T. DURDENA")
-
         if isinstance(leczenie, dict):
             wstep_txt = leczenie.get("wstep", "")
             if wstep_txt and wstep_txt != BRAK:
@@ -1609,10 +1384,10 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             _font(r_z_h, bold=True, size=10, color=DKRED)
 
             if isinstance(zasada, dict):
-                zasada_txt    = zasada.get("zasada_tylera", BRAK)
-                metoda_txt    = zasada.get("metoda_terapeutyczna", BRAK)
+                zasada_txt     = zasada.get("zasada_tylera", BRAK)
+                metoda_txt     = zasada.get("metoda_terapeutyczna", BRAK)
                 dawkowanie_txt = zasada.get("dawkowanie", BRAK)
-                podpis_txt    = zasada.get("podpis_komisji", "")
+                podpis_txt     = zasada.get("podpis_komisji", "")
             else:
                 zasada_txt = str(zasada)
                 metoda_txt = dawkowanie_txt = podpis_txt = ""
@@ -1647,9 +1422,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             _font(r_zam, italic=True, bold=True, size=10, color=DKRED)
         separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # XI. INCYDENTY SPECJALNE
-    # ══════════════════════════════════════════════════════════════════════════
     incydenty = raport.get("incydenty_specjalne", [])
     if incydenty:
         naglowek("XI. INCYDENTY SPECJALNE (protokoly wewnetrzne)")
@@ -1661,9 +1434,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             maszyna(str(inc), size=9, space_before=0, space_after=4)
         separator()
 
-    # ══════════════════════════════════════════════════════════════════════════
     # XII. PODPIS I NOTATKI PERSONELU
-    # ══════════════════════════════════════════════════════════════════════════
     naglowek("XII. PODPIS I NOTATKI PERSONELU")
     pole("Lekarz prowadzący", szpital.get("lekarz", "Dr. T. Durden, MD, PhD, FIGHT"))
     doc.add_paragraph()
@@ -1710,9 +1481,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     maszyna("Kontrasygnata administracyjna:", bold=True, size=9)
     podpis_odrecznie("Marla Singer", size=15)
 
-    # ══════════════════════════════════════════════════════════════════════════
     # ZAPIS
-    # ══════════════════════════════════════════════════════════════════════════
     buf = io.BytesIO()
     doc.save(buf)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -1733,131 +1502,53 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
                  nouns_dict: dict, sender_name: str = "",
                  gender: str = "patient") -> dict:
     """
-    Główna funkcja modułu.
+    Główna funkcja modułu. v5 — ONE BIG CALL.
 
-    Zwraca:
-      {raport_pdf, psych_photo_1, psych_photo_2, log_psych}
+    Calle AI:
+      1. filtr_rzeczownikow  (Groq sekwencyjny)
+      2. skierowanie         (Groq sekwencyjny)
+      3. ONE BIG CALL        (Groq/DeepSeek) — cały raport naraz
+      4. leczenie_specjalne  (Groq sekwencyjny — potrzebuje res_text)
+      5. DeepSeek tone check
+      6. DeepSeek completeness check
+      Łącznie: 4-6 calli zamiast 9+
+
+    Zwraca: {raport_pdf, psych_photo_1, psych_photo_2, log_psych}
     """
     from flask import current_app as flask_app
 
-    logger.info("[psych-raport] START build_raport sender=%s", sender_name)
+    logger.info("[psych-raport] START build_raport v5 sender=%s", sender_name)
     app_obj = flask_app._get_current_object()
     cfg = _load_cfg()
     ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # ── Inicjuj log ───────────────────────────────────────────────────────────
     log = PsychLog(sender_name, body)
     log.nouns_before(nouns_dict or {})
 
-    # ── Filtr rzeczowników ────────────────────────────────────────────────────
+    # ── 1. Filtr rzeczowników ─────────────────────────────────────────────────
     nouns_dict = _filtruj_rzeczowniki_fizyczne(cfg, body, nouns_dict or {}, log)
     log.nouns_after(nouns_dict)
-    logger.info("[psych-raport] Fizyczne rzeczowniki: %d", len(nouns_dict))
 
-    # ── Skierowanie (sync) ────────────────────────────────────────────────────
+    # ── 2. Skierowanie ────────────────────────────────────────────────────────
     sekcja_skier = {}
     try:
         sekcja_skier = _sekcja_skierowanie(cfg, body, sender_name, nouns_dict, log)
     except Exception as e:
         logger.error("[psych-raport] Skierowanie błąd: %s", e)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # RUNDA 1 — równolegle
-    # ══════════════════════════════════════════════════════════════════════════
-    def _r1_pacjent():
-        with app_obj.app_context():
-            return _sekcja_pacjent(cfg, body, sender_name, nouns_dict, log)
-
-    def _r1_depozyt():
-        with app_obj.app_context():
-            return _sekcja_depozyt_leki(cfg, body, nouns_dict, sender_name, log)
-
-    def _r1_diagnozy():
-        with app_obj.app_context():
-            return _sekcja_diagnozy(cfg, body, previous_body or "", sender_name, nouns_dict, log)
-
-    def _r1_flux():
-        with app_obj.app_context():
-            return _sekcja_flux_prompty(cfg, body, nouns_dict, sender_name, gender, log)
-
-    sekcja_pacjent = sekcja_dep_leki = sekcja_diagnozy = sekcja_flux = {}
-
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {
-            "pacjent":  ex.submit(_r1_pacjent),
-            "depozyt":  ex.submit(_r1_depozyt),
-            "diagnozy": ex.submit(_r1_diagnozy),
-            "flux":     ex.submit(_r1_flux),
-        }
-        for name, fut in futures.items():
-            try:
-                result = fut.result(timeout=90)
-                if name == "pacjent":
-                    sekcja_pacjent  = result
-                elif name == "depozyt":
-                    sekcja_dep_leki = result
-                elif name == "diagnozy":
-                    sekcja_diagnozy = result
-                elif name == "flux":
-                    sekcja_flux     = result
-                logger.info("[psych-raport] Runda1 %s OK", name)
-            except Exception as e:
-                logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
-
-    data_przyjecia = sekcja_pacjent.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
-    leki_lista     = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # RUNDA 2 — równolegle
-    # ══════════════════════════════════════════════════════════════════════════
-    def _r2_tydzien1():
-        with app_obj.app_context():
-            return _sekcja_tydzien(cfg, body, leki_lista, 1, data_przyjecia,
-                                   sender_name, nouns_dict, log)
-
-    def _r2_tydzien2():
-        with app_obj.app_context():
-            return _sekcja_tydzien(cfg, body, leki_lista, 2, data_przyjecia,
-                                   sender_name, nouns_dict, log)
-
-    def _r2_wypis():
-        with app_obj.app_context():
-            return _sekcja_wypis(cfg, body, data_przyjecia, sender_name, nouns_dict, log)
-
-    dni_1_7 = dni_8_14 = []
-    sekcja_wypis = {}
-
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        futures2 = {
-            "tydzien1": ex.submit(_r2_tydzien1),
-            "tydzien2": ex.submit(_r2_tydzien2),
-            "wypis":    ex.submit(_r2_wypis),
-        }
-        for name, fut in futures2.items():
-            try:
-                result = fut.result(timeout=90)
-                if name == "tydzien1":
-                    dni_1_7      = result
-                elif name == "tydzien2":
-                    dni_8_14     = result
-                elif name == "wypis":
-                    sekcja_wypis = result
-                logger.info("[psych-raport] Runda2 %s OK", name)
-            except Exception as e:
-                logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # RUNDA 3 — zalecenia
-    # ══════════════════════════════════════════════════════════════════════════
-    sekcja_zalecenia = {}
+    # ── 3. ONE BIG CALL ───────────────────────────────────────────────────────
+    big_data = {}
     try:
-        sekcja_zalecenia = _sekcja_zalecenia(
-            cfg, body, dni_1_7, dni_8_14, sender_name, nouns_dict, log
-        )
+        big_data = _one_big_call(cfg, body, sender_name, nouns_dict,
+                                 previous_body or "", gender, log)
     except Exception as e:
-        logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
+        logger.error("[psych-raport] ONE BIG CALL błąd: %s", e)
 
-    # ── Leczenie specjalne (czeka na zalecenia) ───────────────────────────────
+    # Rozpakuj wynik
+    raport = _flatten_big_call_result(big_data, sender_name)
+    raport["skierowanie"] = sekcja_skier.get("skierowanie", {})
+
+    # ── 4. Leczenie specjalne ─────────────────────────────────────────────────
     sekcja_leczenie = {}
     try:
         sekcja_leczenie = _sekcja_leczenie_specjalne(
@@ -1865,40 +1556,28 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         )
     except Exception as e:
         logger.error("[psych-raport] Leczenie specjalne błąd: %s", e)
-
-    # ── Scal raport ───────────────────────────────────────────────────────────
-    raport = {}
-    raport.update(sekcja_pacjent)
-    raport["skierowanie"]               = sekcja_skier.get("skierowanie", {})
-    raport["depozyt"]                   = sekcja_dep_leki.get("depozyt", {})
-    raport["farmakologia"]              = sekcja_dep_leki.get("farmakologia", {})
-    raport["hospitalizacja_tydzien_1"]  = dni_1_7
-    raport["hospitalizacja_tydzien_2"]  = dni_8_14
-    raport.update(sekcja_wypis)
-    raport.update(sekcja_diagnozy)
-    raport.update(sekcja_zalecenia)
-    raport["leczenie_specjalne"]        = sekcja_leczenie.get("leczenie_specjalne", {})
+    raport["leczenie_specjalne"] = sekcja_leczenie.get("leczenie_specjalne", {})
 
     logger.info("[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport))
 
-    # ── DeepSeek tone + completeness (zawsze) ────────────────────────────────
+    # ── 5+6. DeepSeek checks ──────────────────────────────────────────────────
     raport = _deepseek_tone_check(cfg, raport, log)
     raport = _deepseek_completeness_check(cfg, raport, body, log)
 
-    # Końcowe zamienienie wszystkich markerów wewnętrznych na [BRAK DANYCH]
+    # Zamień wszystkie markery wewnętrzne na [BRAK DANYCH]
     raport = _zamien_braki(raport)
 
-    # ── FLUX ──────────────────────────────────────────────────────────────────
-    prompt_pacjent    = sekcja_flux.get("prompt_pacjent", "")
-    prompt_przedmioty = sekcja_flux.get("prompt_przedmioty", "")
+    # ── 7. FLUX zdjęcia ───────────────────────────────────────────────────────
+    flux_data = big_data.get("flux_prompty", {})
+    prompt_pacjent    = flux_data.get("prompt_pacjent", "") if isinstance(flux_data, dict) else ""
+    prompt_przedmioty = flux_data.get("prompt_przedmioty", "") if isinstance(flux_data, dict) else ""
     photo_1, photo_2  = _generate_photos_parallel(prompt_pacjent, prompt_przedmioty, log)
 
-    # ── DOCX ──────────────────────────────────────────────────────────────────
+    # ── 8. DOCX ───────────────────────────────────────────────────────────────
     photo_1_b64 = photo_1["base64"] if photo_1 else None
     photo_2_b64 = photo_2["base64"] if photo_2 else None
     docx_b64    = _build_docx(raport, photo_1_b64, photo_2_b64, cfg, log)
 
-    # ── Log jako załącznik ────────────────────────────────────────────────────
     log_dict = log.build()
 
     if not docx_b64:
@@ -1920,11 +1599,10 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     }
 
     logger.info(
-        "[psych-raport] DONE raport=%s photo1=%s photo2=%s log=%s",
+        "[psych-raport] DONE raport=%s photo1=%s photo2=%s",
         raport_pdf_dict["filename"],
         photo_1["filename"] if photo_1 else "brak",
         photo_2["filename"] if photo_2 else "brak",
-        log_dict["filename"],
     )
 
     return {
