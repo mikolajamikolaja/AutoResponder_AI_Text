@@ -35,7 +35,11 @@ import random
 import requests
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from flask import current_app
+import logging
+from flask import current_app  # używane tylko w _generate_photos_parallel
+
+# Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
+logger = logging.getLogger(__name__)
 
 from core.ai_client import call_deepseek, MODEL_TYLER
 from core.config import (
@@ -239,9 +243,9 @@ def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 4096) 
             return resp.json()["choices"][0]["message"]["content"].strip()
         if resp.status_code == 429:
             return "RATE_LIMIT"
-        current_app.logger.warning("[psych-raport] Groq HTTP %d", resp.status_code)
+        logger.warning("[psych-raport] Groq HTTP %d", resp.status_code)
     except Exception as e:
-        current_app.logger.warning("[psych-raport] Groq wyjątek: %s", e)
+        logger.warning("[psych-raport] Groq wyjątek: %s", e)
     return None
 
 
@@ -264,7 +268,7 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
         for key_name, key_val in keys:
             result = _call_groq_single(key_val, system, user, max_tokens)
             if result and result != "RATE_LIMIT":
-                current_app.logger.info(
+                logger.info(
                     "[psych-raport] %s OK (groq/%s attempt=%d)", section_name, key_name, attempt + 1
                 )
                 if log:
@@ -272,32 +276,32 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
                                key_name, result, "OK")
                 return result
             if result == "RATE_LIMIT":
-                current_app.logger.warning(
+                logger.warning(
                     "[psych-raport] %s RATE_LIMIT klucz=%s → następny", section_name, key_name
                 )
                 continue
-        current_app.logger.warning(
+        logger.warning(
             "[psych-raport] %s — wszystkie Groq zawiodły attempt=%d/%d",
             section_name, attempt + 1, 3
         )
 
     # ── DeepSeek awaryjny ────────────────────────────────────────────────────
-    current_app.logger.warning(
+    logger.warning(
         "[psych-raport] %s → DeepSeek awaryjny", section_name
     )
     try:
         ds_result = call_deepseek(system, user, MODEL_TYLER)
         if ds_result:
-            current_app.logger.info("[psych-raport] %s → DeepSeek OK", section_name)
+            logger.info("[psych-raport] %s → DeepSeek OK", section_name)
             if log:
                 log.sekcja(log_numer, section_name, user, "deepseek/awaryjny",
                            "API_KEY_DEEPSEEK", ds_result, "OK (DeepSeek awaryjny)")
             return ds_result
     except Exception as e:
-        current_app.logger.error("[psych-raport] %s → DeepSeek wyjątek: %s", section_name, e)
+        logger.error("[psych-raport] %s → DeepSeek wyjątek: %s", section_name, e)
 
     # ── Ostateczny fallback — brak danych ────────────────────────────────────
-    current_app.logger.error(
+    logger.error(
         "[psych-raport] %s → BRAK DANYCH (wszystkie AI zawiodły)", section_name
     )
     if log:
@@ -336,10 +340,10 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
         clean = clean[:end_idx]
 
         result = json.loads(clean.strip())
-        current_app.logger.info("[psych-raport] JSON OK sekcja=%s", section)
+        logger.info("[psych-raport] JSON OK sekcja=%s", section)
         return result
     except Exception as e:
-        current_app.logger.warning(
+        logger.warning(
             "[psych-raport] JSON błąd sekcja=%s: %s | próba naprawy...", section, e
         )
         try:
@@ -377,12 +381,12 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
                 if suffix:
                     repaired = partial[:last_valid if last_valid else len(partial)] + suffix
                     result = json.loads(repaired)
-                    current_app.logger.warning(
+                    logger.warning(
                         "[psych-raport] JSON naprawiony sekcja=%s (doklejono '%s')", section, suffix
                     )
                     return result
         except Exception as e2:
-            current_app.logger.warning(
+            logger.warning(
                 "[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw=%.300s",
                 section, e2, raw
             )
@@ -428,7 +432,7 @@ def _load_cfg() -> dict:
         with open(RAPORT_JSON, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        current_app.logger.error("[psych-raport] Brak zwykly_raport.json: %s", e)
+        logger.error("[psych-raport] Brak zwykly_raport.json: %s", e)
         return {}
 
 
@@ -528,7 +532,7 @@ def _filtruj_rzeczowniki_fizyczne(cfg: dict, body: str, nouns_dict: dict,
     oczyszczone = {k: v for k, v in fizyczne.items()
                    if v not in (_NIEUNOSZALNE, BRAK)}
 
-    current_app.logger.info(
+    logger.info(
         "[psych-raport] filtr_rzeczownikow OK — %d fizycznych (usunięto %d nieunoszalnych)",
         len(oczyszczone), len(fizyczne) - len(oczyszczone)
     )
@@ -690,7 +694,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
 
     result = _parse_json_safe(raw, section_name)
     if result is None:
-        current_app.logger.error("[psych-raport] %s parse None", section_name)
+        logger.error("[psych-raport] %s parse None", section_name)
         return _fallback_dni_brak(start_day, daty)
 
     lista = _extract_list_from_result(result, min_len=5)
@@ -937,7 +941,7 @@ def _deepseek_tone_check(cfg: dict, raport: dict, log: PsychLog) -> dict:
         f"Pola '[BRAK DANYCH]' — zostaw bez zmian. "
         f"Zwróć TYLKO czysty JSON z poprawkami."
     )
-    current_app.logger.info("[psych-raport] DeepSeek tone check START")
+    logger.info("[psych-raport] DeepSeek tone check START")
     raw = call_deepseek(system, user, MODEL_TYLER)
     if not raw:
         log.deepseek("tone_check", ["brak odpowiedzi — skip"])
@@ -968,7 +972,7 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str,
         f"Pola '[BRAK DANYCH]' — zostaw bez zmian. "
         f"Zwróć TYLKO czysty JSON z uzupełnieniami."
     )
-    current_app.logger.info("[psych-raport] DeepSeek completeness check START")
+    logger.info("[psych-raport] DeepSeek completeness check START")
     raw = call_deepseek(system, user, MODEL_TYLER)
     if not raw:
         log.deepseek("completeness_check", ["brak odpowiedzi — skip"])
@@ -987,9 +991,22 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str,
 # FLUX
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Globalny set tokenów HF wyczerpanych (402/401/403) w tej sesji — shared z zwykly.py
+# Importujemy ze zwykly żeby czarna lista była wspólna
+try:
+    from responders.zwykly import _HF_DEAD_TOKENS
+except ImportError:
+    _HF_DEAD_TOKENS: set = set()
+
+
 def _get_hf_tokens() -> list:
+    """Pobiera tokeny HF pomijając te na czarnej liście sesji."""
     names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(40)]
-    return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
+    all_tokens = [(n, v) for n in names if (v := os.getenv(n, "").strip())]
+    active = [(n, v) for n, v in all_tokens if n not in _HF_DEAD_TOKENS]
+    if len(all_tokens) != len(active):
+        logger.debug("[psych-flux] Pomijam %d martwych tokenów HF", len(all_tokens) - len(active))
+    return active
 
 
 def _generate_flux(prompt: str, label: str,
@@ -997,7 +1014,7 @@ def _generate_flux(prompt: str, label: str,
                    width: int = 1024, height: int = 1024) -> str | None:
     tokens = _get_hf_tokens()
     if not tokens:
-        current_app.logger.error("[psych-flux] Brak tokenów HF dla %s", label)
+        logger.error("[psych-flux] Brak tokenów HF dla %s", label)
         return None
 
     seed = random.randint(0, 2 ** 32 - 1)
@@ -1017,7 +1034,7 @@ def _generate_flux(prompt: str, label: str,
         try:
             resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
             if resp.status_code == 200:
-                current_app.logger.info("[psych-flux] %s OK token=%s", label, name)
+                logger.info("[psych-flux] %s OK token=%s", label, name)
                 try:
                     from PIL import Image as PILImage
                     pil = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
@@ -1026,17 +1043,31 @@ def _generate_flux(prompt: str, label: str,
                     return base64.b64encode(buf.getvalue()).decode("ascii")
                 except Exception:
                     return base64.b64encode(resp.content).decode("ascii")
+            elif resp.status_code == 402:
+                _HF_DEAD_TOKENS.add(name)
+                logger.warning("[psych-flux] 402 token=%s — wyczerpane kredyty, czarna lista (%d łącznie)",
+                               name, len(_HF_DEAD_TOKENS))
+            elif resp.status_code in (401, 403):
+                _HF_DEAD_TOKENS.add(name)
+                logger.warning("[psych-flux] HTTP %d token=%s — nieważny, czarna lista",
+                               resp.status_code, name)
             elif resp.status_code == 429:
                 continue
+            else:
+                logger.warning("[psych-flux] HTTP %d token=%s", resp.status_code, name)
         except Exception as e:
-            current_app.logger.warning("[psych-flux] %s wyjątek token=%s: %s", label, name, e)
+            logger.warning("[psych-flux] %s wyjątek token=%s: %s", label, name, e)
 
     return None
 
 
 def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str,
                                log: PsychLog) -> tuple:
-    from flask import current_app as flask_app
+    import logging
+from flask import current_app  # używane tylko w _generate_photos_parallel
+
+# Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
+logger = logging.getLogger(__name__) as flask_app
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     app_obj = flask_app._get_current_object()
 
@@ -1090,7 +1121,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         from docx.shared import Pt, Cm, RGBColor
         from docx.enum.text import WD_ALIGN_PARAGRAPH
     except ImportError as e:
-        current_app.logger.error("[psych-docx] Brak python-docx: %s", e)
+        logger.error("[psych-docx] Brak python-docx: %s", e)
         return None
 
     szpital = cfg.get("szpital", {})
@@ -1239,7 +1270,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             for r in cap.runs:
                 _font(r, italic=True, color=GREY, size=8)
         except Exception as e:
-            current_app.logger.warning("[psych-docx] Błąd zdjęcia: %s", e)
+            logger.warning("[psych-docx] Błąd zdjęcia: %s", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # NAGŁÓWEK
@@ -1692,7 +1723,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     braki = _zbierz_braki(raport)
     log.docx_info(rozmiar_kb, braki)
 
-    current_app.logger.info("[psych-docx] DOCX OK (%dKB), braki: %d", rozmiar_kb, len(braki))
+    logger.info("[psych-docx] DOCX OK (%dKB), braki: %d", rozmiar_kb, len(braki))
     return b64
 
 
@@ -1709,9 +1740,13 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     Zwraca:
       {raport_pdf, psych_photo_1, psych_photo_2, log_psych}
     """
-    from flask import current_app as flask_app
+    import logging
+from flask import current_app  # używane tylko w _generate_photos_parallel
 
-    current_app.logger.info("[psych-raport] START build_raport sender=%s", sender_name)
+# Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
+logger = logging.getLogger(__name__) as flask_app
+
+    logger.info("[psych-raport] START build_raport sender=%s", sender_name)
     app_obj = flask_app._get_current_object()
     cfg = _load_cfg()
     ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1723,14 +1758,14 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ── Filtr rzeczowników ────────────────────────────────────────────────────
     nouns_dict = _filtruj_rzeczowniki_fizyczne(cfg, body, nouns_dict or {}, log)
     log.nouns_after(nouns_dict)
-    current_app.logger.info("[psych-raport] Fizyczne rzeczowniki: %d", len(nouns_dict))
+    logger.info("[psych-raport] Fizyczne rzeczowniki: %d", len(nouns_dict))
 
     # ── Skierowanie (sync) ────────────────────────────────────────────────────
     sekcja_skier = {}
     try:
         sekcja_skier = _sekcja_skierowanie(cfg, body, sender_name, nouns_dict, log)
     except Exception as e:
-        current_app.logger.error("[psych-raport] Skierowanie błąd: %s", e)
+        logger.error("[psych-raport] Skierowanie błąd: %s", e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # RUNDA 1 — równolegle
@@ -1771,9 +1806,9 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
                     sekcja_diagnozy = result
                 elif name == "flux":
                     sekcja_flux     = result
-                current_app.logger.info("[psych-raport] Runda1 %s OK", name)
+                logger.info("[psych-raport] Runda1 %s OK", name)
             except Exception as e:
-                current_app.logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
+                logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
 
     data_przyjecia = sekcja_pacjent.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
     leki_lista     = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
@@ -1813,9 +1848,9 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
                     dni_8_14     = result
                 elif name == "wypis":
                     sekcja_wypis = result
-                current_app.logger.info("[psych-raport] Runda2 %s OK", name)
+                logger.info("[psych-raport] Runda2 %s OK", name)
             except Exception as e:
-                current_app.logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
+                logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # RUNDA 3 — zalecenia
@@ -1826,7 +1861,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
             cfg, body, dni_1_7, dni_8_14, sender_name, nouns_dict, log
         )
     except Exception as e:
-        current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
+        logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
 
     # ── Leczenie specjalne (czeka na zalecenia) ───────────────────────────────
     sekcja_leczenie = {}
@@ -1835,7 +1870,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
             cfg, body, res_text, sender_name, nouns_dict, log
         )
     except Exception as e:
-        current_app.logger.error("[psych-raport] Leczenie specjalne błąd: %s", e)
+        logger.error("[psych-raport] Leczenie specjalne błąd: %s", e)
 
     # ── Scal raport ───────────────────────────────────────────────────────────
     raport = {}
@@ -1850,7 +1885,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     raport.update(sekcja_zalecenia)
     raport["leczenie_specjalne"]        = sekcja_leczenie.get("leczenie_specjalne", {})
 
-    current_app.logger.info("[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport))
+    logger.info("[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport))
 
     # ── DeepSeek tone + completeness (zawsze) ────────────────────────────────
     raport = _deepseek_tone_check(cfg, raport, log)
@@ -1873,7 +1908,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     log_dict = log.build()
 
     if not docx_b64:
-        current_app.logger.error("[psych-raport] DOCX nie wygenerowany")
+        logger.error("[psych-raport] DOCX nie wygenerowany")
         return {
             "raport_pdf":    None,
             "psych_photo_1": photo_1,
@@ -1890,7 +1925,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         "filename":     f"raport_psychiatryczny_{safe}_{ts}.docx",
     }
 
-    current_app.logger.info(
+    logger.info(
         "[psych-raport] DONE raport=%s photo1=%s photo2=%s log=%s",
         raport_pdf_dict["filename"],
         photo_1["filename"] if photo_1 else "brak",
