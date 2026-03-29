@@ -320,14 +320,117 @@ def _load_cfg() -> dict:
 # GROQ #1 — dane pacjenta + powód + cytaty
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _filtruj_rzeczowniki_fizyczne(cfg: dict, body: str, nouns_dict: dict) -> dict:
+    """
+    Groq #0 — filtruje rzeczowniki z emaila do formy fizycznie nośnej.
+    Przekształca abstrakty (poddasze, działka, dom, przestrzeń) w unoszalne obiekty.
+    Zwraca nowy nouns_dict z fizycznymi reprezentacjami lub oryginalny przy błędzie.
+    """
+    if not nouns_dict:
+        return nouns_dict
+    sec = cfg.get("groq_0_filtr_rzeczownikow", {})
+    system = sec.get("system", "")
+    if not system:
+        return nouns_dict
+
+    nouns_str = json.dumps(nouns_dict, ensure_ascii=False)
+    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    user = (
+        f"EMAIL PACJENTA (kontekst):\n{body[:800]}\n\n"
+        f"LISTA RZECZOWNIKÓW DO PRZEFILTROWANIA:\n{nouns_str}\n\n"
+        f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
+        f"Przekształć każdy rzeczownik abstrakcyjny lub niematerialny w jego unoszalną fizyczną "
+        f"reprezentację zgodnie z podanymi regułami. Zwróć TYLKO czysty JSON."
+    )
+    raw = _call_groq_with_retry(system, user, 1000, "filtr_rzeczownikow")
+    if not raw:
+        current_app.logger.warning("[psych-raport] filtr_rzeczownikow → brak odpowiedzi, używam oryginalnych")
+        return nouns_dict
+
+    result = _parse_json_safe(raw, "filtr_rzeczownikow")
+    if not result or not isinstance(result, dict):
+        current_app.logger.warning("[psych-raport] filtr_rzeczownikow → parse błąd, używam oryginalnych")
+        return nouns_dict
+
+    # Wyciągnij fizyczne_przedmioty jeśli zagnieżdżone
+    if "fizyczne_przedmioty" in result and isinstance(result["fizyczne_przedmioty"], dict):
+        fizyczne = result["fizyczne_przedmioty"]
+    else:
+        fizyczne = {k: v for k, v in result.items() if re.match(r'^rzecz\d+$', k)}
+
+    if not fizyczne:
+        return nouns_dict
+
+    current_app.logger.info("[psych-raport] filtr_rzeczownikow OK — %d fizycznych", len(fizyczne))
+    return fizyczne
+
+
+def _sekcja_skierowanie(cfg: dict, body: str, sender_name: str) -> dict:
+    """
+    Groq skierowanie — generuje sekcję skierowania do szpitala.
+    """
+    sec = cfg.get("groq_skierowanie", {})
+    system = sec.get("system", "")
+    if not system:
+        return {}
+    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    user = (
+        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"SENDER_NAME (imię i nazwisko pacjenta — nadawcy emaila): {sender_name or '(brak)'}\n\n"
+        f"KRYTYCZNE: Pacjentem jest osoba która WYSŁAŁA email (sender_name). "
+        f"Jeśli email zaczyna się 'Drogi/a X', to X jest adresatem listu nadawcy, NIE pacjentem.\n\n"
+        f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw = _call_groq_with_retry(system, user, 1500, "skierowanie")
+    result = _parse_json_safe(raw, "skierowanie") if raw else None
+    if not result:
+        # Fallback skierowanie
+        return {
+            "skierowanie": {
+                "instytucja_kierujaca": "Przychodnia Zdrowia Psychicznego 'Nowe Jutro' (Nazwa ironiczna)",
+                "lekarz_kierujacy": "Dr. Zbigniew Pytania-Bez-Odpowiedzi",
+                "pacjent_imie_nazwisko": sender_name or "Pacjent Emailowy",
+                "data_skierowania": datetime.now().strftime("%d.%m.%Y"),
+                "rozpzowanie_wstepne": "Syndroma Epistolaris Planificandi Obsessiva",
+                "powody_skierowania": [
+                    "Pacjent/ka wykazuje zaawansowane objawy Planificandi Obsessio — konstruuje "
+                    "wielopunktowe listy pytań i jednocześnie deklaruje brak oczekiwań odpowiedzi. "
+                    "Jest to podręcznikowy przykład paradoksu terapeutycznego.",
+                    "Osoba kierowana używa sformułowania 'spokojnie i bez pretensji' co w praktyce "
+                    "klinicznej jest równoznaczne z 'z pretensjami i z pełną świadomością konsekwencji'. "
+                    "Komisja uznała to za wysoce niepokojący sygnał.",
+                    "Pacjent/ka wykazuje patologiczne przywiązanie do koncepcji 'szczerej rozmowy' "
+                    "w środowisku rodzinnym, gdzie statystycznie 94% takich rozmów kończy się "
+                    "milczeniem lub zmianą tematu na kolację."
+                ],
+                "obserwacje_wstepne": (
+                    "Osoba kierowana przyszła na wizytę z listą pytań w formie listy punktowanej, "
+                    "co jest samo w sobie dowodem zaburzenia. Lekarz kierujący próbował odpowiedzieć "
+                    "na pierwsze pytanie — pacjent/ka przerwał/a mówiąc że 'nie oczekuje dziś żadnych "
+                    "decyzji'. Sesja zakończona po 7 minutach bez diagnozy."
+                ),
+                "podpis_lekarza": "Dr. Zbigniew Pytania-Bez-Odpowiedzi"
+            }
+        }
+    return result
+
+
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
     sec = cfg.get("groq_1_pacjent", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
+        f"KRYTYCZNE — SENDER_NAME (imię i nazwisko pacjenta — nadawcy emaila): "
+        f"{sender_name or '(brak — użyj podpisu z emaila)'}\n\n"
+        f"KRYTYCZNE: Pacjent to NADAWCA emaila. Jeśli email zaczyna się 'Drogi/a X' to X jest "
+        f"adresatem listu nadawcy, NIE pacjentem. Imię z SENDER_NAME to imię pacjenta.\n\n"
         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"SENDER_NAME (priorytet dla imienia): {sender_name or '(brak)'}\n\n"
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
+        f"PAMIĘTAJ: pole imie_nazwisko = '{sender_name or 'imię z podpisu emaila'}' + wymyślone "
+        f"nazwisko nawiązujące do emaila. ZAKAZ 'Jan Emailowy'.\n"
+        f"PAMIĘTAJ: cytaty to TYLKO parafrazy realnych zdań z emaila. ZAKAZ cytatu 'Nie pamiętam "
+        f"co napisałem' jeśli nadawca tego nie pisał.\n"
         f"Zwróć TYLKO czysty JSON."
     )
     raw = _call_groq_with_retry(system, user, 2000, "pacjent")
@@ -336,12 +439,24 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
     result = _parse_json_safe(raw, "pacjent") if raw else None
     if not result:
         fb = cfg.get("fallback_dane_pacjenta", {})
+        fb = dict(fb)  # kopia żeby nie mutować oryginału
         # Uzupełnij datę przyjęcia na dziś jeśli fallback jej nie ma
-        if isinstance(fb, dict) and not fb.get("data_przyjecia"):
-            fb = dict(fb)
+        if not fb.get("data_przyjecia"):
             fb["data_przyjecia"] = datetime.now().strftime("%d.%m.%Y")
-        current_app.logger.warning("[psych-raport] sekcja_pacjent → fallback")
+        # KLUCZOWE: podmień fallbackowe imię na sender_name jeśli jest
+        if sender_name and isinstance(fb.get("dane_pacjenta"), dict):
+            dp = dict(fb["dane_pacjenta"])
+            dp["imie_nazwisko"] = f"{sender_name} z domu Planificandi"
+            dp["adres"] = "jeszcze ma gdzie mieszkać, ale adresaci jej korespondencji mają inne zdanie"
+            fb["dane_pacjenta"] = dp
+        current_app.logger.warning("[psych-raport] sekcja_pacjent → fallback (sender_name=%s)", sender_name)
         return fb
+    # Podmień imię jeśli AI wróciło z "Jan Emailowy"
+    if sender_name and isinstance(result.get("dane_pacjenta"), dict):
+        dp = result["dane_pacjenta"]
+        if "jan emailowy" in str(dp.get("imie_nazwisko", "")).lower():
+            dp["imie_nazwisko"] = f"{sender_name} z domu Planificandi"
+            current_app.logger.warning("[psych-raport] Podmieniono 'Jan Emailowy' na sender_name")
     return result
 
 
@@ -1405,6 +1520,18 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     cfg = _load_cfg()
     ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # ── Filtrowanie rzeczowników do formy fizycznej ───────────────────────────
+    nouns_dict = _filtruj_rzeczowniki_fizyczne(cfg, body, nouns_dict)
+    current_app.logger.info("[psych-raport] Fizyczne rzeczowniki: %d", len(nouns_dict))
+
+    # ── Skierowanie do szpitala (niezależne, synchroniczne — szybkie) ─────────
+    sekcja_skier = {}
+    try:
+        sekcja_skier = _sekcja_skierowanie(cfg, body, sender_name)
+        current_app.logger.info("[psych-raport] Skierowanie OK")
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Skierowanie błąd: %s", e)
+
     # ══════════════════════════════════════════════════════════════════════════
     # RUNDA 1 — niezależne sekcje Groq równolegle
     # ══════════════════════════════════════════════════════════════════════════
@@ -1511,6 +1638,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ── Scal wszystkie sekcje ─────────────────────────────────────────────────
     raport = {}
     raport.update(sekcja_pacjent)
+    raport["skierowanie"]               = sekcja_skier.get("skierowanie", {})
     raport["depozyt"]                  = sekcja_dep_leki.get("depozyt", {})
     raport["farmakologia"]             = sekcja_dep_leki.get("farmakologia", {})
     raport["hospitalizacja_tydzien_1"] = dni_1_7
