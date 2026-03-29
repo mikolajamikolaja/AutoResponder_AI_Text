@@ -45,7 +45,6 @@ from responders.nawiazanie   import build_nawiazanie_section
 from responders.gif_maker    import make_gif
 from responders.generator_pdf import build_generator_pdf_section
 from responders.smierc        import build_smierc_section
-
 from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
 app = Flask(__name__)
@@ -139,6 +138,24 @@ def webhook():
 
     response_data = _run_parallel(wave1, flask_app)
 
+    # ── WYSYŁKA PO FALI 1 ─────────────────────────────────────────────────────
+    html_fala1 = "".join(filter(None, [
+        response_data.get("zwykly",     {}).get("reply_html", ""),
+        response_data.get("biznes",     {}).get("reply_html", ""),
+        response_data.get("nawiazanie", {}).get("reply_html", ""),
+        response_data.get("scrabble",   {}).get("reply_html", ""),
+    ]))
+    if html_fala1.strip() and wants_text_reply:
+        wyslij_odpowiedz(
+            to_email   = sender,
+            to_name    = sender_name,
+            subject    = f"Re: {previous_subject or 'Twoja wiadomość'}",
+            html_body  = html_fala1,
+            zalaczniki = zbierz_zalaczniki_z_response(
+                {k: response_data[k] for k in ("zwykly", "biznes", "scrabble") if k in response_data}
+            ),
+        )
+
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
     wave2 = {}
     if wants_obrazek:
@@ -172,6 +189,26 @@ def webhook():
 
     if wave2:
         response_data.update(_run_parallel(wave2, flask_app))
+
+        # ── WYSYŁKA PO FALI 2 ─────────────────────────────────────────────────
+        html_fala2 = "".join(filter(None, [
+            response_data.get("obrazek",       {}).get("reply_html", ""),
+            response_data.get("emocje",        {}).get("reply_html", ""),
+            response_data.get("analiza",       {}).get("reply_html", ""),
+            response_data.get("generator_pdf", {}).get("reply_html", ""),
+            response_data.get("smierc",        {}).get("reply_html", ""),
+        ]))
+        wyslij_odpowiedz(
+            to_email   = sender,
+            to_name    = sender_name,
+            subject    = f"Re: {previous_subject or 'Twoja wiadomość'} (część 2)",
+            html_body  = html_fala2 or "<p>Załączniki z drugiej fali.</p>",
+            zalaczniki = zbierz_zalaczniki_z_response(
+                {k: response_data[k] for k in
+                 ("obrazek", "emocje", "analiza", "generator_pdf", "smierc")
+                 if k in response_data}
+            ),
+        )
 
     # Zabezpieczenie — nawiazanie zawsze ma has_history
     if "nawiazanie" not in response_data:

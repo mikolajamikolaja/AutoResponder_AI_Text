@@ -4,7 +4,7 @@ Centralna konfiguracja dla responders/zwykly.py.
 Inne respondery (biznes.py, smierc.py itd.) mają własne stałe w swoich plikach.
 
 Aby zmienić ile znaków emaila trafia do AI — zmień MAX_DLUGOSC_EMAIL.
-Groq llama-3.3-70b-versatile: limit ~128 000 tokenów (~500 000 znaków).
+Najlszepszy byłby model Groq llama-3.3-70b-versatile: limit ~128 000 tokenów (~500 000 znaków) Tymczasowo daje gorszy model : llama-3.1-8b-instant.
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@ MAX_DLUGOSC_EMAIL = 7000
 # GROQ API
 # ─────────────────────────────────────────────────────────────────────────────
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL   = "llama-3.3-70b-versatile"
+GROQ_MODEL   = "llama-3.1-8b-instant"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HUGGING FACE / FLUX
