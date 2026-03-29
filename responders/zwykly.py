@@ -1615,6 +1615,9 @@ def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
     Zwraca dict z base64 lub None.
     """
     tokens = _get_hf_tokens()
+    if tokens and panel_index > 0:
+        offset = (panel_index - 1) % len(tokens)
+        tokens = tokens[offset:] + tokens[:offset]
     if not tokens:
         if _HF_DEAD_TOKENS:
             logger.warning(
