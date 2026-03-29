@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from flask import current_app
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -192,23 +193,42 @@ def _get_groq_keys() -> list:
 
 
 def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 4096) -> str | None:
+    # 1. Zwiększony timeout, bo przy dużym raporcie (One Big Call) Groq potrzebuje czasu
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {
-        "model":       GROQ_MODEL,
+        "model":       GROQ_MODEL,  # UPEWNIJ SIĘ, ŻE W CONFIG MASZ: llama-3.1-8b-instant
         "messages":    [{"role": "system", "content": system},
                         {"role": "user",   "content": user}],
         "max_tokens":  max_tokens,
         "temperature": 0.85,
     }
+    
     try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=45)
+        # Zwiększamy timeout do 60 sekund
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)
+        
         if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            content = resp.json()["choices"][0]["message"]["content"].strip()
+            
+            # SPRAWDZENIE KOMPLETNOŚCI: 
+            # Jeśli funkcja ma zwrócić JSON, a brakuje klamry na końcu - to znaczy, że ucięło tekst
+            if content.startswith("{") and not content.endswith("}"):
+                logger.error("[psych-raport] ❌ Groq zwrócił ucięty JSON na kluczu %s", key[-5:])
+                return None
+            return content
+            
         if resp.status_code == 429:
+            logger.warning("[psych-raport] ⚠️ Rate Limit na kluczu %s. Czekam 15s...", key[-5:])
+            time.sleep(15) # Fizyczne czekanie, żeby następny call miał szansę
             return "RATE_LIMIT"
-        logger.warning("[psych-raport] Groq HTTP %d", resp.status_code)
+            
+        logger.warning("[psych-raport] Groq HTTP %d: %s", resp.status_code, resp.text)
+        
+    except requests.exceptions.Timeout:
+        logger.error("[psych-raport] ⏳ Timeout na kluczu %s", key[-5:])
     except Exception as e:
         logger.warning("[psych-raport] Groq wyjątek: %s", e)
+        
     return None
 
 
@@ -217,25 +237,30 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
                             log: PsychLog = None,
                             log_numer: int = 0) -> str | None:
     """
-    Fallback chain — SEKWENCYJNY:
-      1. Klucze Groq po kolei (następny tylko gdy 429)
-      2. DeepSeek awaryjny
-      3. None
+    Ulepszony Fallback chain:
+      1. Próbuje wszystkich kluczy Groq po kolei.
+      2. Jeśli klucz zwróci None (np. ucięty JSON) lub RATE_LIMIT -> idzie do następnego.
+      3. Na samym końcu, jeśli Groq zawiedzie -> DeepSeek.
     """
     keys = _get_groq_keys()
 
     for key_name, key_val in keys:
+        # Wywołujemy pojedynczy klucz
         result = _call_groq_single(key_val, system, user, max_tokens)
+        
+        # Jeśli dostaliśmy poprawny wynik (nie None i nie RATE_LIMIT) -> KOŃCZYMY SUKCESEM
         if result and result != "RATE_LIMIT":
             logger.info("[psych-raport] %s OK (groq/%s)", section_name, key_name)
             if log:
                 log.sekcja(log_numer, section_name, user, f"groq/{GROQ_MODEL}",
                            key_name, result, "OK")
             return result
-        if result == "RATE_LIMIT":
-            logger.warning("[psych-raport] %s 429 klucz=%s → następny", section_name, key_name)
+            
+        # Jeśli wynik to None lub RATE_LIMIT, pętla 'for' automatycznie weźmie następny klucz
+        logger.warning("[psych-raport] ⚠️ %s zawiódł na kluczu %s -> próbuję następny...", section_name, key_name)
 
-    logger.warning("[psych-raport] %s → DeepSeek awaryjny", section_name)
+    # --- FALLBACK DO DEEPSEEK (jeśli żaden Groq nie zadziałał) ---
+    logger.warning("[psych-raport] 🚨 Wszystkie klucze Groq zawiodły w sekcji %s. Odpalam DeepSeek...", section_name)
     try:
         ds_result = call_deepseek(system, user, MODEL_TYLER)
         if ds_result:
@@ -245,15 +270,9 @@ def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 4096,
                            "API_KEY_DEEPSEEK", ds_result, "OK (DeepSeek awaryjny)")
             return ds_result
     except Exception as e:
-        logger.error("[psych-raport] %s → DeepSeek wyjątek: %s", section_name, e)
+        logger.error("[psych-raport] %s → DeepSeek ERROR: %s", section_name, e)
 
-    logger.error("[psych-raport] %s → BRAK DANYCH", section_name)
-    if log:
-        log.sekcja(log_numer, section_name, user, "BRAK", "BRAK", "",
-                   "BRAK DANYCH — wszystkie AI zawiodły")
     return None
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PARSOWANIE JSON
 # ─────────────────────────────────────────────────────────────────────────────
@@ -612,7 +631,7 @@ def _one_big_call(cfg: dict, body: str, sender_name: str, nouns_dict: dict,
     )
 
     logger.info("[psych-raport] ONE BIG CALL START")
-    raw = _call_ai_with_fallback(system, user, 8000, "one_big_call", log, 10)
+    raw = _call_ai_with_fallback(system, user, 4000, "one_big_call", log, 10)
 
     if not raw:
         logger.error("[psych-raport] ONE BIG CALL — brak odpowiedzi")
