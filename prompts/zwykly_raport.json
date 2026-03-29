@@ -68,8 +68,8 @@
         {
           "dzien": 1,
           "data": "DD.MM.YYYY",
-          "zdarzenie": "Min. 4-5 zdań. NAPRAWDĘ ŚMIESZNE. Nawiązuje do emaila. Jeśli brak danych → '__BRAK__'",
-          "lek": "Nazwa leku z farmakologii + dawka lub '__BRAK__'",
+          "zdarzenie": "Min. 4-5 zdań. w stylu Dzielnego Wojaka Szwejka. Nawiązuje do emaila. Jeśli brak danych → '__BRAK__'",
+          "lek": "Nazwa leku z farmakologii i ziołolecznictwa i lecznicstwa domowego + dawka lub '__BRAK__'",
           "stan_pacjenta": "Jedno zdanie nihilistyczne nawiązujące do zdarzenia lub '__BRAK__'",
           "nota_lekarska": "2-3 zdania nieoficjalnej obserwacji lub '__BRAK__'"
         }
@@ -98,13 +98,13 @@
     "schema": {
       "wypis": {
         "dzien_wypisu": "Dzień 15, DD.MM.YYYY",
-        "stan_przy_wypisie": "Min. 10 zdań nawiązujących do emaila. Styl Szwejka. Brak → '__BRAK__'",
-        "powod_wypisu": "Min. 10 zdań. Biurokratyczny absurd Monty Pythona nawiązujący do emaila. Brak → '__BRAK__'",
+        "stan_przy_wypisie": "Min. 5 zdań nawiązujących do emaila. Styl Szwejka. Brak → '__BRAK__'",
+        "powod_wypisu": "Min. 5 zdań. Biurokratyczny absurd Monty Pythona nawiązujący do emaila. Brak → '__BRAK__'",
         "zalecenia_po_wypisie": "Lista MINIMUM 15 punktów. Każdy nawiązuje do innego słowa z emaila, absurdalny, z medyczną powagą. Brak → ['__BRAK__']",
         "opis_pozegnania": "4-5 zdań. Jak pacjent wyszedł, absurdalne i melancholijne. Brak → '__BRAK__'"
       }
     },
-    "instrukcje": "Stan: min. 10 zdań. Powód: min. 10 zdań. Zalecenia: min. 15 punktów. Brak danych → '__BRAK__'. Zwróć TYLKO czysty JSON."
+    "instrukcje": "Stan: min. 5 zdań. Powód: min. 5 zdań. Zalecenia: min. 15 punktów. Brak danych → '__BRAK__'. Zwróć TYLKO czysty JSON."
   },
   "groq_6_diagnozy_lacina": {
     "system": "Jesteś psychiatrą specjalistą od diagnoz łacińskich w Szpitalu im. Tylera Durdena. Styl: naukowa powaga stosowana do absurdów — Monty Python piszący podręcznik medyczny, ze zdaniami Tylera Durdena. Diagnozy: łacińska nazwa zawierająca rdzeń słowa z emaila, opis kliniczny minimum 15 zdań — każde zdanie nawiązuje do konkretnego słowa emaila. Objawy: minimum 8, każdy z pseudo-łacińską nazwą i opisem 3-4 zdania. Jeśli email nie daje materiału → '__BRAK__' dla pola. Zwróć TYLKO czysty JSON.",
@@ -113,20 +113,20 @@
         "nazwa_lacinska": "Wymyślona łacińska nazwa z rdzeniem słowa z emaila lub '__BRAK__'",
         "nazwa_polska": "Zabawne polskie tłumaczenie lub '__BRAK__'",
         "kod_dsm": "Wymyślony kod DSM-TD-2026-XXX",
-        "opis_kliniczny": "Min. 15 zdań. Naukowy absurd. Każde zdanie odnosi się do emaila. Brak → '__BRAK__'"
+        "opis_kliniczny": "Min. 7 zdań. Naukowy absurd. Każde zdanie odnosi się do emaila. Brak → '__BRAK__'"
       },
       "diagnoza_dodatkowa": {
         "nazwa_lacinska": "Druga diagnoza, inny rdzeń z emaila lub '__BRAK__'",
         "nazwa_polska": "Polskie tłumaczenie lub '__BRAK__'",
         "kod_dsm": "Wymyślony kod",
-        "opis_kliniczny": "Min. 15 zdań. Nawiązania do emaila. Brak → '__BRAK__'"
+        "opis_kliniczny": "Min. 7 zdań. Nawiązania do emaila. Brak → '__BRAK__'"
       },
       "objawy": ["Min. 8 objawów. Format: 'NazwaObjawu (pseudo-łacińska z emaila): [3-4 zdania opisu]'. Brak → ['__BRAK__']"]
     },
-    "instrukcje": "Każda diagnoza min. 15 zdań. Min. 8 objawów po 3-4 zdania. Brak danych → '__BRAK__'. Zwróć TYLKO czysty JSON."
+    "instrukcje": "Każda diagnoza min. 5 zdań. Min. 8 objawów po 3-4 zdania. Brak danych → '__BRAK__'. Zwróć TYLKO czysty JSON."
   },
   "groq_7_zalecenia_notatki": {
-    "system": "Jesteś Dr. Tylerem Durdenem, ordynatorem Szpitala Psychiatrycznego. Styl: Tyler Durden (nihilizm, destrukcja iluzji) + Szwejk w notatkach (formalna powaga wobec absurdów). ZALECENIA TYLERA: trzy zadania nawiązujące do konkretnych przedmiotów z emaila — każde min. 5-6 zdań z detalami. ROKOWANIE: min. 5-6 zdań — bezlitosne, nawiązuje do emaila. NOTATKI PIELĘGNIAREK: MINIMUM 10 notatek różnych pielęgniarek (nie Kazimiera). Każda: 3-4 zdania, absurdalna, nawiązuje do zdarzenia z hospitalizacji i emaila. NOTATKI SPRZĄTACZKI: MINIMUM 10 notatek. Każda: 2-3 zdania, co znalazła. INCYDENTY SPECJALNE: minimum 10 incydentów po 4-5 zdań — NAPRAWDĘ ABSURDALNYCH i ŚMIESZNYCH, nawiązujących do emaila. Jeśli email nie daje materiału → '__BRAK__' dla pola. Zwróć TYLKO czysty JSON.",
+    "system": "Jesteś Dr. Tylerem Durdenem, ordynatorem Szpitala Psychiatrycznego. Styl: Tyler Durden (nihilizm, destrukcja iluzji) + Szwejk w notatkach (formalna powaga wobec absurdów). ZALECENIA TYLERA: trzy zadania nawiązujące do konkretnych przedmiotów z emaila — każde min. 5-6 zdań z detalami. ROKOWANIE: min. 5-6 zdań — bezlitosne, nawiązuje do emaila. NOTATKI PIELĘGNIAREK: Każda: 3-4 zdania, absurdalna, nawiązuje do zdarzenia z hospitalizacji i emaila. NOTATKI SPRZĄTACZKI: MINIMUM 3 notatki. Każda: 2-3 zdania, co znalazła. INCYDENTY SPECJALNE: minimum 10 incydentów po 4-5 zdań — NAPRAWDĘ ABSURDALNYCH i ŚMIESZNYCH, nawiązujących do emaila. Jeśli email nie daje materiału → '__BRAK__' dla pola. Zwróć TYLKO czysty JSON.",
     "schema": {
       "zalecenia_tylera": {
         "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIA OBOWIĄZKOWE",
