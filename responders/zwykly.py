@@ -347,38 +347,27 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
 def _call_groq(system: str, user: str, max_tokens: int = 6000) -> str | None:
     """
-    Wywołuje Groq API RÓWNOLEGLE ze wszystkimi kluczami.
-    Bierze pierwszą poprawną odpowiedź (nie-429).
-    Drastycznie szybsze niż sekwencyjna rotacja przy rate-limitach.
+    Wywołuje Groq API SEKWENCYJNIE — próbuje klucze po kolei.
+    Następny klucz tylko gdy poprzedni zwróci 429.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
     groq_keys = _get_groq_keys()
     if not groq_keys:
         logger.warning("[groq] Brak kluczy w env")
         return None
-    logger.info("[groq] Odpytywanie %d kluczy RÓWNOLEGLE", len(groq_keys))
-    with ThreadPoolExecutor(max_workers=len(groq_keys)) as ex:
-        futures = {
-            ex.submit(_call_groq_single, key, system, user, max_tokens): name
-            for name, key in groq_keys
-        }
-        for future in _as_completed(futures):
-            name = futures[future]
-            try:
-                result = future.result()
-            except Exception as e:
-                logger.warning("[groq] Wyjątek klucz=%s: %s", name, e)
-                continue
-            if result and result != "RATE_LIMIT":
-                logger.info("[groq] OK klucz=%s (%d znaków)", name, len(result))
-                for f in futures:
-                    f.cancel()
-                return result
-            elif result == "RATE_LIMIT":
-                logger.warning("[groq] 429 klucz=%s", name)
+    logger.info("[groq] Odpytywanie %d kluczy SEKWENCYJNIE", len(groq_keys))
+    for name, key in groq_keys:
+        try:
+            result = _call_groq_single(key, system, user, max_tokens)
+        except Exception as e:
+            logger.warning("[groq] Wyjątek klucz=%s: %s", name, e)
+            continue
+        if result and result != "RATE_LIMIT":
+            logger.info("[groq] OK klucz=%s (%d znaków)", name, len(result))
+            return result
+        elif result == "RATE_LIMIT":
+            logger.warning("[groq] 429 klucz=%s — próbuję następny", name)
     logger.error("[groq] Wszystkie %d kluczy wyczerpane", len(groq_keys))
     return None
-
 
 def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
     """
@@ -608,15 +597,12 @@ def _extract_nouns_from_body(body: str) -> list:
             break
     return nouns
 
-
 def _extract_nouns_groq(body: str) -> dict:
     """
-    Wysyła email do Groq RÓWNOLEGLE (wszystkie klucze naraz).
+    Wysyła email do Groq SEKWENCYJNIE (klucze po kolei).
     Zwraca dict {rzecz001: 'kopalnia', ...} lub {} przy błędzie.
     Fallback: DeepSeek.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
-
     NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
     try:
         with open(NOUNS_JSON_PATH, encoding="utf-8") as f:
@@ -652,29 +638,21 @@ def _extract_nouns_groq(body: str) -> dict:
             return "RATE_LIMIT"
         return None
 
-    # Groq — wszystkie klucze równolegle
+    # Groq — klucze sekwencyjnie
     groq_keys = _get_groq_keys()
     if groq_keys:
-        with ThreadPoolExecutor(max_workers=len(groq_keys)) as ex:
-            futures = {
-                ex.submit(_single_nouns_call, key): name
-                for name, key in groq_keys
-            }
-            for future in _as_completed(futures):
-                name = futures[future]
-                try:
-                    result = future.result()
-                except Exception as e:
-                    logger.warning("[rzeczowniki] Wyjątek klucz=%s: %s", name, e)
-                    continue
-                if result and result != "RATE_LIMIT":
-                    logger.info("[rzeczowniki] Groq OK klucz=%s (%d znaków)", name, len(result))
-                    raw = result
-                    for f in futures:
-                        f.cancel()
-                    break
-                elif result == "RATE_LIMIT":
-                    logger.warning("[rzeczowniki] 429 klucz=%s", name)
+        for name, key in groq_keys:
+            try:
+                result = _single_nouns_call(key)
+            except Exception as e:
+                logger.warning("[rzeczowniki] Wyjątek klucz=%s: %s", name, e)
+                continue
+            if result and result != "RATE_LIMIT":
+                logger.info("[rzeczowniki] Groq OK klucz=%s (%d znaków)", name, len(result))
+                raw = result
+                break
+            elif result == "RATE_LIMIT":
+                logger.warning("[rzeczowniki] 429 klucz=%s — próbuję następny", name)
 
     # Fallback DeepSeek
     if not raw:
@@ -695,7 +673,6 @@ def _extract_nouns_groq(body: str) -> dict:
         result = json.loads(clean.strip())
         if not isinstance(result, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
-        # Filtruj — tylko klucze rzecz001, rzecz002 itd.
         nouns_dict = {k: v for k, v in result.items() if re.match(r'^rzecz\d+$', k) and isinstance(v, str)}
         logger.info("[rzeczowniki] OK — %d rzeczowników", len(nouns_dict))
         return nouns_dict
