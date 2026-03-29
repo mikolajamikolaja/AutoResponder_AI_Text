@@ -206,13 +206,15 @@ def _czy_brak(wartosc) -> bool:
 
 def _get_groq_keys() -> list:
     keys = []
-    for i in range(1, 10):  # 1 → 9
-        name = f"API_KEY_GROQ_{i:02d}"  # 01, 02, ..., 09
-        val  = os.getenv(name, "").strip()
-        if val:
-            keys.append((name, val))
+    k = os.getenv("API_KEY_GROQ", "").strip()
+    if k:
+        keys.append(("API_KEY_GROQ", k))
+    for i in range(1, 10):
+        name = f"API_KEY_GROQ_{i:02d}"
+        k = os.getenv(name, "").strip()
+        if k:
+            keys.append((name, k))
     return keys
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS — Groq rotacja kluczy + DeepSeek awaryjny
