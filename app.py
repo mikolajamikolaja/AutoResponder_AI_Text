@@ -46,6 +46,8 @@ from responders.gif_maker    import make_gif
 from responders.generator_pdf import build_generator_pdf_section
 from responders.smierc        import build_smierc_section
 
+from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
+
 app = Flask(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
