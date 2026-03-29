@@ -4396,6 +4396,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             raport_pdf    = raport_result.get("raport_pdf")
             psych_photo_1 = raport_result.get("psych_photo_1")
             psych_photo_2 = raport_result.get("psych_photo_2")
+            log_psych     = raport_result.get("log_psych")
             current_app.logger.info("[zwykly] Raport OK: %s", bool(raport_pdf))
         except Exception as e:
             current_app.logger.error("[zwykly] Raport zawiódł: %s", e)
@@ -4541,6 +4542,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "ankieta_pdf":      ankieta_pdf,
         "horoskop_pdf":     horoskop_pdf,
         "karta_rpg_pdf":    karta_rpg_pdf,
+        "log_psych":        log_psych,
         "raport_pdf":       raport_pdf,
         "psych_photo_1":    psych_photo_1,
         "psych_photo_2":    psych_photo_2,
