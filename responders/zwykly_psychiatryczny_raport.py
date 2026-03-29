@@ -320,6 +320,81 @@ def _load_cfg() -> dict:
 # GROQ #1 — dane pacjenta + powód + cytaty
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _email_kontekst(
+    body: str,
+    sender_name: str = "",
+    nouns_dict: dict = None,
+    previous_body: str = "",
+    extra: str = "",
+) -> str:
+    """
+    Buduje ustandaryzowany blok kontekstu emaila wstrzykiwany do KAŻDEGO
+    wywołania Groq w pipeline raportu psychiatrycznego.
+
+    Zawiera:
+      - pełny email pacjenta
+      - imię i nazwisko nadawcy (sender_name) z wyraźnym opisem roli
+      - wyekstrahowane kluczowe cytaty z emaila (pierwsze zdania każdego akapitu)
+      - listę rzeczowników / fizycznych przedmiotów
+      - poprzednią wiadomość (jeśli inna od bieżącej)
+      - opcjonalny blok extra (np. daty, leki)
+
+    Dzięki temu żadna sekcja nie może "zapomnieć" o treści emaila.
+    """
+    lines = []
+
+    # ── Nadawca ───────────────────────────────────────────────────────────────
+    if sender_name:
+        first = sender_name.split()[0]
+        lines.append(
+            f"PACJENT — NADAWCA EMAILA: {sender_name} (imię: {first})\n"
+            f"UWAGA: Jeśli email zaczyna się od 'Drogi/a X' lub 'Mamo/Tato' — "
+            f"X jest ADRESATEM listu pacjenta, NIE pacjentem. Pacjentem jest zawsze "
+            f"'{sender_name}'.\n"
+        )
+
+    # ── Pełny email ───────────────────────────────────────────────────────────
+    lines.append(f"EMAIL PACJENTA (PEŁNA TREŚĆ):\n{body[:MAX_DLUGOSC_EMAIL]}\n")
+
+    # ── Kluczowe cytaty — pierwsze zdanie z każdego akapitu emaila ───────────
+    akapity = [p.strip() for p in body.split('\n\n') if p.strip() and len(p.strip()) > 30]
+    if akapity:
+        cytaty = []
+        for ap in akapity[:8]:
+            pierwsze = ap.split('.')[0].strip()
+            if len(pierwsze) > 20:
+                cytaty.append(f'  • "{pierwsze}"')
+        if cytaty:
+            lines.append(
+                "KLUCZOWE ZDANIA Z EMAILA (MUSZĄ być podstawą każdego opisu):\n"
+                + "\n".join(cytaty) + "\n"
+            )
+
+    # ── Rzeczowniki / przedmioty ──────────────────────────────────────────────
+    if nouns_dict:
+        nouns_str = ", ".join(nouns_dict.values())
+        lines.append(f"PRZEDMIOTY Z EMAILA (fizyczne reprezentacje): {nouns_str}\n")
+
+    # ── Poprzednia wiadomość ──────────────────────────────────────────────────
+    if previous_body and previous_body.strip() != body.strip():
+        lines.append(
+            f"POPRZEDNIA WIADOMOŚĆ OD PACJENTA (kontekst historyczny):\n"
+            f"{previous_body[:800]}\n"
+        )
+
+    # ── Extra (daty, leki itp.) ───────────────────────────────────────────────
+    if extra:
+        lines.append(extra)
+
+    lines.append(
+        "BEZWZGLĘDNY WYMÓG: Każde pole raportu MUSI zawierać dosłowne nawiązanie "
+        "do konkretnego słowa, zdania lub sytuacji z emaila pacjenta powyżej. "
+        "ZAKAZ ogólników niezwiązanych z emailem.\n"
+    )
+
+    return "\n".join(lines)
+
+
 def _filtruj_rzeczowniki_fizyczne(cfg: dict, body: str, nouns_dict: dict) -> dict:
     """
     Groq #0 — filtruje rzeczowniki z emaila do formy fizycznie nośnej.
@@ -365,20 +440,17 @@ def _filtruj_rzeczowniki_fizyczne(cfg: dict, body: str, nouns_dict: dict) -> dic
     return fizyczne
 
 
-def _sekcja_skierowanie(cfg: dict, body: str, sender_name: str) -> dict:
-    """
-    Groq skierowanie — generuje sekcję skierowania do szpitala.
-    """
+def _sekcja_skierowanie(cfg: dict, body: str, sender_name: str,
+                        nouns_dict: dict = None) -> dict:
+    """Groq skierowanie — generuje sekcję skierowania do szpitala."""
     sec = cfg.get("groq_skierowanie", {})
     system = sec.get("system", "")
     if not system:
         return {}
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    kontekst = _email_kontekst(body, sender_name, nouns_dict)
     user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"SENDER_NAME (imię i nazwisko pacjenta — nadawcy emaila): {sender_name or '(brak)'}\n\n"
-        f"KRYTYCZNE: Pacjentem jest osoba która WYSŁAŁA email (sender_name). "
-        f"Jeśli email zaczyna się 'Drogi/a X', to X jest adresatem listu nadawcy, NIE pacjentem.\n\n"
+        f"{kontekst}\n"
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
@@ -416,24 +488,25 @@ def _sekcja_skierowanie(cfg: dict, body: str, sender_name: str) -> dict:
     return result
 
 
-def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
+def _sekcja_pacjent(cfg: dict, body: str, sender_name: str,
+                    nouns_dict: dict = None) -> dict:
     sec = cfg.get("groq_1_pacjent", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    kontekst = _email_kontekst(body, sender_name, nouns_dict)
+    first_name = sender_name.split()[0] if sender_name else "imię z podpisu emaila"
     user = (
-        f"KRYTYCZNE — SENDER_NAME (imię i nazwisko pacjenta — nadawcy emaila): "
-        f"{sender_name or '(brak — użyj podpisu z emaila)'}\n\n"
-        f"KRYTYCZNE: Pacjent to NADAWCA emaila. Jeśli email zaczyna się 'Drogi/a X' to X jest "
-        f"adresatem listu nadawcy, NIE pacjentem. Imię z SENDER_NAME to imię pacjenta.\n\n"
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"{kontekst}\n"
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
-        f"PAMIĘTAJ: pole imie_nazwisko = '{sender_name or 'imię z podpisu emaila'}' + wymyślone "
-        f"nazwisko nawiązujące do emaila. ZAKAZ 'Jan Emailowy'.\n"
-        f"PAMIĘTAJ: cytaty to TYLKO parafrazy realnych zdań z emaila. ZAKAZ cytatu 'Nie pamiętam "
-        f"co napisałem' jeśli nadawca tego nie pisał.\n"
+        f"PAMIĘTAJ:\n"
+        f"  - pole imie_nazwisko = '{sender_name or first_name}' + wymyślone nazwisko z emaila\n"
+        f"  - ZAKAZ 'Jan Emailowy'\n"
+        f"  - cytaty = TYLKO parafrazy REALNYCH zdań z emaila powyżej\n"
+        f"  - ZAKAZ cytatu 'Nie pamiętam co napisałem/am'\n"
+        f"  - adres = kreatywny, nawiązujący do emaila (dom, poddasze, działka)\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "pacjent")
+    raw = _call_groq_with_retry(system, user, 2500, "pacjent")
     if not raw:
         current_app.logger.warning("[psych-raport] sekcja_pacjent → brak odpowiedzi Groq, fallback")
     result = _parse_json_safe(raw, "pacjent") if raw else None
@@ -464,18 +537,20 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 # GROQ #2 — depozyt + leki
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
+def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict,
+                         sender_name: str = "") -> dict:
     sec = cfg.get("groq_2_depozyt_leki", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "(brak rzeczowników)"
+    kontekst = _email_kontekst(body, sender_name, nouns_dict)
     user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"RZECZOWNIKI Z EMAILA (każdy musi mieć swój lek): {nouns_str}\n\n"
+        f"{kontekst}\n"
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
-        f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
+        f"PAMIĘTAJ: JEDEN LEK per przedmiot, każdy przedmiot z listy MUSI być w depozycie. "
+        f"Dawkowanie żartobliwe, nawiązujące do KONKRETNYCH zdań emaila. "
+        f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2500, "depozyt_leki")
+    raw = _call_groq_with_retry(system, user, 3000, "depozyt_leki")
     if not raw:
         current_app.logger.warning("[psych-raport] sekcja_depozyt_leki → brak odpowiedzi Groq")
     result = _parse_json_safe(raw, "depozyt_leki") if raw else None
@@ -509,7 +584,8 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
-                    data_przyjecia: str) -> list:
+                    data_przyjecia: str, sender_name: str = "",
+                    nouns_dict: dict = None) -> list:
     """
     tydzien=1 → dni 1-7, tydzien=2 → dni 8-14
 
@@ -535,14 +611,19 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
     daty_str = "\n".join(f"Dzień {start_day + i}: {d}" for i, d in enumerate(daty))
 
     leki_str = json.dumps(leki, ensure_ascii=False, indent=2) if leki else "[]"
-
+    kontekst = _email_kontekst(
+        body, sender_name, nouns_dict,
+        extra=(
+            f"LISTA LEKÓW DO UŻYCIA (rotacyjnie dla poszczególnych dni):\n{leki_str}\n\n"
+            f"DATY HOSPITALIZACJI — użyj DOKŁADNIE tych dat:\n{daty_str}\n"
+        )
+    )
     user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"LISTA LEKÓW DO UŻYCIA (używaj tych leków w opisach dni):\n{leki_str}\n\n"
-        f"DATY HOSPITALIZACJI — użyj DOKŁADNIE tych dat:\n{daty_str}\n\n"
+        f"{kontekst}\n"
         f"SCHEMAT JSON (wygeneruj tablicę 7 obiektów dla dni {start_day}-{start_day+6}):\n{schema}\n\n"
-        f"KRYTYCZNE: Każdy z 7 dni MUSI mieć inne, unikalne 'zdarzenie' nawiązujące do treści emaila pacjenta. "
-        f"NIE KOPIUJ tego samego zdarzenia do różnych dni. "
+        f"KRYTYCZNE: Każdy z 7 dni MUSI mieć INNE, unikalne absurdalne zdarzenie. "
+        f"KAŻDE zdarzenie MUSI nawiązywać do konkretnego zdania lub słowa z emaila pacjenta. "
+        f"ZAKAZ kopiowania tego samego zdarzenia. ZAKAZ banalnych zdarzeń (milczenie, siedzenie). "
         f"Zwróć TYLKO czysty JSON z tablicą 7 obiektów."
     )
     section_name = f"tydzien{tydzien}"
@@ -605,7 +686,8 @@ def _fallback_dni(start_day: int, daty: list, leki: list) -> list:
 # GROQ #5 — wypis (dzień 15)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
+def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str,
+                  sender_name: str = "", nouns_dict: dict = None) -> dict:
     sec = cfg.get("groq_5_wypis", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
@@ -614,13 +696,18 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         data_wypisu = (base_date + timedelta(days=14)).strftime("%d.%m.%Y")
     except Exception:
         data_wypisu = datetime.now().strftime("%d.%m.%Y")
+    kontekst = _email_kontekst(
+        body, sender_name, nouns_dict,
+        extra=f"DATA WYPISU (dzień 15): {data_wypisu}\n"
+    )
     user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"DATA WYPISU (dzień 15): {data_wypisu}\n\n"
+        f"{kontekst}\n"
         f"SCHEMAT JSON:\n{schema}\n\n"
+        f"Każde zalecenie po wypisie MUSI nawiązywać do konkretnego słowa z emaila. "
+        f"Powód wypisu — biurokratyczny absurd nawiązujący do emaila. "
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1500, "wypis")
+    raw = _call_groq_with_retry(system, user, 2000, "wypis")
     result = _parse_json_safe(raw, "wypis") if raw else None
     if not result:
         if raw:
@@ -639,18 +726,21 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 # GROQ #6 — łacińskie diagnozy
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
+def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str,
+                     sender_name: str = "", nouns_dict: dict = None) -> dict:
     sec = cfg.get("groq_6_diagnozy_lacina", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    kontekst = _email_kontekst(body, sender_name, nouns_dict, previous_body)
     user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        + (f"POPRZEDNI EMAIL (dla diagnozy_dodatkowej):\n{previous_body[:1000]}\n\n"
-           if previous_body else "")
-        + f"SCHEMAT JSON:\n{schema}\n\n"
+        f"{kontekst}\n"
+        f"SCHEMAT JSON:\n{schema}\n\n"
+        f"Nazwy łacińskie diagnoz MUSZĄ zawierać rdzeń słowa z emaila "
+        f"(np. Planificandi, Domesticus, Epistolaris, Poddasialis). "
+        f"Opis kliniczny — każde zdanie nawiązuje do konkretnego zdania emaila. "
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1500, "diagnozy")
+    raw = _call_groq_with_retry(system, user, 2000, "diagnozy")
     result = _parse_json_safe(raw, "diagnozy") if raw else None
     if not result:
         if raw:
@@ -679,25 +769,32 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 # GROQ #7 — zalecenia + notatki + rokowanie
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
+def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list,
+                      sender_name: str = "", nouns_dict: dict = None) -> dict:
     sec = cfg.get("groq_7_zalecenia_notatki", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
 
-    # Wyciągnij kilka kluczowych zdarzeń z hospitalizacji jako kontekst
+    # Wyciągnij kluczowe zdarzenia z hospitalizacji jako kontekst
     zdarzenia = []
     for d in (dni_1_7 or []) + (dni_8_14 or []):
         if isinstance(d, dict) and d.get("zdarzenie"):
-            zdarzenia.append(f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:150]}")
-    zdarzenia_str = "\n".join(zdarzenia[:8]) if zdarzenia else "(brak)"
+            zdarzenia.append(f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:200]}")
+    zdarzenia_str = "\n".join(zdarzenia[:12]) if zdarzenia else "(brak)"
 
+    kontekst = _email_kontekst(
+        body, sender_name, nouns_dict,
+        extra=f"ZDARZENIA Z HOSPITALIZACJI (nawiązuj do nich w notatkach i incydentach):\n{zdarzenia_str}\n"
+    )
     user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
+        f"{kontekst}\n"
         f"SCHEMAT JSON:\n{schema}\n\n"
+        f"Zadania Tylera MUSZĄ nawiązywać do konkretnych przedmiotów z emaila "
+        f"(dom, działka, poddasze, przestrzeń, rodzina, ściana). "
+        f"Każda notatka pielęgniarki nawiązuje do innego zdarzenia z hospitalizacji. "
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "zalecenia")
+    raw = _call_groq_with_retry(system, user, 3000, "zalecenia")
     result = _parse_json_safe(raw, "zalecenia") if raw else None
     if not result:
         if raw:
@@ -1527,7 +1624,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ── Skierowanie do szpitala (niezależne, synchroniczne — szybkie) ─────────
     sekcja_skier = {}
     try:
-        sekcja_skier = _sekcja_skierowanie(cfg, body, sender_name)
+        sekcja_skier = _sekcja_skierowanie(cfg, body, sender_name, nouns_dict)
         current_app.logger.info("[psych-raport] Skierowanie OK")
     except Exception as e:
         current_app.logger.error("[psych-raport] Skierowanie błąd: %s", e)
@@ -1537,15 +1634,15 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ══════════════════════════════════════════════════════════════════════════
     def _r1_pacjent():
         with app_obj.app_context():
-            return _sekcja_pacjent(cfg, body, sender_name)
+            return _sekcja_pacjent(cfg, body, sender_name, nouns_dict)
 
     def _r1_depozyt():
         with app_obj.app_context():
-            return _sekcja_depozyt_leki(cfg, body, nouns_dict)
+            return _sekcja_depozyt_leki(cfg, body, nouns_dict, sender_name)
 
     def _r1_diagnozy():
         with app_obj.app_context():
-            return _sekcja_diagnozy(cfg, body, previous_body)
+            return _sekcja_diagnozy(cfg, body, previous_body, sender_name, nouns_dict)
 
     def _r1_flux():
         with app_obj.app_context():
@@ -1591,15 +1688,15 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ══════════════════════════════════════════════════════════════════════════
     def _r2_tydzien1():
         with app_obj.app_context():
-            return _sekcja_tydzien(cfg, body, leki_lista, 1, data_przyjecia)
+            return _sekcja_tydzien(cfg, body, leki_lista, 1, data_przyjecia, sender_name, nouns_dict)
 
     def _r2_tydzien2():
         with app_obj.app_context():
-            return _sekcja_tydzien(cfg, body, leki_lista, 2, data_przyjecia)
+            return _sekcja_tydzien(cfg, body, leki_lista, 2, data_przyjecia, sender_name, nouns_dict)
 
     def _r2_wypis():
         with app_obj.app_context():
-            return _sekcja_wypis(cfg, body, data_przyjecia)
+            return _sekcja_wypis(cfg, body, data_przyjecia, sender_name, nouns_dict)
 
     dni_1_7      = []
     dni_8_14     = []
@@ -1629,7 +1726,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # RUNDA 3 — zależy od tydzien1 + tydzien2
     # ══════════════════════════════════════════════════════════════════════════
     try:
-        sekcja_zalecenia = _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14)
+        sekcja_zalecenia = _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14, sender_name, nouns_dict)
         current_app.logger.info("[psych-raport] Runda3 zalecenia OK")
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)

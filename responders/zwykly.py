@@ -1289,7 +1289,14 @@ def _build_session_vars(
     vars_dict["SENDER"] = sender_email or ""
     vars_dict["SENDER_NAME"] = sender_name or ""
     vars_dict["BODY"] = body or ""
-    vars_dict["PREVIOUS_BODY"] = previous_body or ""
+    # Jeśli PREVIOUS_BODY jest identyczny z BODY — to błąd webhooka, traktuj jako brak historii
+    _prev = previous_body or ""
+    if _prev.strip() and _prev.strip() == (body or "").strip():
+        current_app.logger.warning(
+            "[session_vars] PREVIOUS_BODY identyczny z BODY — traktuję jako brak historii"
+        )
+        _prev = ""
+    vars_dict["PREVIOUS_BODY"] = _prev
 
     # ── USER_OBJECTS: Groq nouns_dict (priorytet) → fallback regex ───────────
     if nouns_dict:
@@ -1300,9 +1307,18 @@ def _build_session_vars(
     else:
         nouns = _extract_nouns_from_body(body)
         vars_dict["USER_OBJECTS"] = ", ".join(nouns[:15]) if nouns else ""
-    vars_dict["USER_PERSON"] = _detect_sender_name(body) or sender_name or ""
+    # KLUCZOWE: sender_name z webhooka (GAS) ma ABSOLUTNY PRIORYTET.
+    # _detect_sender_name(body) wykrywa imię z TREŚCI emaila (np. "Mama / Anna") —
+    # to jest imię osoby PODPISANEJ pod listem, nie nadawcy wiadomości do systemu.
+    # Nadawcą do systemu jest zawsze SENDER_NAME z nagłówka From:.
+    if sender_name and sender_name.strip():
+        vars_dict["USER_PERSON"] = sender_name.strip()
+    else:
+        # Fallback na detekcję z body tylko gdy webhook nie przysłał sender_name
+        vars_dict["USER_PERSON"] = _detect_sender_name(body) or ""
     # ── Zdrobnienie imienia przez Groq ───────────────────────────────────────
-    _user_person = vars_dict["USER_PERSON"]
+    # Używamy TYLKO pierwszego imienia z sender_name (np. "Monika" z "Monika Skowrońska-Walczak")
+    _user_person = vars_dict["USER_PERSON"].split()[0] if vars_dict["USER_PERSON"] else ""
     if _user_person:
         try:
             _zdrobnienie = _user_person
