@@ -636,7 +636,7 @@ def _one_big_call(cfg: dict, body: str, sender_name: str, nouns_dict: dict,
     )
 
     logger.info("[psych-raport] ONE BIG CALL START")
-    raw = _call_ai_with_fallback(system, user, 4000, "one_big_call", log, 10)
+    raw = _call_ai_with_fallback(system, user, 3000, "one_big_call", log, 10)
 
     if not raw:
         logger.error("[psych-raport] ONE BIG CALL — brak odpowiedzi")
