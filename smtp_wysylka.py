@@ -1,7 +1,32 @@
+"""
+smtp_wysylka.py
+Wysyłka przez Gmail API (HTTPS port 443) — działa na Render free tier.
+
+Zamiast SMTP używamy oficjalnego Gmail REST API z OAuth2.
+Dwie metody autoryzacji (wybierana automatycznie):
+  A) Service Account (zalecane dla serwerów) — wymaga GMAIL_SERVICE_ACCOUNT_JSON
+  B) OAuth2 Refresh Token (alternatywa) — wymaga GMAIL_CLIENT_ID,
+     GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
+
+Zmienne środowiskowe (Render → Environment):
+  SMTP_USER              — adres Gmail z którego wysyłamy (np. bot@gmail.com)
+  SMTP_FROM_NAME         — nazwa nadawcy (np. "Bot Tylera")
+  
+  Metoda A (Service Account):
+    GMAIL_SERVICE_ACCOUNT_JSON — cała zawartość pliku JSON service account
+                                  (jako jedna linia, skopiuj z pliku .json)
+  
+  Metoda B (OAuth2 Refresh Token):
+    GMAIL_CLIENT_ID        — OAuth2 Client ID z Google Cloud Console
+    GMAIL_CLIENT_SECRET    — OAuth2 Client Secret
+    GMAIL_REFRESH_TOKEN    — Refresh Token (wygenerowany raz przez OAuth flow)
+"""
+
 import os
 import base64
 import logging
-import smtplib
+import json
+import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -11,12 +36,89 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-# KONFIGURACJA
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 465 # Zmieniono z 587 na 465 dla lepszej przepuszczalności
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD", "")
-SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Bot")
+# ── KONFIGURACJA ──────────────────────────────────────────────────────────────
+SMTP_USER       = os.getenv("SMTP_USER", "")
+SMTP_FROM_NAME  = os.getenv("SMTP_FROM_NAME", "Bot")
+
+# Metoda A — Service Account
+_SA_JSON_STR    = os.getenv("GMAIL_SERVICE_ACCOUNT_JSON", "")
+
+# Metoda B — OAuth2 Refresh Token
+_CLIENT_ID      = os.getenv("GMAIL_CLIENT_ID", "")
+_CLIENT_SECRET  = os.getenv("GMAIL_CLIENT_SECRET", "")
+_REFRESH_TOKEN  = os.getenv("GMAIL_REFRESH_TOKEN", "")
+
+GMAIL_SEND_URL  = f"https://gmail.googleapis.com/gmail/v1/users/{SMTP_USER}/messages/send"
+GMAIL_SCOPES    = ["https://www.googleapis.com/auth/gmail.send"]
+
+
+# ── AUTORYZACJA ───────────────────────────────────────────────────────────────
+
+def _get_access_token_service_account() -> Optional[str]:
+    """Pobiera access token przez Service Account + JWT (metoda A)."""
+    try:
+        import time
+        import jwt  # pip install PyJWT cryptography
+
+        sa = json.loads(_SA_JSON_STR)
+        now = int(time.time())
+        payload = {
+            "iss":   sa["client_email"],
+            "sub":   SMTP_USER,
+            "scope": " ".join(GMAIL_SCOPES),
+            "aud":   "https://oauth2.googleapis.com/token",
+            "iat":   now,
+            "exp":   now + 3600,
+        }
+        token = jwt.encode(payload, sa["private_key"], algorithm="RS256")
+        resp = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                "assertion":  token,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()["access_token"]
+    except Exception as e:
+        logger.error("[gmail] Service Account token błąd: %s", e)
+        return None
+
+
+def _get_access_token_refresh() -> Optional[str]:
+    """Pobiera access token przez Refresh Token (metoda B)."""
+    try:
+        resp = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id":     _CLIENT_ID,
+                "client_secret": _CLIENT_SECRET,
+                "refresh_token": _REFRESH_TOKEN,
+                "grant_type":    "refresh_token",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()["access_token"]
+    except Exception as e:
+        logger.error("[gmail] Refresh Token błąd: %s", e)
+        return None
+
+
+def _get_access_token() -> Optional[str]:
+    """Automatycznie wybiera metodę autoryzacji."""
+    if _SA_JSON_STR:
+        logger.debug("[gmail] Używam metody A (Service Account)")
+        return _get_access_token_service_account()
+    if _CLIENT_ID and _CLIENT_SECRET and _REFRESH_TOKEN:
+        logger.debug("[gmail] Używam metody B (Refresh Token)")
+        return _get_access_token_refresh()
+    logger.error("[gmail] Brak konfiguracji OAuth2 — ustaw zmienne środowiskowe.")
+    return None
+
+
+# ── WYSYŁKA ───────────────────────────────────────────────────────────────────
 
 def wyslij_odpowiedz(
     to_email: str,
@@ -26,14 +128,15 @@ def wyslij_odpowiedz(
     zalaczniki: Optional[List[Optional[dict]]] = None,
     reply_to: Optional[str] = None,
 ) -> bool:
-    if not SMTP_USER or not SMTP_APP_PASSWORD:
-        logger.error("[smtp] Brak danych logowania SMTP.")
+    if not SMTP_USER:
+        logger.error("[gmail] Brak SMTP_USER.")
         return False
 
+    # ── Buduj wiadomość MIME ──────────────────────────────────────────────────
     msg = MIMEMultipart("mixed")
-    msg["From"] = formataddr((SMTP_FROM_NAME, SMTP_USER))
-    msg["To"] = formataddr((to_name, to_email))
-    msg["Subject"] = subject
+    msg["From"]     = formataddr((SMTP_FROM_NAME, SMTP_USER))
+    msg["To"]       = formataddr((to_name, to_email)) if to_name else to_email
+    msg["Subject"]  = subject
     msg["Reply-To"] = reply_to or SMTP_USER
 
     msg.attach(MIMEText(html_body or "<p>Brak treści</p>", "html", "utf-8"))
@@ -43,41 +146,70 @@ def wyslij_odpowiedz(
         if not item or not item.get("base64"):
             continue
         try:
-            raw = base64.b64decode(item["base64"])
-            part = MIMEBase(*(item.get("content_type", "application/octet-stream").split("/", 1)))
+            raw  = base64.b64decode(item["base64"])
+            ctype = item.get("content_type", "application/octet-stream")
+            main_type, sub_type = ctype.split("/", 1)
+            part = MIMEBase(main_type, sub_type)
             part.set_payload(raw)
             encoders.encode_base64(part)
-            part.add_header("Content-Disposition", "attachment", filename=item.get("filename", "zalacznik"))
+            part.add_header(
+                "Content-Disposition", "attachment",
+                filename=item.get("filename", "zalacznik")
+            )
             msg.attach(part)
             attached_count += 1
         except Exception as e:
-            logger.warning(f"[smtp] Błąd załącznika: {e}")
+            logger.warning("[gmail] Błąd załącznika: %s", e)
 
-    # ── KLUCZOWA POPRAWKA WYSYŁKI ──
-    try:
-        # Używamy SMTP_SSL dla portu 465
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as server:
-            server.login(SMTP_USER, SMTP_APP_PASSWORD)
-            server.sendmail(SMTP_USER, to_email, msg.as_bytes())
-        
-        logger.info(f"[smtp] ✅ Wysłano do {to_email} | Załączników: {attached_count}")
-        return True
+    # ── Kodowanie do base64url (wymagane przez Gmail API) ─────────────────────
+    raw_bytes = msg.as_bytes()
+    raw_b64   = base64.urlsafe_b64encode(raw_bytes).decode("ascii")
 
-    except Exception as e:
-        logger.error(f"[smtp] ❌ Błąd krytyczny wysyłki: {e}")
+    # ── Pobierz token i wyślij ────────────────────────────────────────────────
+    access_token = _get_access_token()
+    if not access_token:
+        logger.error("[gmail] Nie udało się uzyskać access token.")
         return False
+
+    try:
+        resp = requests.post(
+            GMAIL_SEND_URL,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type":  "application/json",
+            },
+            json={"raw": raw_b64},
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            logger.info("[gmail] ✅ Wysłano do %s | Załączników: %d", to_email, attached_count)
+            return True
+        else:
+            logger.error("[gmail] ❌ HTTP %d: %s", resp.status_code, resp.text)
+            return False
+    except Exception as e:
+        logger.error("[gmail] ❌ Błąd krytyczny: %s", e)
+        return False
+
+
+# ── ZBIERANIE ZAŁĄCZNIKÓW (bez zmian) ────────────────────────────────────────
 
 def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
     result = []
+
     def _dodaj(item):
         if isinstance(item, dict) and item.get("base64"):
             result.append(item)
         elif isinstance(item, list):
-            for el in item: _dodaj(el)
+            for el in item:
+                _dodaj(el)
 
     for res_val in response_data.values():
-        if not isinstance(res_val, dict): continue
+        if not isinstance(res_val, dict):
+            continue
         pola = ["pdf", "emoticon", "cv_pdf", "raport_pdf", "psych_photo_1", "psych_photo_2"]
-        for p in pola: _dodaj(res_val.get(p))
-        for p_list in ["triptych", "images"]: _dodaj(res_val.get(p_list, []))
+        for p in pola:
+            _dodaj(res_val.get(p))
+        for p_list in ["triptych", "images"]:
+            _dodaj(res_val.get(p_list, []))
     return result
