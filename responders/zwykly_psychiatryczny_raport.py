@@ -278,7 +278,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1500, "wypis")
+    raw = _call_groq_with_retry(system, user, 800, "wypis")
     result = _parse_json_safe(raw, "wypis")
     if not result:
         return {"wypis": {
@@ -351,7 +351,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "zalecenia")
+    raw = _call_groq_with_retry(system, user, 1000, "zalecenia")
     result = _parse_json_safe(raw, "zalecenia")
     if not result:
         return {
