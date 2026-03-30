@@ -805,7 +805,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         t = doc.add_table(rows=1, cols=4)
         t.style = "Table Grid"
         hdr = t.rows[0].cells
-        for i, label in enumerate(["Nazwa leku", "Rzeczownik źródłowy", "Wskazanie", "Dawkowanie"]):
+        for i, label in enumerate(["Nazwa leku", "Przedmioty odebrane", "Wskazanie", "Dawkowanie"]):
             hdr[i].text = ""
             r = hdr[i].paragraphs[0].add_run(label)
             r.bold            = True
