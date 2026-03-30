@@ -50,13 +50,15 @@ RAPORT_JSON = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 
 def _get_groq_keys() -> list:
     keys = []
-    for i in range(40):
-        name = f"GROQ_API_KEY{i}" if i else "GROQ_API_KEY"
+    val = os.getenv("API_KEY_GROQ", "").strip()
+    if val:
+        keys.append(("API_KEY_GROQ", val))
+    for i in range(1, 40):
+        name = f"API_KEY_GROQ_{i:02d}"
         val  = os.getenv(name, "").strip()
         if val:
             keys.append((name, val))
     return keys
-
 
 def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 4000) -> str | None:
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
