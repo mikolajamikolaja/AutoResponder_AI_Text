@@ -796,27 +796,17 @@ def _detect_gender(body: str, sender_name: str = "") -> str:
     elif score_m > score_k:
         return "mezczyzna"
 
-    # ── 2. Groq — płeć z imienia i fragmentu emaila (równolegle) ──────────────
-    try:
-        system_gender = (
-            "Jesteś lingwistą. Na podstawie imienia i/lub fragmentu emaila określ płeć osoby. "
-            "Odpowiedz WYŁĄCZNIE jednym słowem: kobieta, mezczyzna lub nieznana."
-        )
-        user_gender = (
-            f"Imię osoby (sender_name): {sender_name or '(nieznane)'}\n"
-            f"Fragment emaila: {(body or '')[:400]}"
-        )
-        result = _call_groq(system_gender, user_gender, max_tokens=10)
-        if result:
-            result_clean = result.strip().lower().replace(".", "")
-            if "kobieta" in result_clean:
-                logger.info("[gender] Groq → kobieta (imie=%s)", sender_name)
-                return "kobieta"
-            elif "mezczyzna" in result_clean or "mężczyzna" in result_clean:
-                logger.info("[gender] Groq → mezczyzna (imie=%s)", sender_name)
-                return "mezczyzna"
-    except Exception as e:
-        logger.warning("[gender] Groq błąd: %s", e)
+    # ── 2. Fallback: detekcja z końcówki imienia ──────────────────────────────
+    if sender_name:
+        imie = sender_name.split()[0].lower()
+        # Typowe polskie imiona żeńskie kończą się na -a (Monika, Anna, Kasia...)
+        # Wyjątki męskie na -a: Kuba, Barnaba, Kosma — mała lista
+        meskie_na_a = {"kuba", "barnaba", "kosma", "bonawentura", "sasha", "misza"}
+        if imie.endswith("a") and imie not in meskie_na_a:
+            return "kobieta"
+        # Imiona zakończone na spółgłoskę lub -o/-u → zazwyczaj męskie
+        if imie and imie[-1] not in "aąę":
+            return "mezczyzna"
 
     return "nieznana"
 
@@ -1114,78 +1104,8 @@ def _load_panel_wytyczne() -> dict:
     }
 
 
-def _generate_panel_prompt_from_rule(
-        panel_index: int,
-        rule_text: str,
-        style_config: dict,
-        body: str,
-        session_vars: dict = None,
-) -> tuple:
-    """
-    Dla jednej zasady Tylera generuje prompt FLUX pokazujący ODWROTNOŚĆ zakazu.
-    Jeśli Tyler mówi 'nie rób X' → obrazek pokazuje bohaterów Fight Club robiących X.
-
-    WSZYSTKIE wytyczne stylistyczne i prompty czytane są z zwykly_panel_wytyczne.json.
-    Aby zmienić klimat/styl obrazków — wystarczy edytować ten plik JSON,
-    bez dotykania kodu Pythona.
-
-    Zwraca (flux_prompt, caption, used_vars).
-    """
-    if session_vars is None:
-        session_vars = {}
-
-    # ── Wczytaj wytyczne z JSON ───────────────────────────────────────────────
-    w = _load_panel_wytyczne()
-
-    nouns_str = session_vars.get("USER_OBJECTS", "") or "debris, broken furniture, ash"
-    panel_style = random.choice(w.get("style_variants", ["35mm film grain, Fight Club 1999"]))
-
-    # Postacie z JSON (jeśli są) lub fallback na FIGHT_CLUB_CHARACTERS z kodu
-    postacie_dict = w.get("postacie", {})
-    if postacie_dict:
-        postacie_str = "; ".join(postacie_dict.values())
-    else:
-        postacie_str = "; ".join(FIGHT_CLUB_CHARACTERS[:3])
-
-    oswietlenie = w.get("styl_globalny", {}).get("oswietlenie", "")
-
-    # ── System prompt — w całości z JSON ─────────────────────────────────────
-    system_for_scene = w.get("system_prompt_AI", "")
-
-    # ── User prompt — szablon z JSON, podstawiamy zmienne ────────────────────
-    user_szablon = w.get("user_prompt_szablon", "")
-    user_for_scene = (
-        user_szablon
-        .replace("[PANEL_NR]", str(panel_index))
-        .replace("[ZASADA_TEKST]", rule_text or "")
-        .replace("[USER_OBJECTS]", nouns_str)
-        .replace("[STYL_OSWIETLENIA]", oswietlenie[:200] if oswietlenie else "")
-        .replace("[STYL_WIZUALNY]", panel_style)
-        .replace("[POSTACIE]", postacie_str[:300])
-    )
-
-    # ── Wywołaj AI ────────────────────────────────────────────────────────────
-    flux_prompt, prov = _call_ai_with_fallback(system_for_scene, user_for_scene, max_tokens=300)
-
-    # ── Fallback gdy AI zwróciło pustą odpowiedź ──────────────────────────────
-    if not flux_prompt or len(flux_prompt.strip()) < 20:
-        fallback_tmpl = w.get("fallback_gdy_brak_zasady", "")
-        flux_prompt = (
-                fallback_tmpl.replace("[USER_OBJECTS]", nouns_str)
-                or (
-                    f"Fight Club 1999 characters Tyler Durden and Narrator deliberately "
-                    f"breaking the rule '{rule_text[:80]}', surrounded by {nouns_str}, "
-                    f"{panel_style}, 35mm film grain, gritty, underexposed"
-                )
-        )
-
-    caption = rule_text[:120] if rule_text else f"Zasada {panel_index}"
-
-    logger.info(
-        "[panel-rule] Panel %d/7 (%s): %.100s...",
-        panel_index, prov, flux_prompt
-    )
-    return flux_prompt, caption, []
+# _generate_panel_prompt_from_rule usunięta — zastąpiona przez _generate_triptych_prompts_batch
+# (1 call Groq dla wszystkich 7 paneli naraz zamiast 7 osobnych calli)
 
 
 def _detect_city(body: str) -> str:
@@ -1323,26 +1243,29 @@ def _build_session_vars(
     else:
         # Fallback na detekcję z body tylko gdy webhook nie przysłał sender_name
         vars_dict["USER_PERSON"] = _detect_sender_name(body) or ""
-    # ── Zdrobnienie imienia przez Groq ───────────────────────────────────────
-    # Używamy TYLKO pierwszego imienia z sender_name (np. "Monika" z "Monika Skowrońska-Walczak")
+    # ── Zdrobnienie imienia — słownik (bez Groq) ─────────────────────────────
     _user_person = vars_dict["USER_PERSON"].split()[0] if vars_dict["USER_PERSON"] else ""
+    _ZDROBNIENIA = {
+        "monika": "Moniczka", "anna": "Ania", "katarzyna": "Kasia", "małgorzata": "Gosia",
+        "agnieszka": "Aga", "barbara": "Basia", "krystyna": "Krysia", "magdalena": "Madzia",
+        "joanna": "Asia", "aleksandra": "Ola", "maria": "Marysia", "teresa": "Tereska",
+        "irena": "Irka", "elżbieta": "Ela", "halina": "Halinka", "zofia": "Zosia",
+        "danuta": "Danka", "beata": "Beatka", "ewa": "Ewka", "weronika": "Wera",
+        "patrycja": "Patka", "marta": "Martusia", "karolina": "Karolcia", "natalia": "Natka",
+        "sylwia": "Sylwka", "dorota": "Dorotka", "iwona": "Iwonka", "renata": "Renata",
+        "tomasz": "Tomek", "piotr": "Piotrek", "krzysztof": "Krzysiek", "andrzej": "Andrzej",
+        "jan": "Janek", "stanisław": "Stasiek", "michał": "Michał", "adam": "Adasiek",
+        "marek": "Marek", "robert": "Robert", "paweł": "Pawełek", "marcin": "Marcinek",
+        "jacek": "Jacek", "rafał": "Rafałek", "grzegorz": "Grzesiek", "dariusz": "Darek",
+        "łukasz": "Łukasz", "artur": "Artur", "kamil": "Kamil", "mateusz": "Mateusz",
+        "bartłomiej": "Bartek", "bartosz": "Bartek", "maciej": "Maciej", "wojciech": "Wojtek",
+        "sebastian": "Sebastian", "dawid": "Dawid", "filip": "Filip", "szymon": "Szymon",
+        "dominik": "Dominik", "patryk": "Patryk", "jakub": "Kuba", "daniel": "Daniel",
+    }
     if _user_person:
-        try:
-            _zdrobnienie = _user_person
-            _sys_zdr = (
-                    "Jesteś lingwistą polskim. Podaj zdrobniałą/pieszczotliwą formę "
-                    "podanego imienia polskiego. Odpowiedz WYŁĄCZNIE jednym słowem — "
-                    "samo zdrobnienie, nic więcej."
-                )
-            _usr_zdr = f"Imię: {_user_person}"
-            _r_zdr = _call_groq(_sys_zdr, _usr_zdr, max_tokens=20)
-            if _r_zdr:
-                _zdrobnienie = _r_zdr.strip().split()[0]
-                logger.info("[zdrobnienie] %s → %s", _user_person, _zdrobnienie)
-            vars_dict["USER_NAME_ZDROBNIENIE"] = _zdrobnienie
-        except Exception as _e_zdr:
-            logger.warning("[zdrobnienie] Błąd: %s — fallback na imię", _e_zdr)
-            vars_dict["USER_NAME_ZDROBNIENIE"] = _user_person
+        vars_dict["USER_NAME_ZDROBNIENIE"] = _ZDROBNIENIA.get(
+            _user_person.lower(), _user_person
+        )
     else:
         vars_dict["USER_NAME_ZDROBNIENIE"] = ""
     vars_dict["USER_GENDER"] = _detect_gender(body, sender_name)
@@ -1417,127 +1340,7 @@ def _render_template(text: str, vars_dict: dict) -> tuple:
     return result, used
 
 
-def _generate_panel_prompt(
-        panel_index: int,
-        panel_config: dict,
-        style_config: dict,
-        response_text: str,
-        prompt_data: dict,
-        body: str,
-        session_vars: dict = None,
-) -> str:
-    """
-    Generuje angielski prompt FLUX dla jednego panelu tryptyku.
-    - Używa session_vars do podstawiania [TEXT_N], [USER_OBJECTS] itd. w szablonie z JS
-    - Losuje postać Fight Club per panel
-    - Losuje styl wizualny i akcję
-    - Bez dymków — tekst dopisuje Pillow osobno
-    """
-    if session_vars is None:
-        session_vars = {}
-
-    base_style = style_config.get("base_style", "cinematic film still, Fight Club 1999 aesthetic")
-    quality = style_config.get("quality_tags", "photorealistic, raw, gritty")
-    neg_prompt = style_config.get("negative_prompt",
-                                  "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark")
-
-    # ── Losuj postać, styl, akcję ─────────────────────────────────────────────
-    character = random.choice(FIGHT_CLUB_CHARACTERS)
-    panel_style = random.choice(PANEL_STYLES)
-    action = random.choice(PANEL_ACTIONS)
-
-    # ── Pobierz szablon panelu z JS i podstaw zmienne ─────────────────────────
-    panel_template_str = ""
-    panel_used_vars = []
-    panels_list = style_config.get("triptych", {}).get("panels", [])
-
-    # Znajdź config dla tego panelu (szukamy po kluczu panel_1, panel_2 itd.)
-    panel_key = f"panel_{panel_index}"
-    for p in panels_list:
-        # panels_list to lista dictów, każdy ma jeden klucz panel_N
-        if panel_key in p:
-            panel_template_str = p[panel_key]
-            break
-        # fallback — może być dict z kluczem "index"
-        if p.get("index") == panel_index:
-            panel_template_str = p.get(panel_key, p.get("description", ""))
-            break
-
-    if panel_template_str:
-        panel_template_str, panel_used_vars = _render_template(panel_template_str, session_vars)
-
-    # ── Cytat Tylera dla podpisu pod obrazkiem ────────────────────────────────
-    # Priorytet: TEXT_{panel_index} z session_vars, fallback: _extract_tyler_sentences
-    caption_key = f"TEXT_{panel_index}"
-    if caption_key in session_vars and session_vars[caption_key]:
-        caption = session_vars[caption_key]
-    else:
-        tyler_sentences = _extract_tyler_sentences(response_text)
-        quote_map = {"1": "panel1", "2": "panel2", "3": "panel3"}
-        caption = tyler_sentences.get(quote_map.get(str(panel_index), "panel1"), "")
-
-    # ── Rzeczowniki z emaila ──────────────────────────────────────────────────
-    nouns_str = session_vars.get("USER_OBJECTS", "") or "debris, trash, broken furniture"
-
-    # ── Imię nadawcy ──────────────────────────────────────────────────────────
-    sender_name_val = session_vars.get("USER_PERSON", "")
-    if sender_name_val:
-        sender_char = (
-            f"A Polish person named {sender_name_val} is also in the scene — "
-            f"ordinary clothes, overwhelmed expression, reacting to the chaos."
-        )
-    else:
-        sender_char = ""
-
-    system_for_flux = (
-        "You are a cinematic visual prompt engineer for FLUX image generation. "
-        "Create a raw, gritty, photorealistic movie still. "
-        "No speech bubbles, no text in the image — text will be added separately. "
-        "Describe: character physical appearance, specific action, environment, objects, lighting. "
-        "The character must look damaged, tired, unwashed — NOT clean or handsome. "
-        "Output: ONE paragraph, max 120 words, no bullet points. Only the prompt."
-    )
-
-    # Jeśli jest szablon z JS — wyślij go jako główny kontekst
-    if panel_template_str:
-        user_for_flux = (
-            f"Panel {panel_index} of {len(panels_list)}. Fight Club 1999 aesthetic.\n\n"
-            f"BASE SCENE (from style config):\n{panel_template_str}\n\n"
-            f"Main character: {character}\n"
-            f"Action: {action}\n"
-            f"Objects in scene: {nouns_str}\n"
-            f"Visual style: {panel_style}, {base_style}\n"
-            f"{sender_char}\n"
-            f"Negative: {neg_prompt}\n\n"
-            f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
-            "Write the FLUX prompt now:"
-        )
-    else:
-        user_for_flux = (
-            f"Panel {panel_index} of {len(panels_list)}. Fight Club 1999 aesthetic.\n\n"
-            f"REQUIRED ELEMENT: In the background, several eighteen-year-old women are having fun, "
-            f"they are slim and well-groomed, light casual clothes.\n\n"
-            f"Main character: {character}\n"
-            f"Action: {action}\n"
-            f"Objects in scene (from sender email context): {nouns_str}\n"
-            f"Visual style: {panel_style}, {base_style}\n"
-            f"{sender_char}\n"
-            f"Negative: {neg_prompt}\n\n"
-            f"The scene should evoke the mood of this quote (do NOT render as text): '{caption}'\n\n"
-            "Write the FLUX prompt now:"
-        )
-
-    flux_prompt, prov = _call_ai_with_fallback(system_for_flux, user_for_flux, max_tokens=300)
-
-    if not flux_prompt:
-        flux_prompt = (
-            f"{character}, {action}, surrounded by {nouns_str}, "
-            f"{panel_style}, {base_style}, {quality}"
-        )
-
-    logger.info("[zwykly-img] Panel %d prompt (%s): %.120s",
-                            panel_index, prov, flux_prompt)
-    return flux_prompt, caption, panel_used_vars
+# _generate_panel_prompt usunięta — zastąpiona przez _generate_triptych_prompts_batch
 
 
 # Globalny set tokenów HF trwale wyczerpanych (402/401/403) w tej sesji serwera.
@@ -1754,6 +1557,73 @@ def _generate_raw_email_image(body: str) -> dict | None:
         return img
 
 
+def _generate_triptych_prompts_batch(
+        panel_rules: list,
+        session_vars: dict,
+        style_config: dict,
+) -> list:
+    """
+    Generuje prompty FLUX dla wszystkich 7 paneli w JEDNYM wywołaniu Groq.
+    Zamiast 7 osobnych calli → 1 call zwracający JSON z 7 promptami.
+    Zwraca listę 7 stringów (promptów), fallback na puste stringi.
+    """
+    w = _load_panel_wytyczne()
+    nouns_str = session_vars.get("USER_OBJECTS", "") or "debris, broken furniture, ash"
+    panel_style = random.choice(w.get("style_variants", ["35mm film grain, Fight Club 1999"]))
+
+    # Buduj listę zasad do promptu zbiorczego
+    zasady_lines = []
+    for i, rule in enumerate(panel_rules[:7], 1):
+        zasady_lines.append(f"Panel {i}: {rule[:120] if rule else '(brak zasady)'}")
+    zasady_str = "\n".join(zasady_lines)
+
+    system_batch = (
+        "You are a cinematic visual prompt engineer for FLUX image generation. "
+        "Fight Club 1999 aesthetic, David Fincher style. "
+        "Given 7 Tyler Durden RULES, generate 7 FLUX image prompts, one per rule. "
+        "Each prompt: ONE paragraph, max 80 words, English only. "
+        "Show the VIOLATION of each rule — characters actively doing what the rule forbids. "
+        "Characters look damaged, unwashed, nihilistic. "
+        f"Visual style: {panel_style}, 35mm film grain, gritty, underexposed. "
+        "RESPOND ONLY with valid JSON: {\"prompts\": [\"prompt1\", \"prompt2\", ..., \"prompt7\"]} "
+        "No other text, no markdown fences."
+    )
+    user_batch = (
+        f"Objects from sender's email context: {nouns_str}\n\n"
+        f"7 Tyler Durden Rules:\n{zasady_str}\n\n"
+        "Generate exactly 7 FLUX prompts as JSON array under key 'prompts'."
+    )
+
+    raw, prov = _call_ai_with_fallback(system_batch, user_batch, max_tokens=2000)
+    logger.info("[tryptyk-batch] Call %s → %d znaków odpowiedzi", prov, len(raw or ""))
+
+    if not raw:
+        return [""] * 7
+
+    try:
+        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
+        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        m = re.search(r'\{.*\}', clean, re.DOTALL)
+        if m:
+            clean = m.group(0)
+        data = json.loads(clean.strip())
+        prompts = data.get("prompts", [])
+        if isinstance(prompts, list) and len(prompts) >= 1:
+            # Uzupełnij do 7 jeśli model zwrócił mniej
+            while len(prompts) < 7:
+                prompts.append("")
+            logger.info("[tryptyk-batch] OK — %d promptów", len(prompts))
+            return [str(p)[:500] for p in prompts[:7]]
+    except Exception as e:
+        logger.warning("[tryptyk-batch] Błąd JSON: %s | raw: %.200s", e, raw)
+
+    # Fallback: podziel raw po newlinach jeśli JSON nie wyszedł
+    lines = [l.strip() for l in (raw or "").split("\n") if len(l.strip()) > 20]
+    while len(lines) < 7:
+        lines.append("")
+    return lines[:7]
+
+
 def _generate_triptych(
         response_text: str,
         prompt_data: dict,
@@ -1762,7 +1632,8 @@ def _generate_triptych(
 ) -> tuple:
     """
     Generuje 7 paneli — każdy odpowiada jednej zasadzie Tylera.
-    Prompty FLUX generowane równolegle (max_workers=7).
+    OPTYMALIZACJA: 1 call Groq dla wszystkich 7 promptów naraz (zamiast 7 calli).
+    Obrazki FLUX generowane równolegle (max_workers=7).
     Jeśli HF_TOKEN nie działa → panel pomijany, zwracamy ile wygenerowano.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1800,27 +1671,32 @@ def _generate_triptych(
     while len(panel_rules) < 7:
         panel_rules.append("")
 
-    # Generuj prompty FLUX i obrazki równolegle
+    # ── 1 CALL: Generuj wszystkie 7 promptów naraz ───────────────────────────
+    logger.info("[zwykly-img] Generuję 7 promptów FLUX w 1 callu Groq")
+    flux_prompts = _generate_triptych_prompts_batch(panel_rules, session_vars, style_config)
+
+    # ── Generuj obrazki równolegle (bez dodatkowych calli Groq) ──────────────
     def _gen_panel(panel_idx):
         rule_text = panel_rules[panel_idx - 1]
-        if not rule_text:
-            return panel_idx, None, None, None, "(brak zasady)"
+        flux_prompt = flux_prompts[panel_idx - 1]
 
-        flux_prompt, caption, used_vars = _generate_panel_prompt_from_rule(
-            panel_index=panel_idx,
-            rule_text=rule_text,
-            style_config=style_config,
-            body=body,
-            session_vars=session_vars,
-        )
-        image = _generate_flux_image(flux_prompt, panel_index=panel_idx)
+        if not flux_prompt and rule_text:
+            # Prosty fallback bez AI — składamy ręcznie
+            nouns_str = session_vars.get("USER_OBJECTS", "debris, ash")
+            flux_prompt = (
+                f"Fight Club 1999, Tyler Durden violating the rule: '{rule_text[:80]}', "
+                f"surrounded by {nouns_str}, 35mm film grain, gritty, underexposed, Fincher"
+            )
+
+        caption = rule_text[:120] if rule_text else f"Zasada {panel_idx}"
+        image = _generate_flux_image(flux_prompt, panel_index=panel_idx) if flux_prompt else None
         if image:
             image = _png_to_jpg(image, panel_index=panel_idx)
             image = _add_text_below_image(image, caption, panel_idx)
-        return panel_idx, image, flux_prompt, used_vars, caption
+        return panel_idx, image, flux_prompt, [], caption
 
     results = {}
-    logger.info("[zwykly-img] Generuję 7 paneli równolegle")
+    logger.info("[zwykly-img] Generuję 7 paneli FLUX równolegle")
 
     with ThreadPoolExecutor(max_workers=7) as ex:
         futures = {ex.submit(_gen_panel, i): i for i in range(1, 8)}
@@ -2058,62 +1934,31 @@ def _build_debug_txt(
 
 def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     """
-    Generuje emotkę PNG przez FLUX na podstawie treści emaila.
-    Używa Groq do wygenerowania promptu, potem FLUX do obrazka.
-    Zwraca base64 PNG lub None przy błędzie.
+    Zwraca emotkę PNG z katalogu EMOTKI_DIR — bez wywołania Groq/FLUX.
+    HF tokeny są na czarnej liście — generowanie FLUX nie ma sensu.
+    Jeśli plik istnieje → zwraca base64, jeśli nie → None.
     """
-    try:
-        with open(ICON_FLUX_JSON_PATH, encoding="utf-8") as f:
-            icon_cfg = json.load(f)
-    except Exception as e:
-        logger.warning("[icon-flux] Brak zwykly_icon_flux.json: %s", e)
-        icon_cfg = {}
-
-    style_base = icon_cfg.get("style_base", "minimalist black ink sketch, Fight Club zine style")
-    neg_prompt = icon_cfg.get("negative_prompt", "clean, polished, colorful, beautiful, anime")
-    system_groq = icon_cfg.get("system_for_groq", "Generate a short FLUX image prompt based on this email.")
-    fallbacks = icon_cfg.get("fallback_prompts", {})
-
-    icon_prompt = None
-    try:
-        icon_prompt = _call_groq(
-            system_groq,
-            f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}",
-            max_tokens=150,
-        )
-        if icon_prompt:
-            logger.info("[icon-flux] Groq prompt: %.100s", icon_prompt)
-    except Exception as e:
-        logger.warning("[icon-flux] Groq błąd: %s", e)
-
-    if not icon_prompt:
-        icon_prompt = call_deepseek(
-            system_groq,
-            f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\nEmocja: {emotion_key}",
-            MODEL_TYLER,
-            timeout=20,
-        )
-
-    if not icon_prompt or len(icon_prompt.strip()) < 10:
-        icon_prompt = fallbacks.get(emotion_key, fallbacks.get("zlosc", style_base))
-        logger.warning("[icon-flux] Używam fallback promptu dla emocji: %s", emotion_key)
-
-    full_prompt = f"{icon_prompt.strip()}, {style_base}"
-    logger.info("[icon-flux] Pełny prompt: %.150s", full_prompt)
-
-    img = _generate_flux_image(full_prompt, panel_index=99)
-    if img and img.get("base64"):
+    emot_name = EMOCJA_MAP.get(emotion_key, FALLBACK_EMOT)
+    path = os.path.join(EMOTKI_DIR, f"{emot_name}.png")
+    if os.path.exists(path):
         try:
-            from PIL import Image as PILImage
-            raw = base64.b64decode(img["base64"])
-            pil = PILImage.open(io.BytesIO(raw)).convert("RGB")
-            pil = pil.resize((512, 512), PILImage.LANCZOS)
-            buf = io.BytesIO()
-            pil.save(buf, format="PNG", optimize=True)
-            return base64.b64encode(buf.getvalue()).decode("ascii")
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            logger.info("[icon] Emotka z pliku: %s", path)
+            return b64
         except Exception as e:
-            logger.warning("[icon-flux] Błąd resize: %s — zwracam oryginał", e)
-            return img["base64"]
+            logger.warning("[icon] Błąd odczytu emotki %s: %s", path, e)
+    # Spróbuj fallback na nazwę emotion_key bezpośrednio
+    path2 = os.path.join(EMOTKI_DIR, f"{emotion_key}.png")
+    if os.path.exists(path2):
+        try:
+            with open(path2, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            logger.info("[icon] Emotka z pliku (fallback): %s", path2)
+            return b64
+        except Exception as e:
+            logger.warning("[icon] Błąd odczytu emotki fallback %s: %s", path2, e)
+    logger.warning("[icon] Brak pliku emotki dla emocji: %s", emotion_key)
     return None
 
 
@@ -2168,7 +2013,7 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
 def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
     """
     Generuje zdjęcie profilowe do CV przez FLUX.
-    Używa Groq do promptu, FLUX do obrazka.
+    Prompt budowany lokalnie (bez Groq) — oszczędność 1 calla.
     Zwraca base64 PNG lub None.
     """
     try:
@@ -2178,37 +2023,22 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
         logger.warning("[cv-photo] Brak zwykly_cv_photo_flux.json: %s", e)
         photo_cfg = {}
 
-    system_groq = photo_cfg.get("system_for_groq", "Generate a FLUX portrait prompt for a CV photo.")
     style_base = photo_cfg.get("style_base", "professional CV headshot portrait, sharp focus")
-    neg_prompt = photo_cfg.get("negative_prompt", "cartoon, anime, blur, dark")
 
     imie = cv_data.get("imie_nazwisko", "unknown person") if cv_data else "unknown person"
     tytul = cv_data.get("tytul_zawodowy", "") if cv_data else ""
     plec = _detect_gender(body, imie)
     plec_en = {"kobieta": "woman", "mezczyzna": "man"}.get(plec, "person")
-    user_msg = (
-        f"Person: {imie}\n"
-        f"Gender: {plec_en}\n"
-        f"Job title: {tytul}\n"
-        f"Email content (for context):\n{body[:MAX_DLUGOSC_EMAIL]}"
+
+    # Prompt budowany lokalnie — bez Groq
+    photo_prompt = (
+        f"Portrait of a {plec_en}, {tytul or 'office worker'}, "
+        f"Fight Club 1999 aesthetic, exhausted, slightly damaged look, "
+        f"professional headshot, dramatic lighting, film grain, {style_base}"
     )
+    logger.info("[cv-photo] Prompt (lokalny): %.150s", photo_prompt)
 
-    photo_prompt = None
-    try:
-        photo_prompt = _call_groq(system_groq, user_msg, max_tokens=120)
-    except Exception as e:
-        logger.warning("[cv-photo] Groq błąd: %s", e)
-
-    if not photo_prompt:
-        photo_prompt = call_deepseek(system_groq, user_msg, MODEL_TYLER, timeout=20)
-
-    if not photo_prompt:
-        photo_prompt = f"Professional CV headshot portrait, {style_base}"
-
-    full_prompt = f"{photo_prompt.strip()}, {style_base}"
-    logger.info("[cv-photo] Prompt: %.150s", full_prompt)
-
-    img = _generate_flux_image(full_prompt, panel_index=98)
+    img = _generate_flux_image(photo_prompt, panel_index=98)
     if img and img.get("base64"):
         try:
             from PIL import Image as PILImage
@@ -4217,10 +4047,10 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     from flask import current_app as flask_app
     import re
 
-    logger.info("[zwykly] START - Optymalizacja Równoległa")
+    logger.info("[zwykly] START - Optymalizacja Równoległa (v2 - oszczędny Groq)")
     app_obj = flask_app._get_current_object()
 
-    # --- INICJALIZACJA (Fix dla UnboundLocalError) ---
+    # --- INICJALIZACJA ---
     res_text = emotion_key = provider = None
     nouns_dict = {}
     png_b64 = cv_pdf_b64 = raport_pdf = psych_photo_1 = psych_photo_2 = log_psych = None
@@ -4228,8 +4058,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     ankieta_html = ankieta_pdf = horoskop_pdf = karta_rpg_pdf = plakat_svg = gra_html = None
     explanation_txt = debug_txt = ""
 
-    # ── KROK 1: Równoległe pozyskanie bazy (Tekst AI + Rzeczowniki) ──────────────
-    # To są jedyne rzeczy, których potrzebujemy, by ruszyć z resztą świata
+    # ── KROK 1: Tekst AI + Rzeczowniki równolegle (2 calle Groq) ─────────────
     def _get_ai_main():
         with app_obj.app_context():
             p_data = _load_prompt_json()
@@ -4241,46 +4070,38 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     with ThreadPoolExecutor(max_workers=2) as setup_ex:
         f_nouns = setup_ex.submit(_extract_nouns_groq, body)
         f_main  = setup_ex.submit(_get_ai_main)
-        
         nouns_dict = f_nouns.result()
         res_text, emotion_key, provider, prompt_data, user_msg = f_main.result()
 
     if not res_text:
         res_text = "### TYLER DURDEN\n\nSystem zawiódł..."
 
-    # Budujemy session_vars (potrzebne do tryptyku)
     session_vars = _build_session_vars(body, sender_email, sender_name, previous_body or "", res_text, emotion_key, provider, nouns_dict)
     for k, v in nouns_dict.items(): session_vars[k.upper()] = v
 
-    # ── KROK 2: WIELKA PULA (Wszystko naraz!) ───────────────────────────────────
-    # Uruchamiamy wszystkie ciężkie zadania w tym samym momencie
-    with ThreadPoolExecutor(max_workers=15) as ex:
-        # Definicje zadań (wrappery z contextem)
+    # ── KROK 2: Zadania bez AI lub z 1 callem Groq każde ─────────────────────
+    # max_workers=5 — nie bombardujemy Groq równolegle
+    # Tryptyk używa teraz 1 calla Groq (zamiast 7)
+    # Emotka — bez Groq (plik lokalny)
+    # CV content — 1 call Groq
+    # Ankieta/Horoskop/RPG/Gra — każdy 1 call Groq, ale sekwencyjnie w swoim wątku
+    # RAPORT — uruchamiamy OSOBNO po tryptyku (4 calle Groq w raport.py)
+    with ThreadPoolExecutor(max_workers=5) as ex:
         def task_tryptyk():
             with app_obj.app_context():
+                # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje Groq
                 imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars)
-                raw_img = _generate_raw_email_image(body)
-                if raw_img: imgs.append(raw_img)
                 return imgs
-
-        def task_raport():
-            with app_obj.app_context():
-                try:
-                    # build_raport wewnętrznie robi własne rundy AI
-                    return build_raport(body, previous_body or "", res_text, nouns_dict, sender_name, session_vars.get("USER_GENDER", "patient"))
-                except Exception as e:
-                    return {"log_psych": {"error": str(e)}}
 
         def task_emotka():
             with app_obj.app_context():
+                # _generate_icon_flux nie używa już Groq — zwraca plik lokalny
                 return _generate_icon_flux(body, emotion_key) or read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
 
-        # Submitujemy WSZYSTKO
         fut = {
             "tryptyk": ex.submit(task_tryptyk),
             "emotka":  ex.submit(task_emotka),
             "cv":      ex.submit(lambda: _generate_cv_content(body, previous_body, sender_email)),
-            "raport":  ex.submit(task_raport),
             "ankieta": ex.submit(lambda: _build_ankieta(res_text, body)),
             "horo":    ex.submit(lambda: _build_horoskop(body, res_text)),
             "rpg":     ex.submit(lambda: _build_karta_rpg(body, res_text)),
@@ -4288,33 +4109,19 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             "expl":    ex.submit(lambda: _build_explanation_txt(res_text, body))
         }
 
-        # ── ODBIERAMY WYNIKI ──
-        # RAPORT PIERWSZY — ma pełne 250s, nie czeka na martwe HF tokeny
-        try:
-            r_res = fut["raport"].result(timeout=250)
-            raport_pdf = r_res.get("raport_pdf")
-            psych_photo_1 = r_res.get("psych_photo_1")
-            psych_photo_2 = r_res.get("psych_photo_2")
-            log_psych = r_res.get("log_psych")
-        except:
-            log_psych = {"error": "Timeout raportu"}
-
-        # TRYPTYK DRUGI — może czekać ile chce, raport już odebrany
         try: triptych_images = fut["tryptyk"].result(timeout=240)
-        except: pass
+        except: triptych_images = []
 
-        try: png_b64 = fut["emotka"].result(timeout=60)
+        try: png_b64 = fut["emotka"].result(timeout=30)
         except: pass
 
         try:
             cv_data = fut["cv"].result(timeout=60)
             if cv_data:
-                # To jedyna sekwencja: Foto CV zależy od treści CV
                 cv_photo = _generate_cv_photo(body, cv_data)
                 cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo)
         except: pass
 
-        # Odbiór reszty (Ankieta, Horoskop itd.)
         try: ankieta_html, ankieta_pdf = fut["ankieta"].result(timeout=60)
         except: pass
         try: horoskop_pdf = fut["horo"].result(timeout=60)
@@ -4326,9 +4133,25 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         try: explanation_txt = fut["expl"].result(timeout=40)
         except: pass
 
-    # ── FINALIZACJA ────────────────────────────────────────────────────────────
+    # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
+    # Uruchamiamy po KROK 2, żeby nie rywalizować o klucze Groq z tryptyk/ankieta/horo/rpg/gra
+    try:
+        with app_obj.app_context():
+            r_res = build_raport(
+                body, previous_body or "", res_text, nouns_dict,
+                sender_name, session_vars.get("USER_GENDER", "patient")
+            )
+        raport_pdf    = r_res.get("raport_pdf")
+        psych_photo_1 = r_res.get("psych_photo_1")
+        psych_photo_2 = r_res.get("psych_photo_2")
+        log_psych     = r_res.get("log_psych")
+    except Exception as e:
+        logger.error("[zwykly] Raport błąd: %s", e)
+        log_psych = {"error": str(e)}
+
+    # ── FINALIZACJA ───────────────────────────────────────────────────────────
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', sender_name)[:30] or "Pacjent"
-    
+
     return {
         "reply_html": build_html_reply(res_text),
         "emoticon": {"base64": png_b64, "content_type": "image/png", "filename": f"emo_{emotion_key}.png"} if png_b64 else None,
@@ -4336,7 +4159,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "raport_pdf": raport_pdf,
         "psych_photo_1": psych_photo_1,
         "psych_photo_2": psych_photo_2,
-        "log_psych": log_psych, # Zmienna zawsze istnieje (Fix OK)
+        "log_psych": log_psych,
         "triptych": triptych_images,
         "ankieta_html": ankieta_html,
         "horoskop_pdf": horoskop_pdf,
