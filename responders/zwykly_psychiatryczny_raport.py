@@ -334,9 +334,12 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
-    sec = cfg.get("groq_7_zalecenia_notatki", {})
-    system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    """
+    Podzielona na dwa osobne wywołania Groq:
+      groq_7a — zalecenia_tylera + rokowanie          (max_tokens: 1200)
+      groq_7b — notatki_pielegniarek + notatki_sprzataczki + incydenty_specjalne  (max_tokens: 2500)
+    Wyniki są scalane w jeden dict i zwracane.
+    """
 
     # Wyciągnij kilka kluczowych zdarzeń z hospitalizacji jako kontekst
     zdarzenia = []
@@ -345,21 +348,67 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
             zdarzenia.append(f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:150]}")
     zdarzenia_str = "\n".join(zdarzenia[:8]) if zdarzenia else "(brak)"
 
-    user = (
-        f"EMAIL PACJENTA (PRIORYTET — zalecenia, rokowanie, incydenty i notatki MUSZĄ nawiązywać do treści tego emaila):\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+    email_fragment = body[:MAX_DLUGOSC_EMAIL]
+
+    # ── groq_7a — ZALECENIA + ROKOWANIE ──────────────────────────────────────
+    sec_7 = cfg.get("groq_7_zalecenia_notatki", {})
+    system_7 = sec_7.get("system", "")
+
+    schema_7a = json.dumps({
+        "zalecenia_tylera": sec_7.get("schema", {}).get("zalecenia_tylera", {
+            "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIA OBOWIĄZKOWE",
+            "zadanie_1": "...",
+            "zadanie_2": "...",
+            "zadanie_3": "...",
+            "podpis": "Tyler Durden"
+        }),
+        "rokowanie": sec_7.get("schema", {}).get("rokowanie",
+            "Min. 5-6 zdań. Bezlitosne. Nawiązuje do emaila.")
+    }, ensure_ascii=False, indent=2)
+
+    user_7a = (
+        f"EMAIL PACJENTA (PRIORYTET — każde pole MUSI nawiązywać do treści emaila):\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
-        f"WAŻNE: zalecenia_tylera.zadanie_1/2/3, rokowanie, notatka_pielegniarki i notatka_sprzataczki "
-        f"MUSZĄ zawierać konkretne odniesienia do treści emaila pacjenta (jego słów, planów, marzeń, problemów). "
-        f"NIE UŻYWAJ placeholderów ani ogólników — bądź konkretny.\n\n"
-        f"notatka_pielegniarki: 10 zdań gwarą polską (mieszanka gwary — np. śląskiej, mazurskiej, podlaskiej). "
-        f"Napisana przez prostą kobietę ze wsi — ciepła, dosadna, trochę zdumiona, nawiązuje do konkretnych zachowań pacjenta z emaila.\n\n"
-        f"notatka_sprzataczki: humor w stylu Szwejka i Monty Pythona, gwarą polską. "
-        f"Sprzątaczka opowiada o sprzątaniu sali pacjenta, komentuje jego rzeczy i zachowanie z emaila.\n\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
+        f"SCHEMAT JSON (wypełnij TYLKO te klucze):\n{schema_7a}\n\n"
+        f"zalecenia_tylera.zadanie_1/2/3: min. 5-6 zdań każde, konkretny przedmiot/plan/rzecz z emaila.\n"
+        f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1800, "zalecenia")
-    result = _parse_json_safe(raw, "zalecenia")
+    raw_7a = _call_groq_with_retry(system_7, user_7a, 1200, "zalecenia_7a")
+    result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
+
+    # ── groq_7b — NOTATKI + INCYDENTY ────────────────────────────────────────
+    schema_7b = json.dumps({
+        "notatki_pielegniarek": sec_7.get("schema", {}).get("notatki_pielegniarek",
+            "Lista MINIMUM 10 obiektów: {imie_pielegniarki, data, tresc}"),
+        "notatki_sprzataczki": sec_7.get("schema", {}).get("notatki_sprzataczki",
+            "Lista MINIMUM 10 obiektów: {data, tresc}"),
+        "incydenty_specjalne": sec_7.get("schema", {}).get("incydenty_specjalne",
+            "Lista MINIMUM 10 incydentów po 4-5 zdań")
+    }, ensure_ascii=False, indent=2)
+
+    user_7b = (
+        f"EMAIL PACJENTA (PRIORYTET — notatki i incydenty MUSZĄ nawiązywać do treści emaila):\n{email_fragment}\n\n"
+        f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
+        f"SCHEMAT JSON (wypełnij TYLKO te klucze):\n{schema_7b}\n\n"
+        f"notatki_pielegniarek: MINIMUM 10 obiektów. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
+        f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
+        f"nawiązuje do konkretnych zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
+        f"notatki_sprzataczki: MINIMUM 10 obiektów. Każdy: data (DD.MM.YYYY), "
+        f"tresc (2-3 zdania — co znalazła sprzątając salę, gwarą polską, humor Szwejka/Monty Python, "
+        f"nawiązuje do emaila pacjenta).\n"
+        f"incydenty_specjalne: MINIMUM 10 incydentów, każdy 4-5 zdań, NAPRAWDĘ absurdalnych i śmiesznych, "
+        f"nawiązujących do emaila. Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw_7b = _call_groq_with_retry(system_7, user_7b, 2500, "zalecenia_7b")
+    result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
+
+    # ── Scal wyniki obu wywołań ───────────────────────────────────────────────
+    result = {}
+    result.update(result_7a)
+    result.update(result_7b)
+
     if not result:
         body_fragment = body[:300] if body else "(brak emaila)"
         return {
@@ -1037,14 +1086,55 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     field("Lekarz prowadzący", szpital.get("lekarz", "Dr. T. Durden, MD, PhD, FIGHT"))
     doc.add_paragraph()
 
-    if raport.get("notatka_pielegniarki"):
-        para("Notatka pielęgniarki:", bold=True, size=9)
-        para(raport["notatka_pielegniarki"], italic=True, color=GREY, size=9)
+    # Notatki pielęgniarek — lista obiektów {imie_pielegniarki, data, tresc}
+    notatki_p = raport.get("notatki_pielegniarek") or raport.get("notatka_pielegniarki")
+    if notatki_p:
+        heading("Notatki pielęgniarek:", 3, DARK, 9)
+        if isinstance(notatki_p, list):
+            for n in notatki_p:
+                if isinstance(n, dict):
+                    imie = n.get("imie_pielegniarki", "")
+                    data = n.get("data", "")
+                    tresc = n.get("tresc", "")
+                    header_parts = [x for x in [imie, data] if x]
+                    if header_parts:
+                        p_hdr = doc.add_paragraph()
+                        p_hdr.paragraph_format.left_indent = Pt(12)
+                        r_hdr = p_hdr.add_run("  ".join(header_parts))
+                        r_hdr.bold = True
+                        r_hdr.font.size = Pt(8)
+                        r_hdr.font.color.rgb = DARK
+                    if tresc:
+                        para(tresc, italic=True, color=GREY, size=8)
+                else:
+                    para(str(n), italic=True, color=GREY, size=9)
+        else:
+            # fallback: traktuj jako string
+            para(str(notatki_p), italic=True, color=GREY, size=9)
         doc.add_paragraph()
 
-    if raport.get("notatka_sprzataczki"):
-        para("Notatka sprzątaczki:", bold=True, size=9)
-        para(raport["notatka_sprzataczki"], italic=True, color=GREY, size=9)
+    # Notatki sprzątaczki — lista obiektów {data, tresc}
+    notatki_s = raport.get("notatki_sprzataczki") or raport.get("notatka_sprzataczki")
+    if notatki_s:
+        heading("Notatki sprzątaczki:", 3, DARK, 9)
+        if isinstance(notatki_s, list):
+            for n in notatki_s:
+                if isinstance(n, dict):
+                    data = n.get("data", "")
+                    tresc = n.get("tresc", "")
+                    if data:
+                        p_hdr = doc.add_paragraph()
+                        p_hdr.paragraph_format.left_indent = Pt(12)
+                        r_hdr = p_hdr.add_run(data)
+                        r_hdr.bold = True
+                        r_hdr.font.size = Pt(8)
+                        r_hdr.font.color.rgb = DARK
+                    if tresc:
+                        para(tresc, italic=True, color=GREY, size=8)
+                else:
+                    para(str(n), italic=True, color=GREY, size=9)
+        else:
+            para(str(notatki_s), italic=True, color=GREY, size=9)
 
     # ══════════════════════════════════════════════════════════════════════════
     # ZAPIS
