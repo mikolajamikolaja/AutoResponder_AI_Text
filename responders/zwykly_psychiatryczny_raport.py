@@ -346,26 +346,57 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
     zdarzenia_str = "\n".join(zdarzenia[:8]) if zdarzenia else "(brak)"
 
     user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"EMAIL PACJENTA (PRIORYTET — zalecenia, rokowanie, incydenty i notatki MUSZĄ nawiązywać do treści tego emaila):\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
+        f"WAŻNE: zalecenia_tylera.zadanie_1/2/3, rokowanie, notatka_pielegniarki i notatka_sprzataczki "
+        f"MUSZĄ zawierać konkretne odniesienia do treści emaila pacjenta (jego słów, planów, marzeń, problemów). "
+        f"NIE UŻYWAJ placeholderów ani ogólników — bądź konkretny.\n\n"
+        f"notatka_pielegniarki: 10 zdań gwarą polską (mieszanka gwary — np. śląskiej, mazurskiej, podlaskiej). "
+        f"Napisana przez prostą kobietę ze wsi — ciepła, dosadna, trochę zdumiona, nawiązuje do konkretnych zachowań pacjenta z emaila.\n\n"
+        f"notatka_sprzataczki: humor w stylu Szwejka i Monty Pythona, gwarą polską. "
+        f"Sprzątaczka opowiada o sprzątaniu sali pacjenta, komentuje jego rzeczy i zachowanie z emaila.\n\n"
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1000, "zalecenia")
+    raw = _call_groq_with_retry(system, user, 1800, "zalecenia")
     result = _parse_json_safe(raw, "zalecenia")
     if not result:
+        body_fragment = body[:300] if body else "(brak emaila)"
         return {
             "zalecenia_tylera": {
-                "naglowek": "RACHUNEK ZA WYZWOLENIE",
-                "zadanie_1": "ZNISZCZENIE: Zniszczyć pierwszy napotkany przedmiot nadziei.",
-                "zadanie_2": "UPOKORZENIE: Wyrzeknij się planów publicznie.",
-                "zadanie_3": "DESTRUKCJA: Spalić notatki z planami na przyszłość.",
+                "naglowek": "ZALECENIA TERAPEUTYCZNE — PROTOKÓŁ AWARYJNY",
+                "zadanie_1": f"Na podstawie emaila pacjenta: zidentyfikować i wyeliminować główne źródło złudzeń.",
+                "zadanie_2": "Wyrzeknij się publicznie planów opisanych w wiadomości przychodzącej.",
+                "zadanie_3": "Spalić wszystkie notatki związane z treścią emaila.",
                 "podpis": "Dr. Tyler Durden, Ordynator Oddziału Beznadziei"
             },
-            "rokowanie": "Bez szans. Ale przynajmniej uczciwe.",
-            "notatka_pielegniarki": "Pacjent był... pacjentem. Siostra Kazimiera.",
-            "notatka_sprzataczki": "Pod łóżkiem znalazłam nadzieję. Wyrzuciłam.",
-            "incydenty_specjalne": ["Incydent z oknem — zamknięte.", "Incydent z lekarstwami — połknięte."]
+            "rokowanie": f"Na podstawie analizy emaila: trudne. Pacjent przejawia objawy niezdrowego optymizmu.",
+            "notatka_pielegniarki": (
+                "No i cóż, powiom wóm jak jest, bo po co owijać w bawełnę. "
+                "Przyszedł tyn pacjent i od razu widać było, że coś z nim nie tak. "
+                "Siostra Jadźka mówi, że taki to już jest, że mu wszystko jedno. "
+                "Lekarstwa brał, ale z taką miną, jakby połykał kamienie z pola. "
+                "Raz nocą słyszałam, że coś tam mamrotał pod nos — pewnie znowu o tych planach swoich. "
+                "No bo wiadomo, że jak człowiek ma za dużo planów, to go boli. "
+                "Dałam mu herbatę rumiankową, bo co innego można dać na taką chorobę duszy. "
+                "On pyta czy coś pomoże, a jo mu mówię: pomoże, pomoże, byle nie gadał głupot. "
+                "Zapisałam w karcie: spokojny, ale podejrzanie spokojny — taki to się nazywa spokój przed burzą. "
+                "Siostra Kazimiera, dyżur nocny, wszystko pod kontrolą, Boże daj zdrowie."
+            ),
+            "notatka_sprzataczki": (
+                "Jak to mówią — nie ma złego, co by na dobre nie wyszło, ale tu to wyjść nie chciało nijak. "
+                "Przyszłam sprzątać izbę numer siedem i co widzę? Że ten pacjent ma pod materacem tyle papierzysk, "
+                "że można by nimi wyłożyć pół podłogi na korytarzu. "
+                "Sprzątałam, sprzątałam i myślę se: co to za człowiek, co tyle pisze? "
+                "Mój świętej pamięci Henryk to przez całe życie napisał ze trzy listy i był szczęśliwy. "
+                "No to zebrałam te papiery do worka — regulamin mówi, że porządek to porządek. "
+                "Pacjent spojrzał na mnie tak, jakbym mu zabrała skarb Nibelungów czy co tam. "
+                "Jo mówię: panie, tu jest szpital, nie archiwum. On milczy. Jo zmywam. Wszyscy zadowoleni."
+            ),
+            "incydenty_specjalne": [
+                "Incydent administracyjny — pacjent próbował zachować dokumenty osobiste wbrew regulaminowi.",
+                "Incydent nocny — personel odnotował niepokój ruchowy związany z treścią emaila wejściowego."
+            ]
         }
     return result
 
@@ -841,38 +872,45 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
               (raport.get("hospitalizacja_tydzien_2", []) or [])
 
     if dni_all:
-        # Tabela hospitalizacji
-        t2 = doc.add_table(rows=1, cols=5)
-        t2.style = "Table Grid"
-        hdr2 = t2.rows[0].cells
-        for i, label in enumerate(["Dzień", "Data", "Zdarzenie", "Lek", "Stan pacjenta"]):
-            hdr2[i].text = ""
-            r = hdr2[i].paragraphs[0].add_run(label)
-            r.bold           = True
-            r.font.size      = Pt(9)
-            r.font.color.rgb = RED
-
         for d in dni_all:
             if not isinstance(d, dict):
                 continue
-            row = t2.add_row().cells
-            row[0].text = str(d.get("dzien", ""))
-            row[1].text = str(d.get("data", ""))
-            row[2].text = str(d.get("zdarzenie", ""))
-            row[3].text = str(d.get("lek", ""))
-            row[4].text = str(d.get("stan_pacjenta", ""))
-            for cell in row:
-                for p in cell.paragraphs:
-                    for r in p.runs:
-                        r.font.size = Pt(8)
+            dzien   = d.get("dzien", "")
+            data    = d.get("data", "")
+            zdarz   = d.get("zdarzenie", "")
+            lek     = d.get("lek", "")
+            stan    = d.get("stan_pacjenta", "")
+            nota    = d.get("nota_lekarska", "")
 
-            # Nota lekarska kursywą pod wierszem tabeli
-            nota = d.get("nota_lekarska", "")
+            # Nagłówek dnia
+            p_day = doc.add_paragraph(style="List Bullet")
+            r_day = p_day.add_run(f"Dzień {dzien}  [{data}]")
+            r_day.bold           = True
+            r_day.font.size      = Pt(10)
+            r_day.font.color.rgb = RED
+
+            # Treść dnia — zdarzenie, lek, stan
+            lines = []
+            if zdarz:
+                lines.append(f"Zdarzenie: {zdarz}")
+            if lek:
+                lines.append(f"Lek: {lek}")
+            if stan:
+                lines.append(f"Stan: {stan}")
+            for line in lines:
+                p_line = doc.add_paragraph()
+                p_line.paragraph_format.left_indent = Pt(24)
+                r_line = p_line.add_run(line)
+                r_line.font.size      = Pt(9)
+                r_line.font.color.rgb = DARK
+
+            # Nota lekarska kursywą
             if nota:
                 p_nota = doc.add_paragraph()
-                r_nota = p_nota.add_run(f"    ↳ {nota}")
-                r_nota.italic        = True
-                r_nota.font.size     = Pt(8)
+                p_nota.paragraph_format.left_indent = Pt(24)
+                r_nota = p_nota.add_run(f"↳ {nota}")
+                r_nota.italic         = True
+                r_nota.font.size      = Pt(8)
                 r_nota.font.color.rgb = GREY
 
     doc.add_paragraph()
