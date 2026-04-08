@@ -13,7 +13,7 @@ Respondery:
     * Wymaga dodatkowych pól: etap, data_smierci, historia
     * Generuje odpowiedzi z zaświatów z progressją etapów
     * Etap 8+: Wysłannik generujący obrazki FLUX
-    
+
     ZWRACA:
       {
         "reply_html": string,
@@ -22,52 +22,27 @@ Respondery:
         "videos": [...],
         "debug_txt": {"base64": ..., "content_type": "text/plain", "filename": "_.txt"}
       }
-
-WAŻNE: W Google Apps Script (executeSmircMailSend) MUSISZ dodać:
-  attachments.push(imgBlob);  // Bez tego obrazki się nie wyświetlą!
-
-Więcej: Zobacz komentarz po stronie 33 tego pliku.
 """
 import os
 import base64
 import io
-import traceback 
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 
-from responders.zwykly       import build_zwykly_section
-from responders.biznes       import build_biznes_section
-from responders.scrabble     import build_scrabble_section
-from responders.analiza      import build_analiza_section
-from responders.emocje       import build_emocje_section
-from responders.obrazek      import build_obrazek_section
-from responders.nawiazanie   import build_nawiazanie_section
-from responders.gif_maker    import make_gif
+from responders.zwykly        import build_zwykly_section
+from responders.biznes        import build_biznes_section
+from responders.scrabble      import build_scrabble_section
+from responders.analiza       import build_analiza_section
+from responders.emocje        import build_emocje_section
+from responders.obrazek       import build_obrazek_section
+from responders.nawiazanie    import build_nawiazanie_section
+from responders.gif_maker     import make_gif
 from responders.generator_pdf import build_generator_pdf_section
 from responders.smierc        import build_smierc_section
 from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
 app = Flask(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ⚠️  WAŻNE: Zmiana wymagana w Google Apps Script (app.gs)
-# 
-# W funkcji executeSmircMailSend() (~linia 556-580) MUSISZ DODAĆ:
-#
-#     if (imgObj.base64) {
-#       var cid = "smirc_img_" + index;
-#       var imgBlob = Utilities.newBlob(
-#         Utilities.base64Decode(imgObj.base64),
-#         imgObj.content_type || "image/png",
-#         imgObj.filename || ("obraz_" + index + ".png")
-#       );
-#       inlineImages[cid] = imgBlob;
-#       attachments.push(imgBlob);  ← ✅ DODAJ TĘ LINIĘ!
-#       imagesHtml += '<p><img src="cid:' + cid + ...
-#     }
-#
-# Bez tego obrazki FLUX nie będą się wyświetlać w Gmailu!
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _run_parallel(tasks: dict, flask_app) -> dict:
@@ -80,7 +55,9 @@ def _run_parallel(tasks: dict, flask_app) -> dict:
             try:
                 results[key] = future.result()
             except Exception as e:
-                flask_app.logger.error("Błąd responderu '%s': %s\n%s", key, e, traceback.format_exc())
+                flask_app.logger.error(
+                    "Błąd responderu '%s': %s\n%s", key, e, traceback.format_exc()
+                )
                 results[key] = {}
     return results
 
@@ -96,17 +73,18 @@ def webhook():
     # ── Pola nadawcy i historia ───────────────────────────────────────────────
     sender           = data.get("sender",      "")
     sender_name      = data.get("sender_name", "")
-    previous_body    = data.get("previous_body") or None
+    previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None
-    attachments      = data.get("attachments") or []
+    attachments      = data.get("attachments")      or []
 
     # ── Flagi żądania ─────────────────────────────────────────────────────────
-    wants_scrabble       = bool(data.get("wants_scrabble"))
-    wants_analiza        = bool(data.get("wants_analiza"))
-    wants_emocje         = bool(data.get("wants_emocje"))
-    wants_obrazek        = bool(data.get("wants_obrazek"))
-    wants_generator_pdf  = bool(data.get("wants_generator_pdf"))
-    wants_smierc         = bool(data.get("wants_smierc"))
+    wants_scrabble      = bool(data.get("wants_scrabble"))
+    wants_analiza       = bool(data.get("wants_analiza"))
+    wants_emocje        = bool(data.get("wants_emocje"))
+    wants_obrazek       = bool(data.get("wants_obrazek"))
+    wants_generator_pdf = bool(data.get("wants_generator_pdf"))
+    wants_smierc        = bool(data.get("wants_smierc"))
+    wants_text_reply    = bool(data.get("wants_text_reply", True))
 
     flask_app = app
 
@@ -114,10 +92,7 @@ def webhook():
         with flask_app.app_context():
             return fn(*args, **kwargs)
 
-    # ── FALA 1: lekkie respondery + nawiazanie ────────────────────────────────
-    # wants_text_reply = True gdy email ma dostać zwykłą odpowiedź tekstową AI
-    # (false gdy email jest TYLKO dla generator_pdf bez innych flag/list)
-    wants_text_reply = bool(data.get("wants_text_reply", True))
+    # ── FALA 1: lekkie respondery ─────────────────────────────────────────────
     wave1 = {}
     if wants_text_reply:
         _prev   = previous_body
@@ -152,7 +127,8 @@ def webhook():
             subject    = f"Re: {previous_subject or 'Twoja wiadomość'}",
             html_body  = html_fala1,
             zalaczniki = zbierz_zalaczniki_z_response(
-                {k: response_data[k] for k in ("zwykly", "biznes", "scrabble") if k in response_data}
+                {k: response_data[k] for k in ("zwykly", "biznes", "scrabble")
+                 if k in response_data}
             ),
         )
 
@@ -165,19 +141,17 @@ def webhook():
     if wants_analiza:
         wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
     if wants_generator_pdf:
-        # Przekazujemy sender_name do PDF (auto-wpisuje imię i nazwisko)
-        _sn = sender_name
+        _sn   = sender_name
         _body = body
         wave2["generator_pdf"] = lambda: run(
             build_generator_pdf_section, _body, sender_name=_sn
         )
     if wants_smierc:
-        # Moduł pośmiertny — wymaga dodatkowych pól
-        _sender = sender
-        _body_smierc = body
-        _etap = data.get("etap", 1)
+        _sender       = sender
+        _body_smierc  = body
+        _etap         = data.get("etap", 1)
         _data_smierci = data.get("data_smierci", "nieznanego dnia")
-        _historia = data.get("historia", [])
+        _historia     = data.get("historia", [])
         wave2["smierc"] = lambda: run(
             build_smierc_section,
             sender_email=_sender,
@@ -217,14 +191,19 @@ def webhook():
         }
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
-    smierc_data = response_data.get("smierc", {})
-    smierc_images_count = len(smierc_data.get("images", [])) if isinstance(smierc_data, dict) and isinstance(smierc_data.get("images"), list) else 0
-    debug_txt = smierc_data.get("debug_txt", {}) if isinstance(smierc_data, dict) else {}
-    smierc_has_debug = bool(debug_txt.get("base64") if isinstance(debug_txt, dict) else False)
-    
+    smierc_data        = response_data.get("smierc", {})
+    smierc_images_cnt  = (
+        len(smierc_data.get("images", []))
+        if isinstance(smierc_data, dict) and isinstance(smierc_data.get("images"), list)
+        else 0
+    )
+    debug_txt         = smierc_data.get("debug_txt", {}) if isinstance(smierc_data, dict) else {}
+    smierc_has_debug  = bool(debug_txt.get("base64") if isinstance(debug_txt, dict) else False)
+
     app.logger.info(
         "Response: biznes=%s | zwykly=%s | scrabble=%s | analiza=%s | emocje=%s "
-        "| obrazek=%s | nawiazanie=%s | generator_pdf=%s | smierc=%s (images=%d, debug=%s) | sender=%s",
+        "| obrazek=%s | nawiazanie=%s | generator_pdf=%s | smierc=%s "
+        "(images=%d, debug=%s) | sender=%s",
         bool(response_data.get("biznes",    {}).get("pdf",  {}).get("base64")),
         bool(response_data.get("zwykly",    {}).get("pdf",  {}).get("base64")),
         "tak" if "scrabble"       in response_data else "nie",
@@ -234,7 +213,7 @@ def webhook():
         "tak" if response_data.get("nawiazanie", {}).get("has_history") else "nie",
         "tak" if response_data.get("generator_pdf", {}).get("pdf") else "nie",
         "tak" if "smierc"         in response_data else "nie",
-        smierc_images_count,
+        smierc_images_cnt,
         "tak" if smierc_has_debug else "nie",
         sender_name or sender or "(brak)",
     )
@@ -244,10 +223,8 @@ def webhook():
 
 @app.route("/webhook_gif", methods=["POST"])
 def webhook_gif():
-    """
-    Przyjmuje dwa PNG jako base64, zwraca dwa GIFy jako base64.
-    """
-    data = request.json or {}
+    """Przyjmuje dwa PNG jako base64, zwraca dwa GIFy jako base64."""
+    data     = request.json or {}
     png1_b64 = data.get("png1_base64")
     png2_b64 = data.get("png2_base64")
 
@@ -266,8 +243,8 @@ def webhook_gif():
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_gif1 = executor.submit(gen_gif1)
         future_gif2 = executor.submit(gen_gif2)
-        gif1_b64 = future_gif1.result()
-        gif2_b64 = future_gif2.result()
+        gif1_b64    = future_gif1.result()
+        gif2_b64    = future_gif2.result()
 
     app.logger.info("/webhook_gif — GIFy: gif1=%s gif2=%s",
                     bool(gif1_b64), bool(gif2_b64))

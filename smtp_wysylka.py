@@ -11,11 +11,11 @@ Dwie metody autoryzacji (wybierana automatycznie):
 Zmienne środowiskowe (Render → Environment):
   SMTP_USER              — adres Gmail z którego wysyłamy (np. bot@gmail.com)
   SMTP_FROM_NAME         — nazwa nadawcy (np. "Bot Tylera")
-  
+
   Metoda A (Service Account):
     GMAIL_SERVICE_ACCOUNT_JSON — cała zawartość pliku JSON service account
                                   (jako jedna linia, skopiuj z pliku .json)
-  
+
   Metoda B (OAuth2 Refresh Token):
     GMAIL_CLIENT_ID        — OAuth2 Client ID z Google Cloud Console
     GMAIL_CLIENT_SECRET    — OAuth2 Client Secret
@@ -37,19 +37,19 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 # ── KONFIGURACJA ──────────────────────────────────────────────────────────────
-SMTP_USER       = os.getenv("SMTP_USER", "")
-SMTP_FROM_NAME  = os.getenv("SMTP_FROM_NAME", "Bot")
+SMTP_USER      = os.getenv("SMTP_USER", "")
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Bot")
 
 # Metoda A — Service Account
-_SA_JSON_STR    = os.getenv("GMAIL_SERVICE_ACCOUNT_JSON", "")
+_SA_JSON_STR = os.getenv("GMAIL_SERVICE_ACCOUNT_JSON", "")
 
 # Metoda B — OAuth2 Refresh Token
-_CLIENT_ID      = os.getenv("GMAIL_CLIENT_ID", "")
-_CLIENT_SECRET  = os.getenv("GMAIL_CLIENT_SECRET", "")
-_REFRESH_TOKEN  = os.getenv("GMAIL_REFRESH_TOKEN", "")
+_CLIENT_ID     = os.getenv("GMAIL_CLIENT_ID", "")
+_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET", "")
+_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN", "")
 
-GMAIL_SEND_URL  = f"https://gmail.googleapis.com/gmail/v1/users/{SMTP_USER}/messages/send"
-GMAIL_SCOPES    = ["https://www.googleapis.com/auth/gmail.send"]
+GMAIL_SEND_URL = f"https://gmail.googleapis.com/gmail/v1/users/{SMTP_USER}/messages/send"
+GMAIL_SCOPES   = ["https://www.googleapis.com/auth/gmail.send"]
 
 
 # ── AUTORYZACJA ───────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ def _get_access_token_service_account() -> Optional[str]:
         import time
         import jwt  # pip install PyJWT cryptography
 
-        sa = json.loads(_SA_JSON_STR)
+        sa  = json.loads(_SA_JSON_STR)
         now = int(time.time())
         payload = {
             "iss":   sa["client_email"],
@@ -71,7 +71,7 @@ def _get_access_token_service_account() -> Optional[str]:
             "exp":   now + 3600,
         }
         token = jwt.encode(payload, sa["private_key"], algorithm="RS256")
-        resp = requests.post(
+        resp  = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -146,8 +146,8 @@ def wyslij_odpowiedz(
         if not item or not item.get("base64"):
             continue
         try:
-            raw  = base64.b64decode(item["base64"])
-            ctype = item.get("content_type", "application/octet-stream")
+            raw        = base64.b64decode(item["base64"])
+            ctype      = item.get("content_type", "application/octet-stream")
             main_type, sub_type = ctype.split("/", 1)
             part = MIMEBase(main_type, sub_type)
             part.set_payload(raw)
@@ -182,7 +182,9 @@ def wyslij_odpowiedz(
             timeout=30,
         )
         if resp.status_code in (200, 201):
-            logger.info("[gmail] ✅ Wysłano do %s | Załączników: %d", to_email, attached_count)
+            logger.info(
+                "[gmail] ✅ Wysłano do %s | Załączników: %d", to_email, attached_count
+            )
             return True
         else:
             logger.error("[gmail] ❌ HTTP %d: %s", resp.status_code, resp.text)
@@ -192,24 +194,77 @@ def wyslij_odpowiedz(
         return False
 
 
-# ── ZBIERANIE ZAŁĄCZNIKÓW (bez zmian) ────────────────────────────────────────
+# ── ZBIERANIE ZAŁĄCZNIKÓW — PEŁNA WERSJA ─────────────────────────────────────
 
 def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
-    result = []
+    """
+    Zbiera WSZYSTKIE pliki ze wszystkich sekcji response_data i zwraca
+    płaską listę słowników {base64, content_type, filename}.
 
-    def _dodaj(item):
-        if isinstance(item, dict) and item.get("base64"):
-            result.append(item)
-        elif isinstance(item, list):
-            for el in item:
-                _dodaj(el)
+    Obsługiwane sekcje: zwykly, biznes, scrabble, analiza, emocje,
+                        obrazek, generator_pdf, smierc, nawiazanie.
 
-    for res_val in response_data.values():
-        if not isinstance(res_val, dict):
+    Pola pojedyncze (obiekt z base64):
+      pdf, emoticon, cv_pdf, log_psych, ankieta_html, ankieta_pdf,
+      horoskop_pdf, karta_rpg_pdf, raport_pdf, debug_txt,
+      explanation_txt, plakat_svg, gra_html, image, image2,
+      prompt1_txt, prompt2_txt
+
+    Pola listowe (lista obiektów z base64):
+      triptych, images, videos, docs, docx_list
+    """
+    result: List[dict] = []
+    seen_filenames: set = set()
+
+    # Pola pojedyncze (każde to dict z kluczem "base64")
+    SINGLE_FIELDS = [
+        "pdf", "emoticon", "cv_pdf", "log_psych",
+        "ankieta_html", "ankieta_pdf", "horoskop_pdf",
+        "karta_rpg_pdf", "raport_pdf", "debug_txt",
+        "explanation_txt", "plakat_svg", "gra_html",
+        "image", "image2", "prompt1_txt", "prompt2_txt",
+    ]
+
+    # Pola listowe (każde to lista dict-ów z kluczem "base64")
+    LIST_FIELDS = [
+        "triptych", "images", "videos", "docs", "docx_list",
+    ]
+
+    def _dodaj(item: object) -> None:
+        """Dodaje jeden obiekt-załącznik do listy wynikowej (jeśli ma base64)."""
+        if not isinstance(item, dict):
+            return
+        if not item.get("base64"):
+            return
+        filename = item.get("filename") or "zalacznik"
+        # Unikaj duplikatów (ten sam plik w wielu sekcjach)
+        if filename in seen_filenames:
+            logger.debug("[zbierz] Pomijam duplikat: %s", filename)
+            return
+        seen_filenames.add(filename)
+        result.append({
+            "base64":       item["base64"],
+            "content_type": item.get("content_type", "application/octet-stream"),
+            "filename":     filename,
+        })
+        logger.debug("[zbierz] Dodano załącznik: %s (%s)",
+                     filename, item.get("content_type", "?"))
+
+    for section_key, section_val in response_data.items():
+        if not isinstance(section_val, dict):
             continue
-        pola = ["pdf", "emoticon", "cv_pdf", "raport_pdf", "psych_photo_1", "psych_photo_2"]
-        for p in pola:
-            _dodaj(res_val.get(p))
-        for p_list in ["triptych", "images"]:
-            _dodaj(res_val.get(p_list, []))
+
+        # Pola pojedyncze
+        for field in SINGLE_FIELDS:
+            _dodaj(section_val.get(field))
+
+        # Pola listowe
+        for field in LIST_FIELDS:
+            arr = section_val.get(field)
+            if isinstance(arr, list):
+                for element in arr:
+                    _dodaj(element)
+
+    logger.info("[zbierz] Łącznie załączników: %d (z %d sekcji)",
+                len(result), len(response_data))
     return result
