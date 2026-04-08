@@ -283,10 +283,48 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
     if not result:
         return {"wypis": {
             "dzien_wypisu": f"Dzień 15, {data_wypisu}",
-            "stan_przy_wypisie": "Pacjent osiągnął akceptowalny poziom beznadziei.",
-            "powod_wypisu": "Wyczerpanie budżetu nadziei.",
-            "zalecenia_po_wypisie": ["Unikać optymizmu.", "Nie planować remontów.", "Nie pisać emaili."],
-            "opis_pozegnania": "Pacjent wyszedł bez słowa. Drzwi zostawił otwarte."
+            "stan_przy_wypisie": (
+                "Po przeprowadzeniu kompleksowej oceny wielowymiarowej pacjent został zakwalifikowany "
+                "do procedury stopniowego wychodzenia z systemu opieki psychiatrycznej. "
+                "Komisja terapeutyczna zebrała się trzykrotnie, dwukrotnie nie osiągając kworum "
+                "z powodu nieobecności dr. Durdena, który jak zwykle był 'na spotkaniu wyrównującym'. "
+                "W toku hospitalizacji pacjent wykazał imponującą zdolność do siedzenia bez celu "
+                "przez czternaście dni z rzędu, co komisja oceniła jako znaczący postęp kliniczny. "
+                "Stan psychiczny ustabilizowany na poziomie akceptowalnym przez dział HR. "
+                "Rokowania niepewne, ale budżet oddziału pewny — i to jest, jak zaznaczył ordynator, "
+                "'jedyny wskaźnik, który naprawdę coś znaczy w naszym systemie opieki zdrowotnej'. "
+                "Pacjent nie stanowi zagrożenia dla otoczenia bardziej niż przeciętna korporacja. "
+                "Wypisany z adnotacją: gotowy do powrotu do środowiska o niskim poziomie sensu."
+            ),
+            "powod_wypisu": (
+                "Po wnikliwej analizie przeprowadzonej przez Komitet ds. Alokacji Zasobów Nadziei "
+                "stwierdzono, że dalsze świadczenie usług terapeutycznych nie jest możliwe w ramach "
+                "aktualnie obowiązującego budżetu na rok fiskalny 2026. "
+                "Komitet pragnie podkreślić, że decyzja ta nie jest związana z wynikami leczenia "
+                "pacjenta, które były 'obiecujące w granicach statystycznego szumu'. "
+                "Niniejszym informujemy, że Szpital im. Tylera Durdena podjął strategiczną decyzję "
+                "o restrukturyzacji portfela pacjentów z naciskiem na efektywność kosztową. "
+                "Pacjent jest cenionym członkiem naszej wspólnoty terapeutycznej i z bólem serca, "
+                "aczkolwiek z radością w linii budżetowej, zwalniamy go z wszelkich obowiązków "
+                "wobec oddziału ze skutkiem natychmiastowym. "
+                "Życzymy powodzenia w dalszej drodze zawodowej i osobistej, mając świadomość, "
+                "że ta droga prowadzi przede wszystkim z dala od naszej recepcji. "
+                "Do ewentualnej kolejnej hospitalizacji zachęcamy kierować się aktualną ofertą "
+                "dostępną na naszej stronie internetowej — o ile strona będzie działać, "
+                "bo IT też ma swoje problemy."
+            ),
+            "zalecenia_po_wypisie": [
+                "Unikać optymizmu w godzinach szczytu.",
+                "Nie planować remontów bez wcześniejszego uzgodnienia z komisją etyczną.",
+                "Nie pisać emaili dłuższych niż trzy zdania przed godziną 10:00.",
+                "Przyjmować przepisane leki zgodnie z instrukcją, nawet jeśli instrukcja jest absurdalna.",
+                "W razie nawrotu nadziei — natychmiast skontaktować się z dyżurnym nihilistą."
+            ],
+            "opis_pozegnania": (
+                "Pacjent wyszedł przez drzwi główne trzymając w ręku tekturowe pudło z przedmiotami "
+                "odebranymi przy przyjęciu. Drzwi zostawił uchylone — personel uznał to za metaforę. "
+                "Dr. Durden odnotował w karcie: 'Wyszedł. Nasz problem stał się jego problemem.'"
+            )
         }}
     return result
 
@@ -851,10 +889,17 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     if isinstance(dep, dict):
         lista = dep.get("lista_przedmiotow", [])
         proto = dep.get("protokol_depozytu", "")
+        # Normalizacja — AI może zwrócić string zamiast listy
+        if isinstance(lista, str):
+            lista = [s.strip() for s in lista.split(",") if s.strip()]
         if lista:
             for item in lista:
+                # Pomiń pusty string lub placeholder
+                item_str = str(item).strip()
+                if not item_str or item_str == "__BRAK__":
+                    continue
                 p_item = doc.add_paragraph(style="List Bullet")
-                r_item = p_item.add_run(str(item))
+                r_item = p_item.add_run(item_str)
                 r_item.font.size      = Pt(10)
                 r_item.font.color.rgb = DARK
         if proto:
@@ -880,29 +925,47 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     leki_lista = farm.get("leki", []) if isinstance(farm, dict) else []
 
     if leki_lista:
-        # Tabela leków
-        col_widths = [Cm(5), Cm(3.5), Cm(5), Cm(3.5)]
-        t = doc.add_table(rows=1, cols=4)
-        t.style = "Table Grid"
-        hdr = t.rows[0].cells
-        for i, label in enumerate(["Nazwa leku", "Przedmioty odebrane", "Wskazanie", "Dawkowanie"]):
-            hdr[i].text = ""
-            r = hdr[i].paragraphs[0].add_run(label)
-            r.bold            = True
-            r.font.size       = Pt(9)
-            r.font.color.rgb  = RED
         for lek in leki_lista:
             if not isinstance(lek, dict):
                 continue
-            row = t.add_row().cells
-            row[0].text = str(lek.get("nazwa", ""))
-            row[1].text = str(lek.get("rzeczownik_zrodlowy", ""))
-            row[2].text = str(lek.get("wskazanie", ""))
-            row[3].text = str(lek.get("dawkowanie", ""))
-            for cell in row:
-                for p in cell.paragraphs:
-                    for r in p.runs:
-                        r.font.size = Pt(9)
+            nazwa     = str(lek.get("nazwa", "")).strip()
+            wskazanie = str(lek.get("wskazanie", "")).strip()
+            dawkowanie = str(lek.get("dawkowanie", "")).strip()
+            if not nazwa or nazwa == "__BRAK__":
+                continue
+
+            # Nazwa leku — bold, czerwona
+            p_nazwa = doc.add_paragraph(style="List Bullet")
+            r_nazwa = p_nazwa.add_run(nazwa)
+            r_nazwa.bold           = True
+            r_nazwa.font.size      = Pt(10)
+            r_nazwa.font.color.rgb = RED
+
+            # Wskazanie
+            if wskazanie and wskazanie != "__BRAK__":
+                p_wsk = doc.add_paragraph()
+                p_wsk.paragraph_format.left_indent = Pt(24)
+                rl = p_wsk.add_run("Wskazanie: ")
+                rl.bold           = True
+                rl.font.size      = Pt(9)
+                rl.font.color.rgb = DARK
+                rv = p_wsk.add_run(wskazanie)
+                rv.font.size      = Pt(9)
+                rv.font.color.rgb = DARK
+
+            # Dawkowanie
+            if dawkowanie and dawkowanie != "__BRAK__":
+                p_daw = doc.add_paragraph()
+                p_daw.paragraph_format.left_indent = Pt(24)
+                rl2 = p_daw.add_run("Dawkowanie: ")
+                rl2.bold           = True
+                rl2.font.size      = Pt(9)
+                rl2.font.color.rgb = DARK
+                rv2 = p_daw.add_run(dawkowanie)
+                rv2.italic         = True
+                rv2.font.size      = Pt(9)
+                rv2.font.color.rgb = GREY
+
         doc.add_paragraph()
 
     nota_farm = farm.get("nota_farmaceutyczna", "") if isinstance(farm, dict) else ""

@@ -94,12 +94,12 @@
     "instrukcje": "7 obiektów (dni 8-14). ZAKAZ nudnych zdarzeń. Eskalacja absurdu. Brak → '__BRAK__'. Zwróć TYLKO czysty JSON."
   },
   "groq_5_wypis": {
-    "system": "Jesteś ordynatorem Szpitala Psychiatrycznego im. Tylera Durdena. Piszesz kartę wypisu. Styl Szwejk + Monty Python + nihilizm Tylera. STAN PRZY WYPISIE: minimum 10 zdań — każde nawiązuje do słowa z emaila. POWÓD WYPISU: minimum 10 zdań — biurokratyczny absurd Monty Pythona (komisja, formularz, błędna teczka, podpis nie ta strona). ZALECENIA PO WYPISIE: MINIMUM 15 punktów. Każdy konkretny, szczegółowy, absurdalny, nawiązujący do innego słowa z emaila — z pełną medyczną powagą. OPIS POŻEGNANIA: 4-5 zdań, absurdalne i melancholijne. Jeśli email nie daje materiału → '__BRAK__' dla pola. Zwróć TYLKO czysty JSON.",
+    "system": "Jesteś ordynatorem Szpitala Psychiatrycznego im. Tylera Durdena. Piszesz kartę wypisu. Styl Szwejk + Monty Python + nihilizm Tylera. STAN PRZY WYPISIE: minimum 10 zdań — każde nawiązuje do słowa z emaila. POWÓD WYPISU: minimum 10 zdań — styl KORPORACYJNEGO ZWOLNIENIA Z PRACY (komisja ds. alokacji zasobów nadziei, restrukturyzacja portfela pacjentów, efektywność kosztowa, 'cenimy wkład pacjenta', 'decyzja niezwiązana z wynikami leczenia', 'życzymy powodzenia', budżet fiskalny, strategiczna decyzja zarządu oddziału). Nawiązuje do emaila. ZALECENIA PO WYPISIE: MINIMUM 15 punktów. Każdy konkretny, szczegółowy, absurdalny, nawiązujący do innego słowa z emaila — z pełną medyczną powagą. OPIS POŻEGNANIA: 4-5 zdań, absurdalne i melancholijne. Jeśli email nie daje materiału → '__BRAK__' dla pola. Zwróć TYLKO czysty JSON.",
     "schema": {
       "wypis": {
         "dzien_wypisu": "Dzień 15, DD.MM.YYYY",
         "stan_przy_wypisie": "Min. 5 zdań nawiązujących do emaila. Styl Szwejka. Brak → '__BRAK__'",
-        "powod_wypisu": "Min. 5 zdań. Biurokratyczny absurd Monty Pythona nawiązujący do emaila. Brak → '__BRAK__'",
+        "powod_wypisu": "Min. 8 zdań. STYL KORPORACYJNEGO ZWOLNIENIA z pracy: komisja, alokacja zasobów, restrukturyzacja, efektywność kosztowa, 'cenimy wkład pacjenta', 'decyzja niezwiązana z wynikami leczenia', 'życzymy powodzenia w dalszej drodze'. Nawiązuje do emaila. Brak → '__BRAK__'",
         "zalecenia_po_wypisie": "Lista MINIMUM 15 punktów. Każdy nawiązuje do innego słowa z emaila, absurdalny, z medyczną powagą. Brak → ['__BRAK__']",
         "opis_pozegnania": "4-5 zdań. Jak pacjent wyszedł, absurdalne i melancholijne. Brak → '__BRAK__'"
       }
