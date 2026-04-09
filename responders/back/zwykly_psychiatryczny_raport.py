@@ -2,22 +2,17 @@
 responders/zwykly_psychiatryczny_raport.py
 
 Moduł obsługujący CAŁY pipeline raportu psychiatrycznego:
-  - 10 wywołań Groq (każda sekcja osobno, rotacja tokenów, fallback per sekcja)
-      Runda 1 (równolegle): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
-      Runda 2 (równolegle): #3a tydzień1 dni 1-4 | #3b tydzień1 dni 5-7
-                            #4a tydzień2 dni 8-11 | #4b tydzień2 dni 12-14 | #5 wypis
-      Runda 3: #7a zalecenia+rokowanie | #7b notatki_pielegniarek | #7c notatki_sprzataczki+incydenty
+  - 8 wywołań Groq (każda sekcja osobno, rotacja tokenów, fallback per sekcja)
   - 2 wywołania DeepSeek (tone check + completeness check, merge JSON)
-  - 2 zdjęcia FLUX równolegle (ThreadPoolExecutor)
+  - 2 zdjęcia FLUX równolegle (ThreadPoolExecutor):
+      psych_photo_1 = pacjent w kaftanie otoczony przedmiotami
+      psych_photo_2 = same przedmioty jako dowody rzeczowe
   - Budowanie DOCX (python-docx)
   - Zwraca dict: {raport_pdf, psych_photo_1, psych_photo_2}
 
-ZMIANY v5:
-  - _sekcja_tydzien podzielona na chunki (3-4 dni każdy) → koniec z uciętymi JSON
-  - groq_7 podzielone na 3 osobne wywołania (7a/7b/7c) → koniec z powtarzalnością
-  - Każdy chunk przekazuje listę już użytych motywów → zakaz powtórzeń
-  - max_tokens obniżone do bezpiecznych wartości per chunk
-  - DeepSeek tone/completeness: dodatkowe klucze wykluczone (cytaty, wypis)
+Import w zwykly.py:
+    from responders.zwykly_psychiatryczny_raport import build_raport
+    raport_result = build_raport(body, previous_body, res_text, nouns_dict, sender_name)
 """
 
 import os
@@ -66,8 +61,7 @@ def _get_groq_keys() -> list:
             keys.append((name, val))
     return keys
 
-
-def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 3000) -> str | None:
+def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 4000) -> str | None:
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     payload = {
         "model":       GROQ_MODEL,
@@ -88,7 +82,7 @@ def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 3000) 
     return None
 
 
-def _call_groq_with_retry(system: str, user: str, max_tokens: int = 3000,
+def _call_groq_with_retry(system: str, user: str, max_tokens: int = 4000,
                            section_name: str = "?", max_attempts: int = 3) -> str | None:
     """
     Wywołuje Groq z rotacją kluczy. Każdy klucz próbuje max_attempts razy.
@@ -132,28 +126,36 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
         current_app.logger.info("[psych-raport] JSON OK sekcja=%s", section)
         return result
     except json.JSONDecodeError as e:
+        # Próba naprawy uciętego JSON — dodaj brakujące nawiasy zamykające
         current_app.logger.warning("[psych-raport] JSON błąd sekcja=%s: %s — próba naprawy uciętego JSON",
                                    section, e)
         try:
             raw_stripped = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
             raw_stripped = re.sub(r'```\s*$', '', raw_stripped, flags=re.M).strip()
+            # Znajdź początek JSON
             start = next((i for i, c in enumerate(raw_stripped) if c in '{['), None)
             if start is None:
                 return None
             fragment = raw_stripped[start:]
-            opens    = fragment.count('{') - fragment.count('}')
+            # Policz ile nawiasów brakuje i dodaj je
+            opens  = fragment.count('{') - fragment.count('}')
             opens_sq = fragment.count('[') - fragment.count(']')
+            # Usuń ostatnią niekompletną linię (może mieć urwany string)
             lines = fragment.rstrip().splitlines()
+            # Cofaj linie aż do ostatniego pełnego pola (kończy się na " lub ,)
             while lines:
                 last = lines[-1].rstrip()
-                if last.endswith((',', '{', '[')):
-                    lines[-1] = last.rstrip(',')
-                    break
-                if last.endswith('"') and last.count('"') % 2 == 1:
-                    lines.pop()
-                    continue
+                if last.endswith((',', '{', '[', '"')):
+                    # Urwana linia — usuń
+                    if last.endswith('"') and last.count('"') % 2 == 1:
+                        lines.pop()
+                        continue
+                    elif not last.endswith(('{', '[')):
+                        # Usuń trailing przecinek
+                        lines[-1] = last.rstrip(',')
                 break
             repaired = '\n'.join(lines)
+            # Dodaj brakujące nawiasy zamykające
             repaired += (']' * max(opens_sq, 0)) + ('}' * max(opens, 0))
             result = json.loads(repaired)
             current_app.logger.warning("[psych-raport] JSON naprawiony sekcja=%s (ucięty output)", section)
@@ -251,134 +253,51 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #3/#4 — tygodnie hospitalizacji (CHUNKI po 3-4 dni)
+# GROQ #3 — tydzień 1 (dni 1-7)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
-                           tydzien: int, data_przyjecia: str,
-                           dni_od: int, dni_do: int,
-                           uzyte_motywy: list | None = None) -> list:
-    """
-    Generuje chunk dni hospitalizacji od dni_od do dni_do (włącznie).
-    dni_od/dni_do to numery dni w hospitalizacji (1-14).
-    uzyte_motywy — lista krótkich opisów zdarzeń już wygenerowanych,
-                   żeby model nie powtarzał tych samych motywów.
-    """
+def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
+                    data_przyjecia: str) -> list:
+    """tydzien=1 → dni 1-7, tydzien=2 → dni 8-14"""
     sec_key = f"groq_{2 + tydzien}_tydzien{tydzien}"
     sec = cfg.get(sec_key, {})
     system = sec.get("system", "")
+    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
 
+    # Oblicz daty
     try:
         base_date = datetime.strptime(data_przyjecia, "%d.%m.%Y")
     except Exception:
         base_date = datetime.now()
-
-    # Oblicz daty dla tego chunku
-    daty = {
-        d: (base_date + timedelta(days=d - 1)).strftime("%d.%m.%Y")
-        for d in range(dni_od, dni_do + 1)
-    }
-    daty_str = "\n".join(f"Dzień {d}: {dt}" for d, dt in daty.items())
+    start_day = (tydzien - 1) * 7 + 1
+    daty = [(base_date + timedelta(days=start_day - 1 + i)).strftime("%d.%m.%Y")
+            for i in range(7)]
+    daty_str = "\n".join(f"Dzień {start_day + i}: {d}" for i, d in enumerate(daty))
 
     leki_str = json.dumps(leki, ensure_ascii=False, indent=2) if leki else "[]"
 
-    # Schema dynamiczny dla konkretnych dni
-    schema_days = [
-        {
-            "dzien": d,
-            "data": daty[d],
-            "zdarzenie": f"Min. 4-5 zdań. Styl Szwejka. Nawiązuje do emaila. Brak → '__BRAK__'",
-            "lek": "Nazwa leku + dawka lub '__BRAK__'",
-            "stan_pacjenta": "Jedno zdanie nihilistyczne lub '__BRAK__'",
-            "nota_lekarska": "2-3 zdania lub '__BRAK__'"
-        }
-        for d in range(dni_od, dni_do + 1)
-    ]
-
-    zakaz_str = ""
-    if uzyte_motywy:
-        zakaz_str = (
-            f"\nBEZWZGLĘDNY ZAKAZ powtarzania tych motywów (już użyte w poprzednich dniach):\n"
-            + "\n".join(f"- {m}" for m in uzyte_motywy[:12])
-            + "\nKażdy dzień MUSI mieć INNE zdarzenie — nowy motyw, nowa sytuacja.\n"
-        )
-
     user = (
         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"LISTA LEKÓW DO UŻYCIA:\n{leki_str}\n\n"
-        f"DATY HOSPITALIZACJI — użyj DOKŁADNIE tych dat:\n{daty_str}\n"
-        f"{zakaz_str}\n"
-        f"SCHEMAT JSON (wygeneruj tablicę {dni_do - dni_od + 1} obiektów "
-        f"dla dni {dni_od}-{dni_do}):\n"
-        f"{json.dumps(schema_days, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON z tablicą {dni_do - dni_od + 1} obiektów."
+        f"LISTA LEKÓW DO UŻYCIA (używaj tych leków w opisach dni):\n{leki_str}\n\n"
+        f"DATY HOSPITALIZACJI — użyj DOKŁADNIE tych dat:\n{daty_str}\n\n"
+        f"SCHEMAT JSON (wygeneruj tablicę 7 obiektów dla dni {start_day}-{start_day+6}):\n{schema}\n\n"
+        f"Zwróć TYLKO czysty JSON z tablicą 7 obiektów."
     )
-
-    section_name = f"tydzien{tydzien}_dni{dni_od}-{dni_do}"
-    # max_tokens: ~700 tokenów na dzień × liczba dni + bufor
-    mt = (dni_do - dni_od + 1) * 700 + 300
-    raw = _call_groq_with_retry(system, user, mt, section_name, max_attempts=1)
+    section_name = f"tydzien{tydzien}"
+    raw = _call_groq_with_retry(system, user, 8000, section_name, max_attempts=1)
     result = _parse_json_safe(raw, section_name)
 
+    # Wyciągnij tablicę z różnych możliwych struktur
     if isinstance(result, list):
         return result
     if isinstance(result, dict):
         for v in result.values():
             if isinstance(v, list) and len(v) > 0:
                 return v
-
     # fallback
+    fb = cfg.get("fallback_dni", {})
     current_app.logger.warning("[psych-raport] %s → fallback", section_name)
-    return [
-        {
-            "dzien": d,
-            "data": daty[d],
-            "zdarzenie": "__BRAK__",
-            "lek": "__BRAK__",
-            "stan_pacjenta": "__BRAK__",
-            "nota_lekarska": "__BRAK__"
-        }
-        for d in range(dni_od, dni_do + 1)
-    ]
-
-
-def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
-                    data_przyjecia: str) -> list:
-    """
-    Wrapper: generuje pełny tydzień w dwóch chunkach.
-    Tydzień 1 → dni 1-4 + dni 5-7
-    Tydzień 2 → dni 8-11 + dni 12-14
-    Drugi chunk dostaje listę motywów z pierwszego → zero powtórzeń.
-    """
-    if tydzien == 1:
-        start = 1
-    else:
-        start = 8
-
-    mid  = start + 3   # po 4 dniach
-    end  = start + 6   # 7 dni razem
-
-    # Chunk A (4 dni)
-    chunk_a = _sekcja_tydzien_chunk(
-        cfg, body, leki, tydzien, data_przyjecia,
-        dni_od=start, dni_do=mid
-    )
-
-    # Wyciągnij użyte motywy z chunk A
-    uzyte = [
-        str(d.get("zdarzenie", ""))[:100]
-        for d in chunk_a
-        if isinstance(d, dict) and d.get("zdarzenie") not in (None, "", "__BRAK__")
-    ]
-
-    # Chunk B (3 dni) z zakazem powtórzeń
-    chunk_b = _sekcja_tydzien_chunk(
-        cfg, body, leki, tydzien, data_przyjecia,
-        dni_od=mid + 1, dni_do=end,
-        uzyte_motywy=uzyte
-    )
-
-    return chunk_a + chunk_b
+    return [{**fb, "dzien": start_day + i, "data": daty[i]} for i in range(7)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -452,30 +371,30 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #7 — zalecenia + notatki + rokowanie (TRZY OSOBNE WYWOŁANIA)
+# GROQ #7 — zalecenia + notatki + rokowanie
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
     """
-    Podzielone na TRZY osobne wywołania Groq:
-      groq_7a — zalecenia_tylera + rokowanie          (max_tokens: 1500)
-      groq_7b — notatki_pielegniarek                  (max_tokens: 2500)
-      groq_7c — notatki_sprzataczki + incydenty       (max_tokens: 2500)
-    Wyniki scalane w jeden dict.
+    Podzielona na dwa osobne wywołania Groq:
+      groq_7a — zalecenia_tylera + rokowanie          (max_tokens: 1200)
+      groq_7b — notatki_pielegniarek + notatki_sprzataczki + incydenty_specjalne  (max_tokens: 2500)
+    Wyniki są scalane w jeden dict i zwracane.
     """
-    sec_7 = cfg.get("groq_7_zalecenia_notatki", {})
-    system_7 = sec_7.get("system", "")
 
-    # Kontekst zdarzeń z hospitalizacji
+    # Wyciągnij kilka kluczowych zdarzeń z hospitalizacji jako kontekst
     zdarzenia = []
     for d in (dni_1_7 or []) + (dni_8_14 or []):
-        if isinstance(d, dict) and d.get("zdarzenie") not in (None, "", "__BRAK__"):
-            zdarzenia.append(f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:120]}")
-    zdarzenia_str = "\n".join(zdarzenia[:14]) if zdarzenia else "(brak)"
+        if isinstance(d, dict) and d.get("zdarzenie"):
+            zdarzenia.append(f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:150]}")
+    zdarzenia_str = "\n".join(zdarzenia[:8]) if zdarzenia else "(brak)"
 
     email_fragment = body[:MAX_DLUGOSC_EMAIL]
 
     # ── groq_7a — ZALECENIA + ROKOWANIE ──────────────────────────────────────
+    sec_7 = cfg.get("groq_7_zalecenia_notatki", {})
+    system_7 = sec_7.get("system", "")
+
     schema_7a = json.dumps({
         "zalecenia_tylera": sec_7.get("schema", {}).get("zalecenia_tylera", {
             "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIA OBOWIĄZKOWE",
@@ -492,74 +411,82 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"EMAIL PACJENTA (PRIORYTET — każde pole MUSI nawiązywać do treści emaila):\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
         f"SCHEMAT JSON (wypełnij TYLKO te klucze):\n{schema_7a}\n\n"
-        f"zalecenia_tylera.zadanie_1/2/3: min. 5-6 zdań każde, konkretny przedmiot/plan/rzecz z emaila.\n"
+        f"zalecenia_tylera.zadanie_1/2/3: min. 5-6 zdań każde, konkretny przedmiot/plan/rzecz z emaila, z humorem Szwejka i Monty Pythona.\n"
         f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a = _call_groq_with_retry(system_7, user_7a, 1500, "zalecenia_7a", max_attempts=1)
+    raw_7a = _call_groq_with_retry(system_7, user_7a, 1200, "zalecenia_7a", max_attempts=1)
     result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
 
-    # ── groq_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
+    # ── groq_7b — NOTATKI + INCYDENTY ────────────────────────────────────────
     schema_7b = json.dumps({
         "notatki_pielegniarek": sec_7.get("schema", {}).get("notatki_pielegniarek",
-            "Lista MINIMUM 10 obiektów: {imie_pielegniarki, data, tresc}")
-    }, ensure_ascii=False, indent=2)
-
-    user_7b = (
-        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
-        f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
-        f"SCHEMAT JSON (wypełnij TYLKO klucz notatki_pielegniarek):\n{schema_7b}\n\n"
-        f"notatki_pielegniarek: MINIMUM 10 obiektów. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
-        f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
-        f"nawiązuje do KONKRETNYCH zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
-        f"KAŻDA notatka musi nawiązywać do INNEGO zdarzenia i INNEGO dnia — bezwzględny zakaz powtórzeń.\n"
-        f"Zwróć TYLKO czysty JSON."
-    )
-    raw_7b = _call_groq_with_retry(system_7, user_7b, 2500, "zalecenia_7b", max_attempts=1)
-    result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
-
-    # ── groq_7c — NOTATKI SPRZĄTACZKI + INCYDENTY ────────────────────────────
-    schema_7c = json.dumps({
+            "Lista MINIMUM 10 obiektów: {imie_pielegniarki, data, tresc}"),
         "notatki_sprzataczki": sec_7.get("schema", {}).get("notatki_sprzataczki",
             "Lista MINIMUM 10 obiektów: {data, tresc}"),
         "incydenty_specjalne": sec_7.get("schema", {}).get("incydenty_specjalne",
             "Lista MINIMUM 10 incydentów po 4-5 zdań")
     }, ensure_ascii=False, indent=2)
 
-    user_7c = (
-        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+    user_7b = (
+        f"EMAIL PACJENTA (PRIORYTET — notatki i incydenty MUSZĄ nawiązywać do treści emaila):\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
-        f"SCHEMAT JSON (wypełnij TYLKO klucze notatki_sprzataczki i incydenty_specjalne):\n{schema_7c}\n\n"
+        f"SCHEMAT JSON (wypełnij TYLKO te klucze):\n{schema_7b}\n\n"
+        f"notatki_pielegniarek: MINIMUM 10 obiektów. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
+        f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
+        f"nawiązuje do konkretnych zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
         f"notatki_sprzataczki: MINIMUM 10 obiektów. Każdy: data (DD.MM.YYYY), "
         f"tresc (2-3 zdania — co znalazła sprzątając salę, gwarą polską, humor Szwejka/Monty Python, "
-        f"nawiązuje do emaila pacjenta). KAŻDA notatka musi mówić o INNYM znalezisku.\n"
+        f"nawiązuje do emaila pacjenta).\n"
         f"incydenty_specjalne: MINIMUM 10 incydentów, każdy 4-5 zdań, NAPRAWDĘ absurdalnych i śmiesznych, "
-        f"nawiązujących do emaila. KAŻDY incydent INNY motyw. "
-        f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
+        f"nawiązujących do emaila. Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7c = _call_groq_with_retry(system_7, user_7c, 2500, "zalecenia_7c", max_attempts=1)
-    result_7c = _parse_json_safe(raw_7c, "zalecenia_7c") or {}
+    raw_7b = _call_groq_with_retry(system_7, user_7b, 4000, "zalecenia_7b", max_attempts=1)
+    result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
 
-    # ── Scal wyniki trzech wywołań ────────────────────────────────────────────
+    # ── Scal wyniki obu wywołań ───────────────────────────────────────────────
     result = {}
     result.update(result_7a)
     result.update(result_7b)
-    result.update(result_7c)
 
     if not result:
+        body_fragment = body[:300] if body else "(brak emaila)"
         return {
             "zalecenia_tylera": {
                 "naglowek": "ZALECENIA TERAPEUTYCZNE — PROTOKÓŁ AWARYJNY",
-                "zadanie_1": "Zidentyfikować i wyeliminować główne źródło złudzeń.",
+                "zadanie_1": f"Na podstawie emaila pacjenta: zidentyfikować i wyeliminować główne źródło złudzeń.",
                 "zadanie_2": "Wyrzeknij się publicznie planów opisanych w wiadomości przychodzącej.",
                 "zadanie_3": "Spalić wszystkie notatki związane z treścią emaila.",
                 "podpis": "Dr. Tyler Durden, Ordynator Oddziału Beznadziei"
             },
-            "rokowanie": "Trudne. Pacjent przejawia objawy niezdrowego optymizmu.",
-            "notatki_pielegniarek": [],
-            "notatki_sprzataczki": [],
-            "incydenty_specjalne": []
+            "rokowanie": f"Na podstawie analizy emaila: trudne. Pacjent przejawia objawy niezdrowego optymizmu.",
+            "notatka_pielegniarki": (
+                "No i cóż, powiom wóm jak jest, bo po co owijać w bawełnę. "
+                "Przyszedł tyn pacjent i od razu widać było, że coś z nim nie tak. "
+                "Siostra Jadźka mówi, że taki to już jest, że mu wszystko jedno. "
+                "Lekarstwa brał, ale z taką miną, jakby połykał kamienie z pola. "
+                "Raz nocą słyszałam, że coś tam mamrotał pod nos — pewnie znowu o tych planach swoich. "
+                "No bo wiadomo, że jak człowiek ma za dużo planów, to go boli. "
+                "Dałam mu herbatę rumiankową, bo co innego można dać na taką chorobę duszy. "
+                "On pyta czy coś pomoże, a jo mu mówię: pomoże, pomoże, byle nie gadał głupot. "
+                "Zapisałam w karcie: spokojny, ale podejrzanie spokojny — taki to się nazywa spokój przed burzą. "
+                "Siostra Kazimiera, dyżur nocny, wszystko pod kontrolą, Boże daj zdrowie."
+            ),
+            "notatka_sprzataczki": (
+                "Jak to mówią — nie ma złego, co by na dobre nie wyszło, ale tu to wyjść nie chciało nijak. "
+                "Przyszłam sprzątać izbę numer siedem i co widzę? Że ten pacjent ma pod materacem tyle papierzysk, "
+                "że można by nimi wyłożyć pół podłogi na korytarzu. "
+                "Sprzątałam, sprzątałam i myślę se: co to za człowiek, co tyle pisze? "
+                "Mój świętej pamięci Henryk to przez całe życie napisał ze trzy listy i był szczęśliwy. "
+                "No to zebrałam te papiery do worka — regulamin mówi, że porządek to porządek. "
+                "Pacjent spojrzał na mnie tak, jakbym mu zabrała skarb Nibelungów czy co tam. "
+                "Jo mówię: panie, tu jest szpital, nie archiwum. On milczy. Jo zmywam. Wszyscy zadowoleni."
+            ),
+            "incydenty_specjalne": [
+                "Incydent administracyjny — pacjent próbował zachować dokumenty osobiste wbrew regulaminowi.",
+                "Incydent nocny — personel odnotował niepokój ruchowy związany z treścią emaila wejściowego."
+            ]
         }
     return result
 
@@ -585,6 +512,7 @@ def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
     raw = _call_groq_with_retry(system, user, 600, "flux_prompty")
     result = _parse_json_safe(raw, "flux_prompty")
     if not result or not isinstance(result, dict):
+        # hardkodowany fallback
         objects_critical = f"CRITICAL OBJECTS: {nouns_str}."
         return {
             "prompt_pacjent": (
@@ -608,24 +536,21 @@ def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
 # DEEPSEEK #1 — tone check
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Klucze pomijane w obu DeepSeek — zbyt duże i już wygenerowane z właściwym stylem
-_DEEPSEEK_SKIP = {
-    "hospitalizacja_tydzien_1",
-    "hospitalizacja_tydzien_2",
-    "notatki_pielegniarek",
-    "notatki_sprzataczki",
-    "incydenty_specjalne",
-    "cytaty_z_przyjecia",   # długie, Groq generuje je już z właściwym stylem
-    "wypis",                # też długie, styl już OK z Groq
-}
-
-
 def _deepseek_tone_check(cfg: dict, raport: dict) -> dict:
     sec = cfg.get("deepseek_1_tone_check", {})
     system = sec.get("system", "")
     instrukcje = "\n".join(sec.get("instrukcje", []))
 
-    raport_slim = {k: v for k, v in raport.items() if k not in _DEEPSEEK_SKIP}
+    # Odchudzamy — tone check nie musi przerabiać 14 dni hospitalizacji i notatek
+    # (są generowane przez osobne Groq z już właściwym stylem)
+    KLUCZE_DO_POMINIECIA = {
+        "hospitalizacja_tydzien_1",
+        "hospitalizacja_tydzien_2",
+        "notatki_pielegniarek",
+        "notatki_sprzataczki",
+        "incydenty_specjalne",
+    }
+    raport_slim = {k: v for k, v in raport.items() if k not in KLUCZE_DO_POMINIECIA}
 
     user = (
         f"RAPORT DO OCENY I POPRAWY:\n{json.dumps(raport_slim, ensure_ascii=False, indent=2)}\n\n"
@@ -655,7 +580,16 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
     system = sec.get("system", "")
     instrukcje = "\n".join(sec.get("instrukcje", []))
 
-    raport_slim = {k: v for k, v in raport.items() if k not in _DEEPSEEK_SKIP}
+    # Odchudzamy raport przed wysłaniem — hospitalizacja i notatki są ogromne
+    # i nie wymagają sprawdzania nawiązań do emaila (generuje je osobny Groq)
+    KLUCZE_DO_POMINIECIA = {
+        "hospitalizacja_tydzien_1",
+        "hospitalizacja_tydzien_2",
+        "notatki_pielegniarek",
+        "notatki_sprzataczki",
+        "incydenty_specjalne",
+    }
+    raport_slim = {k: v for k, v in raport.items() if k not in KLUCZE_DO_POMINIECIA}
 
     user = (
         f"ORYGINALNY EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
@@ -720,6 +654,7 @@ def _generate_flux(prompt: str, label: str,
             if resp.status_code == 200:
                 current_app.logger.info("[psych-flux] %s OK token=%s (%dB)",
                                         label, name, len(resp.content))
+                # PNG → JPG
                 try:
                     from PIL import Image as PILImage
                     pil = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
@@ -744,10 +679,12 @@ def _generate_flux(prompt: str, label: str,
 def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tuple:
     """
     Generuje oba zdjęcia równolegle. Zwraca (photo_pacjent, photo_przedmioty).
+    Jeśli HF_TOKEN wyczerpany → zwraca None dla danego zdjęcia, nie blokuje całości.
     """
+    from concurrent.futures import ThreadPoolExecutor
     from flask import current_app as flask_app
 
-    ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
     app_obj = flask_app._get_current_object()
 
     def gen_pacjent():
@@ -792,6 +729,11 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tu
 # BUDOWANIE DOCX
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _register_fonts_docx():
+    """Rejestruje DejaVuSans dla reportlab (nieużywane tu, ale zachowane dla spójności)."""
+    pass
+
+
 def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                 photo_przedmioty_b64: str | None, cfg: dict) -> str | None:
     """
@@ -800,7 +742,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     """
     try:
         from docx import Document
-        from docx.shared import Pt, Cm, RGBColor
+        from docx.shared import Pt, Cm, RGBColor, Inches
         from docx.enum.text import WD_ALIGN_PARAGRAPH
     except ImportError as e:
         current_app.logger.error("[psych-docx] Brak python-docx: %s", e)
@@ -809,6 +751,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     szpital = cfg.get("szpital", {})
     doc     = Document()
 
+    # Marginesy
     for section in doc.sections:
         section.top_margin    = Cm(2)
         section.bottom_margin = Cm(2)
@@ -824,7 +767,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         h = doc.add_heading(text, level=level)
         h.alignment = WD_ALIGN_PARAGRAPH.LEFT
         for run in h.runs:
-            run.font.size      = Pt(size)
+            run.font.size  = Pt(size)
             run.font.color.rgb = color
         return h
 
@@ -833,9 +776,9 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         if align:
             p.alignment = align
         r = p.add_run(str(text))
-        r.bold           = bold
-        r.italic         = italic
-        r.font.size      = Pt(size)
+        r.bold        = bold
+        r.italic      = italic
+        r.font.size   = Pt(size)
         r.font.color.rgb = color
         return p
 
@@ -875,6 +818,17 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         except Exception as e:
             current_app.logger.warning("[psych-docx] Błąd wstawiania zdjęcia: %s", e)
 
+    def add_table_row(table, cells_data: list, header=False):
+        row = table.add_row()
+        for i, (text, width) in enumerate(cells_data):
+            cell = row.cells[i]
+            cell.text = ""
+            p  = cell.paragraphs[0]
+            r  = p.add_run(str(text) if text else "")
+            r.bold       = header
+            r.font.size  = Pt(9 if not header else 9)
+            r.font.color.rgb = DARK if not header else RED
+
     # ══════════════════════════════════════════════════════════════════════════
     # NAGŁÓWEK SZPITALA
     # ══════════════════════════════════════════════════════════════════════════
@@ -903,8 +857,8 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     for r in tyt.runs:
         r.font.size = Pt(12)
 
-    nr         = raport.get("numer_historii_choroby", "NY-2026-00000")
-    data_przyj = raport.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
+    nr           = raport.get("numer_historii_choroby", "NY-2026-00000")
+    data_przyj   = raport.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
     nr_p = doc.add_paragraph(f"Nr: {nr}  |  Data przyjęcia: {data_przyj}  |  "
                               f"Lekarz prowadzący: {szpital.get('lekarz', 'Dr. T. Durden')}")
     nr_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -927,6 +881,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     field("Nr ubezpieczenia",dp.get("numer_ubezpieczenia", ""))
     doc.add_paragraph()
 
+    # ZDJĘCIE 1 — pacjent w kaftanie
     if photo_pacjent_b64:
         heading("DOKUMENTACJA FOTOGRAFICZNA — PRZYJĘCIE", 3, GREY, 9)
         insert_photo(photo_pacjent_b64,
@@ -963,18 +918,21 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     if isinstance(dep, dict):
         lista = dep.get("lista_przedmiotow", [])
         proto = dep.get("protokol_depozytu", "")
+        # Jeśli AI zwróciło string zamiast listy — rozbij po przecinku lub zawiń w listę
         if isinstance(lista, str):
             lista = [x.strip() for x in lista.split(",") if x.strip()]
-        for item in lista:
-            p_item = doc.add_paragraph(style="List Bullet")
-            r_item = p_item.add_run(str(item))
-            r_item.font.size      = Pt(10)
-            r_item.font.color.rgb = DARK
+        if lista:
+            for item in lista:
+                p_item = doc.add_paragraph(style="List Bullet")
+                r_item = p_item.add_run(str(item))
+                r_item.font.size      = Pt(10)
+                r_item.font.color.rgb = DARK
         if proto:
             doc.add_paragraph()
             para(proto, italic=True, color=GREY, size=9)
     doc.add_paragraph()
 
+    # ZDJĘCIE 2 — same przedmioty jako dowody
     if photo_przedmioty_b64:
         heading("DOKUMENTACJA FOTOGRAFICZNA — DOWODY RZECZOWE", 3, GREY, 9)
         insert_photo(photo_przedmioty_b64,
@@ -985,22 +943,24 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     separator()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 5 — FARMAKOLOGIA
+    # SEKCJA 5 — FARMAKOLOGIA (pełna lista leków)
     # ══════════════════════════════════════════════════════════════════════════
     heading("V. FARMAKOLOGIA — PEŁNA LISTA LEKÓW ZASTOSOWANYCH", 2, RED, 11)
-    farm       = raport.get("farmakologia", {})
+    farm = raport.get("farmakologia", {})
     leki_lista = farm.get("leki", []) if isinstance(farm, dict) else []
 
     if leki_lista:
+        # Tabela leków
+        col_widths = [Cm(5), Cm(3.5), Cm(5), Cm(3.5)]
         t = doc.add_table(rows=1, cols=4)
         t.style = "Table Grid"
         hdr = t.rows[0].cells
         for i, label in enumerate(["Nazwa leku", "Przedmioty odebrane", "Wskazanie", "Dawkowanie"]):
             hdr[i].text = ""
             r = hdr[i].paragraphs[0].add_run(label)
-            r.bold           = True
-            r.font.size      = Pt(9)
-            r.font.color.rgb = RED
+            r.bold            = True
+            r.font.size       = Pt(9)
+            r.font.color.rgb  = RED
         for lek in leki_lista:
             if not isinstance(lek, dict):
                 continue
@@ -1023,50 +983,54 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     separator()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 6 — HOSPITALIZACJA (14 dni)
+    # SEKCJA 6 — HOSPITALIZACJA (14 dni w tabeli)
     # ══════════════════════════════════════════════════════════════════════════
     heading("VI. PRZEBIEG HOSPITALIZACJI — 14 DNI", 2, RED, 11)
 
     dni_all = (raport.get("hospitalizacja_tydzien_1", []) or []) + \
               (raport.get("hospitalizacja_tydzien_2", []) or [])
 
-    for d in dni_all:
-        if not isinstance(d, dict):
-            continue
-        dzien = d.get("dzien", "")
-        data  = d.get("data", "")
-        zdarz = d.get("zdarzenie", "")
-        lek   = d.get("lek", "")
-        stan  = d.get("stan_pacjenta", "")
-        nota  = d.get("nota_lekarska", "")
+    if dni_all:
+        for d in dni_all:
+            if not isinstance(d, dict):
+                continue
+            dzien   = d.get("dzien", "")
+            data    = d.get("data", "")
+            zdarz   = d.get("zdarzenie", "")
+            lek     = d.get("lek", "")
+            stan    = d.get("stan_pacjenta", "")
+            nota    = d.get("nota_lekarska", "")
 
-        p_day = doc.add_paragraph(style="List Bullet")
-        r_day = p_day.add_run(f"Dzień {dzien}  [{data}]")
-        r_day.bold           = True
-        r_day.font.size      = Pt(10)
-        r_day.font.color.rgb = RED
+            # Nagłówek dnia
+            p_day = doc.add_paragraph(style="List Bullet")
+            r_day = p_day.add_run(f"Dzień {dzien}  [{data}]")
+            r_day.bold           = True
+            r_day.font.size      = Pt(10)
+            r_day.font.color.rgb = RED
 
-        lines = []
-        if zdarz and zdarz != "__BRAK__":
-            lines.append(f"Zdarzenie: {zdarz}")
-        if lek and lek != "__BRAK__":
-            lines.append(f"Lek: {lek}")
-        if stan and stan != "__BRAK__":
-            lines.append(f"Stan: {stan}")
-        for line in lines:
-            p_line = doc.add_paragraph()
-            p_line.paragraph_format.left_indent = Pt(24)
-            r_line = p_line.add_run(line)
-            r_line.font.size      = Pt(9)
-            r_line.font.color.rgb = DARK
+            # Treść dnia — zdarzenie, lek, stan
+            lines = []
+            if zdarz:
+                lines.append(f"Zdarzenie: {zdarz}")
+            if lek:
+                lines.append(f"Lek: {lek}")
+            if stan:
+                lines.append(f"Stan: {stan}")
+            for line in lines:
+                p_line = doc.add_paragraph()
+                p_line.paragraph_format.left_indent = Pt(24)
+                r_line = p_line.add_run(line)
+                r_line.font.size      = Pt(9)
+                r_line.font.color.rgb = DARK
 
-        if nota and nota != "__BRAK__":
-            p_nota = doc.add_paragraph()
-            p_nota.paragraph_format.left_indent = Pt(24)
-            r_nota = p_nota.add_run(f"↳ {nota}")
-            r_nota.italic         = True
-            r_nota.font.size      = Pt(8)
-            r_nota.font.color.rgb = GREY
+            # Nota lekarska kursywą
+            if nota:
+                p_nota = doc.add_paragraph()
+                p_nota.paragraph_format.left_indent = Pt(24)
+                r_nota = p_nota.add_run(f"↳ {nota}")
+                r_nota.italic         = True
+                r_nota.font.size      = Pt(8)
+                r_nota.font.color.rgb = GREY
 
     doc.add_paragraph()
     separator()
@@ -1077,8 +1041,8 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     heading("VII. KARTA WYPISU", 2, RED, 11)
     wypis = raport.get("wypis", {})
     if isinstance(wypis, dict):
-        field("Dzień wypisu", wypis.get("dzien_wypisu", ""))
-        field("Powód wypisu", wypis.get("powod_wypisu", ""))
+        field("Dzień wypisu",        wypis.get("dzien_wypisu", ""))
+        field("Powód wypisu",        wypis.get("powod_wypisu", ""))
         doc.add_paragraph()
         para(wypis.get("stan_przy_wypisie", ""), size=10)
         doc.add_paragraph()
@@ -1106,13 +1070,13 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         heading("Diagnoza Wstępna:", 3, DARK, 10)
         p_diag = doc.add_paragraph()
         r1 = p_diag.add_run(dw.get("nazwa_lacinska", ""))
-        r1.bold           = True
-        r1.font.size      = Pt(11)
-        r1.font.color.rgb = RED
+        r1.bold            = True
+        r1.font.size       = Pt(11)
+        r1.font.color.rgb  = RED
         if dw.get("nazwa_polska"):
             r2 = p_diag.add_run(f" (pol. {dw['nazwa_polska']})")
-            r2.font.size      = Pt(10)
-            r2.font.color.rgb = DARK
+            r2.font.size       = Pt(10)
+            r2.font.color.rgb  = DARK
         if dw.get("kod_dsm"):
             field("Kod DSM", dw["kod_dsm"], size=9)
         if dw.get("opis_kliniczny"):
@@ -1153,7 +1117,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         if zt.get("naglowek"):
             para(zt["naglowek"], bold=True, color=RED, size=10)
         for key in ["zadanie_1", "zadanie_2", "zadanie_3"]:
-            if zt.get(key) and zt[key] != "__BRAK__":
+            if zt.get(key):
                 p_z = doc.add_paragraph(style="List Number")
                 p_z.add_run(str(zt[key])).font.size = Pt(10)
         if zt.get("podpis"):
@@ -1166,10 +1130,10 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # SEKCJA 10 — ROKOWANIE
     # ══════════════════════════════════════════════════════════════════════════
     heading("X. ROKOWANIE", 2, RED, 11)
-    rokowanie = raport.get("rokowanie", "").strip() if isinstance(raport.get("rokowanie"), str) else ""
-    if not rokowanie or rokowanie == "__BRAK__":
-        rokowanie = "---brak---"
     p_rok = doc.add_paragraph()
+    rokowanie = raport.get("rokowanie", "").strip()
+    if not rokowanie:
+        rokowanie = "---brak---"
     r_rok = p_rok.add_run(rokowanie)
     r_rok.font.size      = Pt(10)
     r_rok.font.color.rgb = RED
@@ -1183,8 +1147,6 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     if incydenty:
         heading("XI. INCYDENTY SPECJALNE (protokoły wewnętrzne)", 2, RED, 11)
         for inc in incydenty:
-            if inc == "__BRAK__":
-                continue
             p_inc = doc.add_paragraph(style="List Bullet")
             p_inc.add_run(str(inc)).font.size = Pt(10)
         doc.add_paragraph()
@@ -1197,56 +1159,53 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     field("Lekarz prowadzący", szpital.get("lekarz", "Dr. T. Durden, MD, PhD, FIGHT"))
     doc.add_paragraph()
 
+    # Notatki pielęgniarek — lista obiektów {imie_pielegniarki, data, tresc}
     notatki_p = raport.get("notatki_pielegniarek") or raport.get("notatka_pielegniarki")
     if notatki_p:
         heading("Notatki pielęgniarek:", 3, DARK, 9)
         if isinstance(notatki_p, list):
             for n in notatki_p:
                 if isinstance(n, dict):
-                    imie  = n.get("imie_pielegniarki", "")
-                    data  = n.get("data", "")
+                    imie = n.get("imie_pielegniarki", "")
+                    data = n.get("data", "")
                     tresc = n.get("tresc", "")
-                    if tresc == "__BRAK__":
-                        continue
-                    header_parts = [x for x in [imie, data] if x and x != "__BRAK__"]
+                    header_parts = [x for x in [imie, data] if x]
                     if header_parts:
                         p_hdr = doc.add_paragraph()
                         p_hdr.paragraph_format.left_indent = Pt(12)
                         r_hdr = p_hdr.add_run("  ".join(header_parts))
-                        r_hdr.bold      = True
+                        r_hdr.bold = True
                         r_hdr.font.size = Pt(8)
                         r_hdr.font.color.rgb = DARK
                     if tresc:
                         para(tresc, italic=True, color=GREY, size=8)
                 else:
-                    if str(n) != "__BRAK__":
-                        para(str(n), italic=True, color=GREY, size=9)
+                    para(str(n), italic=True, color=GREY, size=9)
         else:
+            # fallback: traktuj jako string
             para(str(notatki_p), italic=True, color=GREY, size=9)
         doc.add_paragraph()
 
+    # Notatki sprzątaczki — lista obiektów {data, tresc}
     notatki_s = raport.get("notatki_sprzataczki") or raport.get("notatka_sprzataczki")
     if notatki_s:
         heading("Notatki sprzątaczki:", 3, DARK, 9)
         if isinstance(notatki_s, list):
             for n in notatki_s:
                 if isinstance(n, dict):
-                    data  = n.get("data", "")
+                    data = n.get("data", "")
                     tresc = n.get("tresc", "")
-                    if tresc == "__BRAK__":
-                        continue
-                    if data and data != "__BRAK__":
+                    if data:
                         p_hdr = doc.add_paragraph()
                         p_hdr.paragraph_format.left_indent = Pt(12)
                         r_hdr = p_hdr.add_run(data)
-                        r_hdr.bold      = True
+                        r_hdr.bold = True
                         r_hdr.font.size = Pt(8)
                         r_hdr.font.color.rgb = DARK
                     if tresc:
                         para(tresc, italic=True, color=GREY, size=8)
                 else:
-                    if str(n) != "__BRAK__":
-                        para(str(n), italic=True, color=GREY, size=9)
+                    para(str(n), italic=True, color=GREY, size=9)
         else:
             para(str(notatki_s), italic=True, color=GREY, size=9)
 
@@ -1272,16 +1231,15 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
 
     Równoległość Groq:
       Runda 1 (niezależne): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
-      Runda 2 (równolegle): #3a t1 dni 1-4 | #3b t1 dni 5-7
-                            #4a t2 dni 8-11 | #4b t2 dni 12-14 | #5 wypis
-                            (chunki w tygodniach sekwencyjnie wewnątrz wątku,
-                             ale oba tygodnie + wypis równolegle między sobą)
-      Runda 3: #7a zalecenia+rokowanie | #7b notatki_pielegniarek | #7c notatki_sprzataczki+incydenty
-               (trzy wywołania równolegle)
+      Runda 2 (czekają na #2): #3 tydzień1 | #4 tydzień2 | #5 wypis
+      Runda 3 (czeka na #3+#4): #7 zalecenia
       Potem: DeepSeek tone + completeness (sekwencyjnie)
-      Potem: FLUX oba zdjęcia równolegle
+      Potem: FLUX oba zdjęcia równolegle (już tak było)
       Potem: DOCX
+
+    Jeśli HF_TOKEN nie działa → psych_photo_1/2 = None, DOCX budowany bez zdjęć.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     from flask import current_app as flask_app
 
     current_app.logger.info("[psych-raport] START build_raport")
@@ -1322,7 +1280,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         }
         for name, fut in futures.items():
             try:
-                result = fut.result(timeout=90)
+                result = fut.result(timeout=60)
                 if name == "pacjent":
                     sekcja_pacjent  = result
                 elif name == "depozyt":
@@ -1339,9 +1297,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     leki_lista     = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
 
     # ══════════════════════════════════════════════════════════════════════════
-    # RUNDA 2 — tygodnie + wypis równolegle
-    # (wewnątrz każdego tygodnia chunki są sekwencyjne, żeby chunk B
-    #  mógł dostać listę motywów z chunk A)
+    # RUNDA 2 — zależą od depozyt (leki_lista) i data_przyjecia
     # ══════════════════════════════════════════════════════════════════════════
     def _r2_tydzien1():
         with app_obj.app_context():
@@ -1355,8 +1311,8 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         with app_obj.app_context():
             return _sekcja_wypis(cfg, body, data_przyjecia)
 
-    dni_1_7      = []
-    dni_8_14     = []
+    dni_1_7     = []
+    dni_8_14    = []
     sekcja_wypis = {}
 
     with ThreadPoolExecutor(max_workers=3) as ex:
@@ -1367,7 +1323,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         }
         for name, fut in futures2.items():
             try:
-                result = fut.result(timeout=120)
+                result = fut.result(timeout=60)
                 if name == "tydzien1":
                     dni_1_7      = result
                 elif name == "tydzien2":
@@ -1380,14 +1336,10 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
                 current_app.logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # RUNDA 3 — zalecenia/notatki/incydenty (trzy wywołania równolegle)
+    # RUNDA 3 — zależy od tydzien1 + tydzien2
     # ══════════════════════════════════════════════════════════════════════════
-    def _r3_zalecenia():
-        with app_obj.app_context():
-            return _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14)
-
     try:
-        sekcja_zalecenia = _r3_zalecenia()
+        sekcja_zalecenia = _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14)
         current_app.logger.info("[psych-raport] Runda3 zalecenia OK")
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
@@ -1414,7 +1366,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     raport = _deepseek_completeness_check(cfg, raport, body)
     current_app.logger.info("[psych-raport] DeepSeek#2 completeness OK")
 
-    # ── FLUX — oba zdjęcia równolegle ─────────────────────────────────────────
+    # ── FLUX — oba zdjęcia równolegle (jeśli HF nie działa → None, budujemy DOCX bez zdjęć)
     prompt_pacjent    = sekcja_flux.get("prompt_pacjent", "")
     prompt_przedmioty = sekcja_flux.get("prompt_przedmioty", "")
     photo_1, photo_2  = _generate_photos_parallel(prompt_pacjent, prompt_przedmioty)
