@@ -22,6 +22,7 @@ import json
 import base64
 import random
 import requests
+import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import current_app
@@ -102,6 +103,7 @@ def _call_groq_with_retry(system: str, user: str, max_tokens: int = 4000,
             if result == "RATE_LIMIT":
                 current_app.logger.warning("[psych-raport] %s RATE_LIMIT klucz=%s → następny",
                                            section_name, name)
+                time.sleep(1)
                 continue
         current_app.logger.warning("[psych-raport] %s — wszystkie klucze zawiodły attempt=%d/%d",
                                    section_name, attempt + 1, max_attempts)
@@ -232,7 +234,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2500, "depozyt_leki")
+    raw = _call_groq_with_retry(system, user, 2500, "depozyt_leki", max_attempts=1)
     result = _parse_json_safe(raw, "depozyt_leki")
     if not result:
         current_app.logger.warning("[psych-raport] sekcja_depozyt_leki → fallback")
@@ -282,7 +284,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
         f"Zwróć TYLKO czysty JSON z tablicą 7 obiektów."
     )
     section_name = f"tydzien{tydzien}"
-    raw = _call_groq_with_retry(system, user, 8000, section_name)
+    raw = _call_groq_with_retry(system, user, 8000, section_name, max_attempts=1)
     result = _parse_json_safe(raw, section_name)
 
     # Wyciągnij tablicę z różnych możliwych struktur
@@ -317,7 +319,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "wypis")
+    raw = _call_groq_with_retry(system, user, 2000, "wypis", max_attempts=1)
     result = _parse_json_safe(raw, "wypis")
     if not result:
         return {"wypis": {
@@ -345,7 +347,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1500, "diagnozy")
+    raw = _call_groq_with_retry(system, user, 1500, "diagnozy", max_attempts=1)
     result = _parse_json_safe(raw, "diagnozy")
     if not result:
         return {
@@ -413,7 +415,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a = _call_groq_with_retry(system_7, user_7a, 1200, "zalecenia_7a")
+    raw_7a = _call_groq_with_retry(system_7, user_7a, 1200, "zalecenia_7a", max_attempts=1)
     result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
 
     # ── groq_7b — NOTATKI + INCYDENTY ────────────────────────────────────────
@@ -440,7 +442,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"nawiązujących do emaila. Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7b = _call_groq_with_retry(system_7, user_7b, 4000, "zalecenia_7b")
+    raw_7b = _call_groq_with_retry(system_7, user_7b, 4000, "zalecenia_7b", max_attempts=1)
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
 
     # ── Scal wyniki obu wywołań ───────────────────────────────────────────────
