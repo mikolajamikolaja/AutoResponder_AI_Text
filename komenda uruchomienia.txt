@@ -1,0 +1,91 @@
+w power shell
+
+ powershell -NoProfile -ExecutionPolicy Bypass -File .\semantic_fix_all.ps1
+
+PS C:\Users\pawla> ollama list
+NAME           ID              SIZE      MODIFIED
+phi3:mini      4f2222927938    2.2 GB    8 minutes ago
+phi3:latest    4f2222927938    2.2 GB    51 minutes ago
+
+oraz mam model mistral7b\mistral-7b-instruct-v0.2.Q4_K_M.gguf : mistral-instruct-local to nazwa, którą używam by go uruchomić.
+
+Mam Ollam i Phi-3. napisz plik promptu który sprawdzi wszystkie pliki projektu i wstawi do katalogu Poprawiony[hhmmss]
+
+test modelu: 
+echo "Witaj, przetestuj model." | ollama run mistral-instruct-local
+ollama run mistral-instruct-local
+
+
+### Krótkie wyjaśnienie — co to jest Ollama i Phi‑3
+- **Ollama** to lokalny runtime/serwer do pobierania i uruchamiania modeli językowych na Twoim komputerze (jak „Docker dla modeli”); pozwala pobrać model i uruchomić go bez wysyłania danych do chmury.   [tech-insider.org](https://tech-insider.org/ollama-tutorial-run-llm-locally-2026/)  
+- **Phi‑3 (phi3)** to rodzina modeli od Microsoftu (np. *phi3:mini* — ~3.8B, *phi3:medium* — ~14B). Wybór wariantu wpływa na wymagania pamięci/CPU i jakość odpowiedzi.   [ollama.com](https://ollama.com/library/phi3)  [makiai.com](https://makiai.com/en/what-it-is-and-how-to-install-and-run-locally-the-llm-ai-phi3/)
+
+---
+
+### Co musisz mieć przed uruchomieniem
+1. **Zainstalowane Ollama** i model pobrany lokalnie (przykładowo `phi3:mini` dla lżejszej pracy).  
+   - Pobranie modelu: `ollama pull phi3:mini` (wykonaj w terminalu).   [microsoft.github.io](https://microsoft.github.io/genaiscript/guides/phi3-with-ollama/)  [tech-insider.org](https://tech-insider.org/ollama-tutorial-run-llm-locally-2026/)  
+2. **Działający serwer/CLI Ollama** (polecenia `ollama run ...` muszą działać z wiersza poleceń).  
+3. Pliki projektu dostępne lokalnie (kod, JSON, itp.).
+
+---
+
+### Jak zbudować prompt do wpisania w PowerShell — proste wzory
+W PowerShell najwygodniej **skleić instrukcję + zawartość pliku** i przekazać przez potok do `ollama run`. Poniżej gotowe, kopiowalne przykłady.
+
+#### 1) Analiza pliku Python (`app.py`) i zapis recenzji
+```powershell
+# zbuduj prompt (instrukcja + zawartość pliku) i wyślij do modelu
+$instr = "Analizuj ten plik Pythona: znajdź błędy logiczne, wyjątki, problemy bezpieczeństwa. Na końcu wygeneruj poprawioną wersję między znacznikami ### FIXED FILE START / ### FIXED FILE END. Odpowiadaj po polsku."
+$body = $instr + "`n`n" + (Get-Content -Raw .\app.py -Encoding UTF8)
+$body | & ollama run phi3:mini > .\reviews\app.py.review.txt
+```
+
+#### 2) Walidacja i poprawa pliku JSON (`config.json`)
+```powershell
+$instr = "Sprawdź poprawność JSON: składnia, brakujące pola, typy wartości. Jeśli poprawiasz, wygeneruj poprawiony JSON między ### FIXED FILE START / ### FIXED FILE END. Odpowiadaj po polsku."
+$body = $instr + "`n`n" + (Get-Content -Raw .\config.json -Encoding UTF8)
+$body | & ollama run phi3:mini > .\reviews\config.json.review.txt
+```
+
+#### 3) Szybki jednorazowy prompt wpisany bez pliku (krótka instrukcja)
+```powershell
+"Podsumuj poniższy tekst i wskaż 3 największe problemy bezpieczeństwa:`n<tu wklej tekst>" | & ollama run phi3:mini
+```
+
+---
+
+### Wzór uniwersalnego promptu (skrócony, do kopiowania)
+```
+Analizuj plik: <ścieżka>
+- Cel: (np. bezpieczeństwo / poprawność składni / zgodność JSON)
+- Dla każdego problemu: opis, dlaczego, propozycja poprawki, priorytet (High/Medium/Low).
+- Na końcu wygeneruj poprawioną wersję między znacznikami:
+### FIXED FILE START
+<tu cały poprawiony kod/treść>
+### FIXED FILE END
+Odpowiadaj po polsku.
+```
+W PowerShell wstaw ten nagłówek do zmiennej `$instr`, dopisz zawartość pliku i przekaż do `ollama run`.
+
+---
+
+### Kilka praktycznych wskazówek
+- **Używaj `phi3:mini`** jeśli masz ograniczone zasoby; `phi3:medium` da lepsze wyniki, ale wymaga więcej RAM/CPU.   [ollama.com](https://ollama.com/library/phi3)  [LogicBig](https://www.logicbig.com/tutorials/ai-tutorials/ai-foundations/running-llm-phi-3-mini-locally.html)  
+- **Przetwarzaj pliki pojedynczo** (albo sekwencyjnie), nie równolegle — zmniejszy to obciążenie CPU/RAM.  
+- **Zapisuj recenzje** do katalogu `reviews\` i tylko jeśli model zwróci fragment `### FIXED FILE START/END` — kopiuj poprawiony plik do katalogu wynikowego (np. `Poprawki_HHMMSS`).  
+- Jeśli chcesz, mogę wygenerować gotowy PowerShell‑owy skrypt (jedno polecenie), który: 1) zbuduje prompt, 2) wyśle do `ollama`, 3) zapisze recenzję i 4) wyodrębni poprawiony plik do katalogu wynikowego. Chcesz taką wersję?  
+
+---
+
+### Krótkie przypomnienie bezpieczeństwa i weryfikacji
+Model może zaproponować zmiany, które **trzeba ręcznie zweryfikować** (testy, uruchomienie, review). Nie nadpisuj od razu plików produkcyjnych — kopiuj poprawki do katalogu wynikowego i sprawdź.  
+
+---
+
+Jeśli chcesz, przygotuję teraz **dokładny, gotowy do wklejenia PowerShell‑owy one‑liner** lub pełny skrypt, który:
+- przetworzy wszystkie pliki projektu sekwencyjnie,  
+- zapisze recenzje w `reviews\`,  
+- umieści poprawione pliki w `Poprawki_HHMMSS\` zachowując strukturę katalogów.  
+
+Napisz: **„one‑liner”** (szybkie testy), **„pełny skrypt”** (cały projekt) albo **„tylko JSON i .py”** (ograniczony zakres).

@@ -916,6 +916,9 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     if isinstance(dep, dict):
         lista = dep.get("lista_przedmiotow", [])
         proto = dep.get("protokol_depozytu", "")
+        # Jeśli AI zwróciło string zamiast listy — rozbij po przecinku lub zawiń w listę
+        if isinstance(lista, str):
+            lista = [x.strip() for x in lista.split(",") if x.strip()]
         if lista:
             for item in lista:
                 p_item = doc.add_paragraph(style="List Bullet")
