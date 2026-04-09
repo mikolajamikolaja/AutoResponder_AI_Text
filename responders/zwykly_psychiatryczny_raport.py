@@ -282,7 +282,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
         f"Zwróć TYLKO czysty JSON z tablicą 7 obiektów."
     )
     section_name = f"tydzien{tydzien}"
-    raw = _call_groq_with_retry(system, user, 4000, section_name)
+    raw = _call_groq_with_retry(system, user, 8000, section_name)
     result = _parse_json_safe(raw, section_name)
 
     # Wyciągnij tablicę z różnych możliwych struktur
@@ -317,7 +317,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 800, "wypis")
+    raw = _call_groq_with_retry(system, user, 2000, "wypis")
     result = _parse_json_safe(raw, "wypis")
     if not result:
         return {"wypis": {
@@ -440,7 +440,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"nawiązujących do emaila. Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7b = _call_groq_with_retry(system_7, user_7b, 2500, "zalecenia_7b")
+    raw_7b = _call_groq_with_retry(system_7, user_7b, 4000, "zalecenia_7b")
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
 
     # ── Scal wyniki obu wywołań ───────────────────────────────────────────────
