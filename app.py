@@ -263,6 +263,50 @@ def webhook_gif():
     }), 200
 
 
+@app.route("/oauth/callback")
+def oauth_callback():
+    """Endpoint do obsługi OAuth callback — wymienia code na tokeny."""
+    code = request.args.get('code')
+    if not code:
+        return "Brak kodu autoryzacyjnego w URL.", 400
+
+    client_id = os.getenv("GMAIL_CLIENT_ID")
+    client_secret = os.getenv("GMAIL_CLIENT_SECRET")
+    redirect_uri = request.url_root.rstrip('/') + request.path  # np. https://app.onrender.com/oauth/callback
+
+    if not client_id or not client_secret:
+        return "Brak GMAIL_CLIENT_ID lub GMAIL_CLIENT_SECRET w env.", 500
+
+    # Wymień code na tokeny
+    token_url = "https://oauth2.googleapis.com/token"
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+        "grant_type": "authorization_code",
+        "redirect_uri": redirect_uri,
+    }
+    try:
+        resp = requests.post(token_url, data=data, timeout=10)
+        resp.raise_for_status()
+        tokens = resp.json()
+        access_token = tokens.get("access_token")
+        refresh_token = tokens.get("refresh_token")
+        app.logger.info("OAuth tokeny uzyskane: access_token=%s, refresh_token=%s", access_token, refresh_token)
+        return f"""
+        <h1>OAuth zakończony sukcesem!</h1>
+        <p>Skopiuj poniższe tokeny do zmiennych środowiskowych w Render:</p>
+        <ul>
+            <li><strong>GMAIL_ACCESS_TOKEN:</strong> {access_token}</li>
+            <li><strong>GMAIL_REFRESH_TOKEN:</strong> {refresh_token}</li>
+        </ul>
+        <p>Możesz zamknąć tę stronę.</p>
+        """, 200
+    except Exception as e:
+        app.logger.error("Błąd wymiany kodu na tokeny: %s", e)
+        return f"Błąd wymiany kodu: {e}", 500
+
+
 if __name__ == "__main__":
     if not os.getenv("API_KEY_DEEPSEEK"):
         app.logger.warning("API_KEY_DEEPSEEK nie ustawiony.")
