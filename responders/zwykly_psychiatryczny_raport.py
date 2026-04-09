@@ -411,7 +411,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"EMAIL PACJENTA (PRIORYTET — każde pole MUSI nawiązywać do treści emaila):\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
         f"SCHEMAT JSON (wypełnij TYLKO te klucze):\n{schema_7a}\n\n"
-        f"zalecenia_tylera.zadanie_1/2/3: min. 5-6 zdań każde, konkretny przedmiot/plan/rzecz z emaila.\n"
+        f"zalecenia_tylera.zadanie_1/2/3: min. 5-6 zdań każde, konkretny przedmiot/plan/rzecz z emaila, z humorem Szwejka i Monty Pythona.\n"
         f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
@@ -1131,7 +1131,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # ══════════════════════════════════════════════════════════════════════════
     heading("X. ROKOWANIE", 2, RED, 11)
     p_rok = doc.add_paragraph()
-    r_rok = p_rok.add_run(raport.get("rokowanie", ""))
+    r_rok = p_rok.add_run(raport.get("rokowanie", "Rokowanie: Pacjent wymaga dalszej obserwacji psychiatrycznej. Prognoza uzależniona od przestrzegania zaleceń i zaangażowania w terapię."))
     r_rok.font.size      = Pt(10)
     r_rok.font.color.rgb = RED
     doc.add_paragraph()
