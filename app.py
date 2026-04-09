@@ -29,6 +29,8 @@ import io
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
+import requests
+
 
 from responders.zwykly        import build_zwykly_section
 from responders.biznes        import build_biznes_section
