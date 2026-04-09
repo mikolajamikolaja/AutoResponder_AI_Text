@@ -1226,7 +1226,7 @@ def _build_session_vars(
     vars_dict["PREVIOUS_BODY"] = _prev
 
     # ── USER_OBJECTS: Groq nouns_dict (priorytet) → fallback regex ───────────
-    if nouns_dict:
+    if nouns_dict and isinstance(nouns_dict, dict):
         # nouns_dict = {rzecz001: 'kopalnia', rzecz002: 'pies', ...}
         # Bierzemy wartości w kolejności kluczy, max 15
         sorted_nouns = [v for k, v in sorted(nouns_dict.items()) if isinstance(v, str)]
@@ -1275,8 +1275,15 @@ def _build_session_vars(
     vars_dict["USER_PROVIDER"] = provider or ""
 
     # ── Zdania Tylera → TEXT_1 .. TEXT_N ─────────────────────────────────────
+    # Konwersja res_text na string je\u015bli jest dict (safety check)
+    if isinstance(res_text, dict):
+        res_text = json.dumps(res_text, ensure_ascii=False)
+        logger.warning("[session_vars] res_text by\u0142 dict — konwertowano na JSON string")
+    elif not isinstance(res_text, str):
+        res_text = str(res_text) if res_text else ""
+
     tyler_text = ""
-    if res_text and "### TYLER DURDEN" in res_text:
+    if res_text and isinstance(res_text, str) and "### TYLER DURDEN" in res_text:
         tyler_text = res_text.split("### TYLER DURDEN", 1)[1]
     elif res_text:
         tyler_text = res_text
@@ -1287,7 +1294,7 @@ def _build_session_vars(
 
     # ── Zdania Sokratesa → SOKRATES_1 .. SOKRATES_N ──────────────────────────
     sokrates_text = ""
-    if res_text and "### SOKRATES" in res_text:
+    if res_text and isinstance(res_text, str) and "### SOKRATES" in res_text:
         part = res_text.split("### SOKRATES", 1)[1]
         if "---" in part:
             sokrates_text = part.split("---")[0]
