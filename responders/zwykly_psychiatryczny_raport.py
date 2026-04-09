@@ -1131,7 +1131,10 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # ══════════════════════════════════════════════════════════════════════════
     heading("X. ROKOWANIE", 2, RED, 11)
     p_rok = doc.add_paragraph()
-    r_rok = p_rok.add_run(raport.get("rokowanie", "Rokowanie: Pacjent wymaga dalszej obserwacji psychiatrycznej. Prognoza uzależniona od przestrzegania zaleceń i zaangażowania w terapię."))
+    rokowanie = raport.get("rokowanie", "").strip()
+    if not rokowanie:
+        rokowanie = "---brak---"
+    r_rok = p_rok.add_run(rokowanie)
     r_rok.font.size      = Pt(10)
     r_rok.font.color.rgb = RED
     doc.add_paragraph()
