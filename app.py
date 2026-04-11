@@ -78,6 +78,10 @@ def webhook():
     previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None
     attachments      = data.get("attachments")      or []
+    save_to_drive    = bool(data.get("save_to_drive"))
+    test_mode        = bool(data.get("test_mode"))
+    retry_responders = data.get("retry_responders") or []
+    attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
 
     # ── Flagi żądania ─────────────────────────────────────────────────────────
     wants_scrabble      = bool(data.get("wants_scrabble"))
@@ -87,6 +91,8 @@ def webhook():
     wants_generator_pdf = bool(data.get("wants_generator_pdf"))
     wants_smierc        = bool(data.get("wants_smierc"))
     wants_text_reply    = bool(data.get("wants_text_reply", True))
+    wants_nawiazanie    = bool(previous_body or previous_subject)
+    is_retry            = bool(retry_responders)
 
     flask_app = app
 
@@ -95,22 +101,33 @@ def webhook():
             return fn(*args, **kwargs)
 
     # ── FALA 1: lekkie respondery ─────────────────────────────────────────────
+    requested_sections = set(retry_responders) if is_retry else set()
+    if not is_retry:
+        if wants_text_reply:
+            requested_sections.update(["zwykly", "biznes"])
+        if wants_scrabble:
+            requested_sections.add("scrabble")
+        if wants_nawiazanie:
+            requested_sections.add("nawiazanie")
+
     wave1 = {}
-    if wants_text_reply:
+    if "zwykly" in requested_sections:
         _prev   = previous_body
         _sender = sender
         _sname  = sender_name
-        wave1["zwykly"] = lambda: run(build_zwykly_section, body, _prev, _sender, _sname)
+        wave1["zwykly"] = lambda: run(build_zwykly_section, body, _prev, _sender, _sname, test_mode=test_mode)
+    if "biznes" in requested_sections:
         wave1["biznes"] = lambda: run(build_biznes_section, body)
-    wave1["nawiazanie"] = lambda: run(
-        build_nawiazanie_section,
-        body=body,
-        previous_body=previous_body,
-        previous_subject=previous_subject,
-        sender=sender,
-        sender_name=sender_name,
-    )
-    if wants_scrabble:
+    if "nawiazanie" in requested_sections:
+        wave1["nawiazanie"] = lambda: run(
+            build_nawiazanie_section,
+            body=body,
+            previous_body=previous_body,
+            previous_subject=previous_subject,
+            sender=sender,
+            sender_name=sender_name,
+        )
+    if "scrabble" in requested_sections:
         wave1["scrabble"] = lambda: run(build_scrabble_section, body)
 
     response_data = _run_parallel(wave1, flask_app)
@@ -122,7 +139,7 @@ def webhook():
         response_data.get("nawiazanie", {}).get("reply_html", ""),
         response_data.get("scrabble",   {}).get("reply_html", ""),
     ]))
-    if html_fala1.strip() and wants_text_reply:
+    if html_fala1.strip() and ("zwykly" in requested_sections or "biznes" in requested_sections or "nawiazanie" in requested_sections):
         wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
@@ -135,33 +152,62 @@ def webhook():
         )
 
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
-    wave2 = {}
-    if wants_obrazek:
-        wave2["obrazek"] = lambda: run(build_obrazek_section, body)
-    if wants_emocje:
-        wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
-    if wants_analiza:
-        wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
-    if wants_generator_pdf:
-        _sn   = sender_name
-        _body = body
-        wave2["generator_pdf"] = lambda: run(
-            build_generator_pdf_section, _body, sender_name=_sn
-        )
-    if wants_smierc:
-        _sender       = sender
-        _body_smierc  = body
-        _etap         = data.get("etap", 1)
-        _data_smierci = data.get("data_smierci", "nieznanego dnia")
-        _historia     = data.get("historia", [])
-        wave2["smierc"] = lambda: run(
-            build_smierc_section,
-            sender_email=_sender,
-            body=_body_smierc,
-            etap=_etap,
-            data_smierci_str=_data_smierci,
-            historia=_historia,
-        )
+    if is_retry:
+        if "obrazek" in requested_sections:
+            wave2["obrazek"] = lambda: run(build_obrazek_section, body)
+        if "emocje" in requested_sections:
+            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
+        if "analiza" in requested_sections:
+            wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
+        if "generator_pdf" in requested_sections:
+            _sn   = sender_name
+            _body = body
+            wave2["generator_pdf"] = lambda: run(
+                build_generator_pdf_section, _body, sender_name=_sn
+            )
+        if "smierc" in requested_sections:
+            _sender       = sender
+            _body_smierc  = body
+            _etap         = data.get("etap", 1)
+            _data_smierci = data.get("data_smierci", "nieznanego dnia")
+            _historia     = data.get("historia", [])
+            wave2["smierc"] = lambda: run(
+                build_smierc_section,
+                sender_email=_sender,
+                body=_body_smierc,
+                etap=_etap,
+                data_smierci_str=_data_smierci,
+                historia=_historia,
+                test_mode=test_mode,
+            )
+    else:
+        if wants_obrazek:
+            wave2["obrazek"] = lambda: run(build_obrazek_section, body)
+        if wants_emocje:
+            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
+        if wants_analiza:
+            wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
+        if wants_generator_pdf:
+            _sn   = sender_name
+            _body = body
+            wave2["generator_pdf"] = lambda: run(
+                build_generator_pdf_section, _body, sender_name=_sn
+            )
+        if wants_smierc:
+            _sender       = sender
+            _body_smierc  = body
+            _etap         = data.get("etap", 1)
+            _data_smierci = data.get("data_smierci", "nieznanego dnia")
+            _historia     = data.get("historia", [])
+            wave2["smierc"] = lambda: run(
+                build_smierc_section,
+                sender_email=_sender,
+                body=_body_smierc,
+                etap=_etap,
+                data_smierci_str=_data_smierci,
+                historia=_historia,
+                test_mode=test_mode,
+            )
 
     if wave2:
         response_data.update(_run_parallel(wave2, flask_app))
@@ -191,6 +237,48 @@ def webhook():
         response_data["nawiazanie"] = {
             "has_history": False, "reply_html": "", "analysis": ""
         }
+
+    def section_success(key: str, value) -> bool:
+        if not value or not isinstance(value, dict):
+            return False
+        if key == "nawiazanie":
+            return bool(value.get("has_history") or value.get("reply_html"))
+        return bool(value)
+
+    if not is_retry:
+        requested_sections = set()
+        if wants_text_reply:
+            requested_sections.update(["zwykly", "biznes"])
+        if wants_scrabble:
+            requested_sections.add("scrabble")
+        if wants_analiza:
+            requested_sections.add("analiza")
+        if wants_emocje:
+            requested_sections.add("emocje")
+        if wants_obrazek:
+            requested_sections.add("obrazek")
+        if wants_generator_pdf:
+            requested_sections.add("generator_pdf")
+        if wants_smierc:
+            requested_sections.add("smierc")
+        if wants_nawiazanie:
+            requested_sections.add("nawiazanie")
+    else:
+        requested_sections = set(retry_responders)
+
+    failed_sections = [key for key in requested_sections if not section_success(key, response_data.get(key))]
+    if failed_sections:
+        response_data["processed_status"] = {
+            "status": "partial",
+            "failed": failed_sections,
+            "attempt_count": attempt_count,
+            "details": {
+                key: response_data.get(key) or "no_data_returned"
+                for key in failed_sections
+            }
+        }
+    else:
+        response_data["processed_status"] = {"status": "ok"}
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     smierc_data        = response_data.get("smierc", {})

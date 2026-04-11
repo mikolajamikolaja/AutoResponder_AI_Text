@@ -44,6 +44,7 @@ from core.ai_client import call_deepseek, MODEL_TYLER
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 MEDIA_DIR = os.path.join(BASE_DIR, "media")
+SUBSTITUTE_IMAGE_PATH = os.path.join(BASE_DIR, "images", "zastepczy.jpg")
 
 XLSX_PATH = os.path.join(PROMPTS_DIR, "requiem_etapy.xlsx")
 
@@ -429,7 +430,24 @@ def _get_hf_tokens() -> list:
     return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
 
 
-def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = False) -> dict | None:
+def _load_substitute_image() -> dict | None:
+    if not os.path.exists(SUBSTITUTE_IMAGE_PATH):
+        current_app.logger.warning("[smierc-test] Brak pliku zastępczego: %s", SUBSTITUTE_IMAGE_PATH)
+        return None
+    try:
+        with open(SUBSTITUTE_IMAGE_PATH, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return {
+            "base64":       b64,
+            "content_type": "image/jpeg",
+            "filename":     "zastepczy.jpg",
+        }
+    except Exception as e:
+        current_app.logger.warning("[smierc-test] Błąd odczytu zastepczy.jpg: %s", e)
+        return None
+
+
+def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = False, test_mode: bool = False) -> dict | None:
     """
     Generuje jeden obrazek FLUX z losowym seed.
     Próbuje każdy token HF po kolei (HF_TOKEN, HF_TOKEN1...HF_TOKEN20).
@@ -439,12 +457,22 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
         prompt: Tekst promptu FLUX
         etap: Numer etapu (dla logowania)
         return_token_info: Jeśli True, zwraca info o próbach tokenów
+        test_mode: Jeśli True, używa obrazu zastępczego zamiast wywoływać HF
     
     Returns:
         - Sukces: dict z base64, content_type, filename
         - Porażka: dict z "token_attempts" (jeśli return_token_info=True)
         - Porażka: None (jeśli return_token_info=False)
     """
+    if test_mode:
+        substitute = _load_substitute_image()
+        if substitute:
+            substitute = dict(substitute)
+            substitute["filename"] = f"smierc_etap{etap}_zastepczy.jpg"
+            current_app.logger.info("[smierc-flux] test_mode — używam zastepczy.jpg dla etapu %d", etap)
+            return substitute
+        current_app.logger.warning("[smierc-flux] test_mode — brak zastepczy.jpg, pomijam obrazek dla etapu %d", etap)
+        return None
     tokens = _get_hf_tokens()
     if not tokens:
         current_app.logger.error("[flux] Brak tokenow HF!")
@@ -573,11 +601,11 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
     return None
 
 
-def _generate_multiple_flux_images(prompt: str, count: int, kompresja_jpg: int = 0, etap: int = 0) -> list:
+def _generate_multiple_flux_images(prompt: str, count: int, kompresja_jpg: int = 0, etap: int = 0, test_mode: bool = False) -> list:
     """Generuje N obrazków FLUX (z losowym seed dla każdego)."""
     images = []
     for i in range(count):
-        img = _generate_flux_image(prompt, etap=etap)
+        img = _generate_flux_image(prompt, etap=etap, test_mode=test_mode)
         if img:
             if kompresja_jpg > 0:
                 img = _compress_flux_image(img, kompresja_jpg)
@@ -765,6 +793,8 @@ def build_smierc_section(
     else:
         etap = int(etap)
 
+    test_mode = bool(kwargs.get("test_mode", False))
+
     etapy_dict, style_dict = _load_config_xlsx()
     max_etap = max(etapy_dict.keys()) if etapy_dict else 50
     historia_txt = _format_historia(historia)
@@ -810,7 +840,12 @@ def build_smierc_section(
         flux_prompt, flux_changes, flux_provider, flux_prompt_raw = _generate_flux_prompt(
             source_with_date, groq_system_override=groq_system
         )
-        image_result = _generate_flux_image(flux_prompt, etap=etap, return_token_info=True)
+        image_result = _generate_flux_image(
+            flux_prompt,
+            etap=etap,
+            return_token_info=True,
+            test_mode=test_mode,
+        )
 
         # Wyciągnij obrazek i token_info
         image = None
@@ -929,7 +964,11 @@ def build_smierc_section(
             "[pawel-flux] prompt=%.120s provider=%s", flux_prompt, flux_provider
         )
         flux_images = _generate_multiple_flux_images(
-            flux_prompt, ilosc_obrazkow_ai, kompresja_jpg, etap
+            flux_prompt,
+            ilosc_obrazkow_ai,
+            kompresja_jpg,
+            etap,
+            test_mode=test_mode,
         )
 
         # Wyciągnij token_info z pierwszego obrazka i szczegóły wszystkich

@@ -1,13 +1,25 @@
 /**
  * __AAA_processEmails - Google Apps Script
- * WERSJA 7 - ZAPIS DRIVE:
- * 1. _queueAllFromSection() — kolejkuje WSZYSTKIE pliki z każdej sekcji
- * 2. _saveFileToDriveNow()  — synchroniczny zapis dla dużych plików (>90KB)
- * 3. _queueDriveFile()      — fallback sync dla plików za dużych dla Cache
- * 4. __AAA_driveFlush()     — zapisuje do podfolderu wg daty, unika duplikatów
- * 5. Każda execute*MailSend kończy się _queueAllFromSection + _scheduleDriveFlush
- * 6. isBiz / isAllowed obliczane PRZED blokiem RE:/FWD:
- * 7. Osoba z ALLOWED_LIST + SMIERC dostaje oba respondery
+ * WERSJA 8 - ZUNIFIKOWANA LOGIKA WYSYŁKI:
+ *
+ * Dwie globalne flagi obliczane RAZ na początku pętli dla każdej osoby:
+ *
+ *   shouldSendZwykly = isAllowed || isKnownSender
+ *     → osoba jest na ALLOWED_LIST LUB ma historię w HISTORY_SHEET_ID
+ *     → zawsze dostaje odpowiedź zwykly.py
+ *
+ *   shouldSendSmierc = smircData !== null
+ *     → osoba ma arkusz w SMIERC_HISTORY_SHEET_ID
+ *     → zawsze dostaje odpowiedź smierc.py
+ *
+ * Obie flagi są niezależne — można dostać oba respondery równocześnie.
+ * Flagi są używane konsekwentnie we WSZYSTKICH blokach (RE/FWD, JOKER,
+ * SMIERC kontynuacja, nowa wiadomość).
+ *
+ * Pozostałe zmiany względem v7:
+ *   - smircData obliczany RAZ na górze pętli (nie powtarzany w blokach)
+ *   - wants_text_reply = shouldSendZwykly (nie zależy od bloku)
+ *   - po każdej odpowiedzi backendu zawsze sprawdzane oba: zwykly i smierc
  *
  * Struktura SMIERC arkusza:
  * - Każda zakładka = email osoby (nazwa: email_z_underscore)
@@ -129,24 +141,224 @@ function _getKnownSenders() {
   } catch(e) { console.error("Błąd _getKnownSenders: " + e.message); return []; }
 }
 
-// ── Moduł SMIERC ─────────────────────────────────────────────────────────────
-function _isResponseToSmircMessage(msg, senderEmail) {
+function _recordProcessedStatus(sender, subject, processedStatus) {
+  if (!sender || !subject || !processedStatus) return;
+  var entry = {
+    ts: new Date().toISOString(),
+    sender: sender,
+    subject: subject,
+    processed_status: processedStatus
+  };
   try {
-    var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
-    if (!sheetId) return false;
-    var ss     = SpreadsheetApp.openById(sheetId);
-    var sheetName = senderEmail.replace("@", "_").replace(/\./g, "_");
-    var sheets = ss.getSheets();
-    for (var i = 0; i < sheets.length; i++) {
-      if (sheets[i].getName().toLowerCase().trim() === sheetName.toLowerCase().trim()) {
-        console.log("DEBUG: osoba " + senderEmail + " ma historię smierc");
-        return true;
-      }
-    }
-    return false;
-  } catch(e) { console.error("Błąd _isResponseToSmircMessage: " + e.message); return false; }
+    var cache = CacheService.getScriptCache();
+    var stored = cache.get("PROCESSED_IDS") || "[]";
+    var list = JSON.parse(stored);
+    if (!Array.isArray(list)) list = [];
+    list.push(entry);
+    if (list.length > 100) list = list.slice(-100);
+    cache.put("PROCESSED_IDS", JSON.stringify(list), 21600);
+  } catch (e) {
+    console.error("Błąd cache PROCESSED_IDS: " + e.message);
+  }
+  try {
+    var props = PropertiesService.getScriptProperties();
+    props.setProperty("PROCESSED_IDS", JSON.stringify(entry));
+  } catch (e) {
+    console.error("Błąd PropertiesService PROCESSED_IDS: " + e.message);
+  }
 }
 
+function _reportBackendError(sender, subject, message) {
+  try {
+    var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+    if (!adminEmail) { console.warn("ADMIN_EMAIL nie ustawiony — nie wysyłam alertu"); return; }
+    var body = "Render backend zgłosił problem dla wiadomości od: " + sender + "\n" +
+               "Temat: " + subject + "\n" +
+               "Szczegóły: " + message + "\n" +
+               "Timestamp: " + new Date().toISOString();
+    MailApp.sendEmail({
+      to: adminEmail,
+      subject: "[AUTORESPONDER] Błąd backendu rendera",
+      body: body
+    });
+    console.log("Wysłano alert do ADMIN_EMAIL: " + adminEmail);
+  } catch (e) {
+    console.error("Błąd wysyłki alertu do ADMIN_EMAIL: " + e.message);
+  }
+}
+
+function _reportRetryFailure(entry, message) {
+  try {
+    var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+    if (!adminEmail) { console.warn("ADMIN_EMAIL nie ustawiony — nie wysyłam retry alertu"); return; }
+    var failed = entry.retry_responders || [];
+    var details = entry.details ? JSON.stringify(entry.details) : "brak dodatkowych informacji";
+    var body = "Retry responderów nie powiódł się dla wiadomości od: " + entry.sender + "\n" +
+               "Temat: " + entry.subject + "\n" +
+               "Respondery: " + failed.join(", ") + "\n" +
+               "Próba: " + entry.attempt_count + "/2\n" +
+               "Informacje: " + message + "\n" +
+               "Szczegóły: " + details + "\n" +
+               "Timestamp: " + new Date().toISOString();
+    MailApp.sendEmail({
+      to: adminEmail,
+      subject: "[AUTORESPONDER] Retry responderów nieudany",
+      body: body
+    });
+    console.log("Wysłano alert retry do ADMIN_EMAIL: " + adminEmail);
+  } catch (e) {
+    console.error("Błąd wysyłki retry alertu do ADMIN_EMAIL: " + e.message);
+  }
+}
+
+function _loadPendingRetries() {
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty("PENDING_RETRY_QUEUE") || "[]";
+    var list = JSON.parse(raw);
+    return Array.isArray(list) ? list : [];
+  } catch (e) {
+    console.error("Błąd _loadPendingRetries: " + e.message);
+    return [];
+  }
+}
+
+function _savePendingRetries(list) {
+  try {
+    if (!Array.isArray(list)) { list = []; }
+    if (list.length > 100) { list = list.slice(-100); }
+    PropertiesService.getScriptProperties().setProperty("PENDING_RETRY_QUEUE", JSON.stringify(list));
+  } catch (e) {
+    console.error("Błąd _savePendingRetries: " + e.message);
+  }
+}
+
+function _findPendingRetry(sender, subject) {
+  var list = _loadPendingRetries();
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].sender === sender && list[i].subject === subject) {
+      return list[i];
+    }
+  }
+  return null;
+}
+
+function _enqueuePendingRetry(payload, processedStatus) {
+  if (!payload || !processedStatus || processedStatus.status !== "partial") return;
+  if (processedStatus.attempt_count >= 2) return;
+
+  var list = _loadPendingRetries();
+  var existing = _findPendingRetry(payload.sender, payload.subject);
+  var entry = existing || {
+    id: "retry_" + Date.now() + "_" + Math.random().toString(36).slice(2),
+    created_at: new Date().toISOString(),
+    sender: payload.sender,
+    sender_name: payload.sender_name || "",
+    subject: payload.subject,
+    thread_id: payload.thread_id || null,
+    body: payload.body || "",
+    previous_body: payload.previous_body || null,
+    previous_subject: payload.previous_subject || null,
+    isBiz: payload.isBiz || false,
+    isAllowed: payload.isAllowed || false,
+    isKnownSender: payload.isKnownSender || false,
+    containsKeyword: payload.containsKeyword || false,
+    containsKeywordTest: payload.test_mode || false,
+    smircData: payload.smircData || null,
+    retry_responders: [],
+    attempt_count: 1,
+    details: null,
+    last_attempt_at: null,
+  };
+
+  entry.retry_responders = processedStatus.failed || entry.retry_responders;
+  entry.attempt_count = processedStatus.attempt_count || entry.attempt_count;
+  entry.details = processedStatus.details || entry.details;
+  entry.last_attempt_at = new Date().toISOString();
+
+  if (!existing) { list.push(entry); }
+  _savePendingRetries(list);
+}
+
+function _getRetryAttachments(threadId) {
+  if (!threadId) return [];
+  try {
+    var thread = GmailApp.getThreadById(threadId);
+    if (!thread) return [];
+    var messages = thread.getMessages();
+    var msg = messages[messages.length - 1];
+    return getAllAttachments(msg);
+  } catch (e) {
+    console.error("Błąd _getRetryAttachments: " + e.message);
+    return [];
+  }
+}
+
+function _processPendingRetries(webhookUrl) {
+  var list = _loadPendingRetries();
+  if (!list.length) return;
+  console.log("Retry: przetwarzam " + list.length + " elementów");
+
+  var updated = list.slice();
+  for (var i = 0; i < list.length; i++) {
+    var entry = list[i];
+    if (entry.attempt_count >= 2) {
+      _reportRetryFailure(entry, "Osiągnięto maksymalną liczbę prób (2). Najpierw usuń z kolejki, jeśli chcesz ponowić ręcznie.");
+      updated = updated.filter(function(item) { return item.id !== entry.id; });
+      continue;
+    }
+
+    var attachments = _getRetryAttachments(entry.thread_id);
+    var response = _callBackend(
+      entry.sender, entry.sender_name, entry.subject, entry.body, webhookUrl,
+      entry.retry_responders.indexOf("scrabble") !== -1,
+      entry.retry_responders.indexOf("analiza") !== -1,
+      entry.retry_responders.indexOf("emocje") !== -1,
+      entry.retry_responders.indexOf("obrazek") !== -1,
+      entry.retry_responders.indexOf("generator_pdf") !== -1,
+      entry.retry_responders.indexOf("smierc") !== -1,
+      entry.smircData || null,
+      attachments,
+      entry.previous_body,
+      entry.previous_subject,
+      entry.isBiz,
+      entry.isAllowed,
+      entry.isKnownSender,
+      entry.containsKeyword,
+      entry.containsKeywordTest,
+      entry.thread_id,
+      entry.retry_responders,
+      entry.attempt_count + 1
+    );
+
+    if (!response || !response.json) {
+      entry.attempt_count += 1;
+      _reportRetryFailure(entry, "Backend nieodpowiedział podczas próby retry.");
+      if (entry.attempt_count >= 2) {
+        updated = updated.filter(function(item) { return item.id !== entry.id; });
+      }
+      continue;
+    }
+
+    var status = response.json.processed_status || {};
+    if (status.status === "ok") {
+      updated = updated.filter(function(item) { return item.id !== entry.id; });
+      continue;
+    }
+
+    entry.retry_responders = status.failed || entry.retry_responders;
+    entry.details = status.details || entry.details;
+    entry.attempt_count = status.attempt_count || entry.attempt_count + 1;
+    entry.last_attempt_at = new Date().toISOString();
+    _reportRetryFailure(entry, "Częściowy błąd podczas próby retry.");
+    if (entry.attempt_count >= 2) {
+      updated = updated.filter(function(item) { return item.id !== entry.id; });
+    }
+  }
+
+  _savePendingRetries(updated);
+}
+
+// ── Moduł SMIERC ─────────────────────────────────────────────────────────────
 function _getSmircData(senderEmail) {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
@@ -283,10 +495,6 @@ function getAllAttachments(msg) {
 // GOOGLE DRIVE — zapis wszystkich plików
 // ════════════════════════════════════════════════════════════════════════════
 
-/**
- * Zwraca (lub tworzy) podfolder na Google Drive wg bieżącej daty (yyyy-MM-dd).
- * Pliki z tego samego dnia lądują razem.
- */
 function _getDriveFolder() {
   var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
   if (!folderId) { console.error("[Drive] Brak DRIVE_FOLDER_ID"); return null; }
@@ -296,17 +504,12 @@ function _getDriveFolder() {
   return it.hasNext() ? it.next() : rootFolder.createFolder(today);
 }
 
-/**
- * Zapisuje jeden plik bezpośrednio na Drive (synchronicznie).
- * Używane dla plików >90KB (za dużych dla CacheService).
- */
 function _saveFileToDriveNow(fileObj) {
   if (!fileObj || !fileObj.base64) return;
   try {
     var folder   = _getDriveFolder();
     if (!folder) return;
     var filename = fileObj.filename || "plik.bin";
-    // Pomiń duplikat
     var existing = folder.getFilesByName(filename);
     if (existing.hasNext()) { console.log("[Drive] Duplikat — pomijam: " + filename); return; }
     folder.createFile(Utilities.newBlob(
@@ -318,10 +521,6 @@ function _saveFileToDriveNow(fileObj) {
   } catch(e) { console.error("[Drive] Błąd sync zapisu: " + e.message); }
 }
 
-/**
- * Dodaje jeden plik do kolejki Drive w CacheService.
- * Dla plików >90KB zapisuje synchronicznie (omija cache).
- */
 function _queueDriveFile(key, fileObj) {
   if (!fileObj || !fileObj.base64) return;
   var serialized = JSON.stringify({
@@ -329,7 +528,6 @@ function _queueDriveFile(key, fileObj) {
     content_type: fileObj.content_type || "application/octet-stream",
     filename:     fileObj.filename     || key + ".bin"
   });
-  // Duże pliki — zapisz od razu, nie przez cache
   if (serialized.length > 90000) {
     console.warn("[DriveQ] Duży plik (" + (fileObj.filename || key) + ") — zapisuję sync");
     _saveFileToDriveNow(fileObj);
@@ -340,26 +538,18 @@ function _queueDriveFile(key, fileObj) {
     var existing = cache.get("driveq_keys") || "";
     var keys     = existing ? existing.split(",") : [];
     var cacheKey = "driveq_" + key + "_" + Date.now();
-    cache.put(cacheKey, serialized, 21600); // 6h TTL
+    cache.put(cacheKey, serialized, 21600);
     keys.push(cacheKey);
     cache.put("driveq_keys", keys.join(","), 21600);
     console.log("[DriveQ] Kolejka: " + (fileObj.filename || key));
   } catch(e) {
     console.error("[DriveQ] Błąd kolejkowania: " + e.message);
-    _saveFileToDriveNow(fileObj); // fallback sync
+    _saveFileToDriveNow(fileObj);
   }
 }
 
-/**
- * Kolejkuje WSZYSTKIE pliki z jednej sekcji odpowiedzi backendu.
- * Obsługuje pola pojedyncze i listowe.
- *
- * @param {Object} sectionData — np. response.json.zwykly, .smierc, .emocje itp.
- */
 function _queueAllFromSection(sectionData) {
   if (!sectionData || typeof sectionData !== "object") return;
-
-  // Pola z pojedynczym plikiem
   var SINGLE_FIELDS = [
     "pdf", "emoticon", "cv_pdf", "log_psych",
     "ankieta_html", "ankieta_pdf", "horoskop_pdf",
@@ -367,16 +557,12 @@ function _queueAllFromSection(sectionData) {
     "explanation_txt", "plakat_svg", "gra_html",
     "image", "image2", "prompt1_txt", "prompt2_txt",
   ];
-
-  // Pola z listą plików
   var LIST_FIELDS = [
     "triptych", "images", "videos", "docs", "docx_list",
   ];
-
   SINGLE_FIELDS.forEach(function(field) {
     _queueDriveFile(field, sectionData[field]);
   });
-
   LIST_FIELDS.forEach(function(field) {
     var arr = sectionData[field];
     if (!Array.isArray(arr)) return;
@@ -386,9 +572,6 @@ function _queueAllFromSection(sectionData) {
   });
 }
 
-/**
- * Tworzy trigger czasowy wywołujący __AAA_driveFlush za 2 minuty.
- */
 function _scheduleDriveFlush() {
   try {
     ScriptApp.getProjectTriggers().forEach(function(t) {
@@ -399,21 +582,15 @@ function _scheduleDriveFlush() {
   } catch(e) { console.error("[DriveQ] Błąd tworzenia triggera: " + e.message); }
 }
 
-/**
- * Wywoływana przez trigger — odczytuje kolejkę z Cache i zapisuje na Drive.
- */
 function __AAA_driveFlush() {
   var cache    = CacheService.getScriptCache();
   var existing = cache.get("driveq_keys");
   if (!existing) { console.log("[DriveFlush] Kolejka pusta"); return; }
-
   var folder = _getDriveFolder();
   if (!folder) return;
-
   var keys   = existing.split(",").filter(Boolean);
   var saved  = 0;
   var failed = 0;
-
   keys.forEach(function(cacheKey) {
     try {
       var raw = cache.get(cacheKey);
@@ -421,7 +598,6 @@ function __AAA_driveFlush() {
       var obj = JSON.parse(raw);
       if (!obj.base64) { failed++; return; }
       var filename  = obj.filename || "plik.bin";
-      // Unikaj duplikatów
       var dupCheck = folder.getFilesByName(filename);
       if (dupCheck.hasNext()) {
         console.log("[DriveFlush] Duplikat — pomijam: " + filename);
@@ -441,25 +617,21 @@ function __AAA_driveFlush() {
       failed++;
     }
   });
-
   cache.remove("driveq_keys");
   console.log("[DriveFlush] DONE: zapisano=" + saved + " błędów=" + failed);
-
-  // Usuń trigger (jednorazowy)
   ScriptApp.getProjectTriggers().forEach(function(t) {
     if (t.getHandlerFunction() === "__AAA_driveFlush") ScriptApp.deleteTrigger(t);
   });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// WYSYŁKA — każda funkcja execute* kolejkuje WSZYSTKO na Drive
+// WYSYŁKA
 // ════════════════════════════════════════════════════════════════════════════
 
 function executeMailSend(data, recipient, subject, msg, senderName) {
   var inlineImages = {};
   var attachments  = [];
 
-  // Emotka PNG (inline)
   if (data.emoticon && data.emoticon.base64) {
     try {
       inlineImages["emotka_cid"] = Utilities.newBlob(
@@ -469,18 +641,14 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       );
     } catch (e) { console.error("[zwykly] Błąd emotki: " + e.message); }
   }
-
-  // CV PDF
   if (data.cv_pdf && data.cv_pdf.base64) {
-    var cvFilename = data.cv_pdf.filename || "CV_Tyler.pdf";
     try {
       attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.cv_pdf.base64), "application/pdf", cvFilename
+        Utilities.base64Decode(data.cv_pdf.base64), "application/pdf",
+        data.cv_pdf.filename || "CV_Tyler.pdf"
       ));
     } catch (e) { console.error("[zwykly] Błąd CV PDF: " + e.message); }
   }
-
-  // Log psychiatryczny TXT
   if (data.log_psych && data.log_psych.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -490,8 +658,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
     } catch (e) { console.error("[zwykly] Błąd log_psych: " + e.message); }
   }
-
-  // Ankieta HTML
   if (data.ankieta_html && data.ankieta_html.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -500,8 +666,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
     } catch (e) { console.error("[zwykly] Błąd ankieta HTML: " + e.message); }
   }
-
-  // Ankieta PDF
   if (data.ankieta_pdf && data.ankieta_pdf.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -510,8 +674,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
     } catch (e) { console.error("[zwykly] Błąd ankieta PDF: " + e.message); }
   }
-
-  // Horoskop PDF
   if (data.horoskop_pdf && data.horoskop_pdf.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -520,8 +682,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
     } catch (e) { console.error("[zwykly] Błąd horoskop PDF: " + e.message); }
   }
-
-  // Karta RPG PDF
   if (data.karta_rpg_pdf && data.karta_rpg_pdf.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -530,8 +690,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
     } catch (e) { console.error("[zwykly] Błąd karta RPG: " + e.message); }
   }
-
-  // Raport psychiatryczny (PDF/DOCX)
   if (data.raport_pdf && data.raport_pdf.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -542,7 +700,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     } catch (e) { console.error("[zwykly] Błąd raport: " + e.message); }
   }
 
-  // Tryptyk — inline + załącznik
   var triptychHtml   = "";
   var triptychImages = data.triptych || [];
   if (triptychImages.length > 0) {
@@ -555,10 +712,8 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
         var cid      = "tyler_panel_" + index;
         var filename = imgObj.filename || ("tyler_panel_" + index + ".jpg");
         var mime     = imgObj.content_type || "image/jpeg";
-        var blobInline = Utilities.newBlob(Utilities.base64Decode(imgObj.base64), mime, filename);
-        var blobAttach = Utilities.newBlob(Utilities.base64Decode(imgObj.base64), mime, filename);
-        inlineImages[cid] = blobInline;
-        attachments.push(blobAttach);
+        inlineImages[cid] = Utilities.newBlob(Utilities.base64Decode(imgObj.base64), mime, filename);
+        attachments.push(Utilities.newBlob(Utilities.base64Decode(imgObj.base64), mime, filename));
         triptychHtml += '<td valign="top" style="text-align:center;padding:2px;">' +
           '<img src="cid:' + cid + '" alt="Panel ' + (index + 1) + '"' +
           ' style="max-width:185px;border-radius:4px;border:1px solid #C8B89A;"></td>';
@@ -567,7 +722,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     triptychHtml += '</tr></table>';
   }
 
-  // Wyjaśnienie TXT
   if (data.explanation_txt && data.explanation_txt.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -576,8 +730,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
     } catch (e) { console.error("[zwykly] Błąd wyjaśnienia TXT: " + e.message); }
   }
-
-  // Plakat SVG
   if (data.plakat_svg && data.plakat_svg.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -586,8 +738,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
       ));
     } catch (e) { console.error("[zwykly] Błąd plakat SVG: " + e.message); }
   }
-
-  // Gra HTML
   if (data.gra_html && data.gra_html.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -597,21 +747,16 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     } catch (e) { console.error("[zwykly] Błąd gra HTML: " + e.message); }
   }
 
-  // Złóż HTML i wyślij
   var htmlBody = (data.reply_html || "<p>(Brak treści)</p>") + triptychHtml;
   try {
     msg.reply("", { htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: senderName });
-    console.log("[zwykly] Wysłano: " + senderName + " → " + recipient + " | panels=" + triptychImages.length + " | att=" + attachments.length);
+    console.log("[zwykly] Wysłano: " + senderName + " → " + recipient + " | att=" + attachments.length);
   } catch (e) {
     try {
       MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: senderName });
       console.log("[zwykly] sendEmail() fallback OK → " + recipient);
     } catch (e2) { console.error("[zwykly] sendEmail() zawiódł: " + e2.message); }
   }
-
-  // ── ZAPIS NA DRIVE — wszystkie pliki z sekcji ─────────────────────────────
-  _queueAllFromSection(data);
-  _scheduleDriveFlush();
 }
 
 function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
@@ -631,9 +776,6 @@ function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
   } catch (e) {
     MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [egzamin PDF]", htmlBody: htmlBody, attachments: attachments, name: "Generator Egzaminów – Autoresponder" });
   }
-  // ── ZAPIS NA DRIVE ────────────────────────────────────────────────────────
-  _queueAllFromSection(data);
-  _scheduleDriveFlush();
 }
 
 function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
@@ -653,13 +795,12 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
             imgObj.filename     || ("obraz_" + index + ".png")
           );
           inlineImages[cid] = imgBlob;
-          attachments.push(imgBlob);  // ← wymagane do wyświetlenia w Gmailu
+          attachments.push(imgBlob);
           imagesHtml += '<p><img src="cid:' + cid + '" alt="Zaswiety" style="max-width:100%;border-radius:8px;margin-bottom:10px;"></p>';
         }
       } catch(e) { console.error("Blad obrazka " + index + ": " + e.message); }
     });
   }
-
   if (data.videos && Array.isArray(data.videos)) {
     data.videos.forEach(function(vidObj, index) {
       try {
@@ -673,7 +814,6 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
       } catch(e) { console.error("Blad wideo " + index + ": " + e.message); }
     });
   }
-
   if (data.debug_txt && data.debug_txt.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -689,15 +829,10 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
     msg.reply("", { htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Autoresponder zza swiatowy" });
     console.log("Wyslano smierc (etap " + newEtap + ") do " + recipient + ". Zalacznikow: " + attachments.length);
   } catch(e) {
-    console.error("reply() fail: " + e.message + " — probuje sendEmail()");
     try {
       MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Autoresponder zza swiatowy" });
     } catch(e2) { console.error("sendEmail() tez fail: " + e2.message); }
   }
-
-  // ── ZAPIS NA DRIVE — zdjęcia, wideo, debug_txt i wszystko inne ───────────
-  _queueAllFromSection(data);
-  _scheduleDriveFlush();
 }
 
 function executeScrabbleMailSend(data, recipient, subject, msg) {
@@ -721,9 +856,6 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
   } catch (e) {
     MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Scrabble – Autoresponder" });
   }
-  // ── ZAPIS NA DRIVE ────────────────────────────────────────────────────────
-  _queueAllFromSection(data);
-  _scheduleDriveFlush();
 }
 
 function executeAnalizaMailSend(data, recipient, subject, msg) {
@@ -744,13 +876,9 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
   var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
   try {
     msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Analiza Powtórzeń – Autoresponder" });
-    console.log("Wysłano analizę (" + attachments.length + " DOCX) -> " + recipient);
   } catch (e) {
     MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, attachments: attachments, name: "Analiza Powtórzeń – Autoresponder" });
   }
-  // ── ZAPIS NA DRIVE ────────────────────────────────────────────────────────
-  _queueAllFromSection(data);
-  _scheduleDriveFlush();
 }
 
 function executeEmocjeMailSend(data, recipient, subject, msg) {
@@ -777,13 +905,9 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
   var htmlBody = data.reply_html || "<p>Analiza emocjonalna w załącznikach.</p>";
   try {
     msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Analiza Emocjonalna – Autoresponder" });
-    console.log("Wysłano emocje (" + attachments.length + " plików) -> " + recipient);
   } catch (e) {
     MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, attachments: attachments, name: "Analiza Emocjonalna – Autoresponder" });
   }
-  // ── ZAPIS NA DRIVE ────────────────────────────────────────────────────────
-  _queueAllFromSection(data);
-  _scheduleDriveFlush();
 }
 
 function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
@@ -796,9 +920,7 @@ function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
   try {
     var resp = UrlFetchApp.fetch(gifUrl, options);
     if (resp.getResponseCode() === 200) {
-      var json = JSON.parse(resp.getContentText());
-      console.log("webhook_gif OK");
-      return json;
+      return JSON.parse(resp.getContentText());
     }
     console.error("webhook_gif błąd: " + resp.getResponseCode());
     return null;
@@ -865,50 +987,33 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
     } catch(e) { console.error("Błąd obrazka 2: " + e.message); }
   }
 
-  // GIFy
   var png1b64 = (data.image  && data.image.base64)  ? data.image.base64  : null;
   var png2b64 = (data.image2 && data.image2.base64) ? data.image2.base64 : null;
   if ((png1b64 || png2b64) && webhookUrl) {
     var gifData = _callWebhookGif(png1b64, png2b64, webhookUrl);
     if (gifData && gifData.gif1 && gifData.gif1.base64) {
       try {
-        var gifBlob1 = Utilities.newBlob(
-          Utilities.base64Decode(gifData.gif1.base64),
-          gifData.gif1.content_type || "image/gif",
-          gifData.gif1.filename     || "komiks_ai.gif"
-        );
+        var gifBlob1     = Utilities.newBlob(Utilities.base64Decode(gifData.gif1.base64), gifData.gif1.content_type || "image/gif", gifData.gif1.filename || "komiks_ai.gif");
         var htmlBodyGif1 = "<p>Komiks AI – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
         try {
           msg.reply("", { htmlBody: htmlBodyGif1, attachments: [gifBlob1], name: "Komiks AI GIF – Autoresponder" });
         } catch(e) {
           MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [komiks GIF]", htmlBody: htmlBodyGif1, attachments: [gifBlob1], name: "Komiks AI GIF – Autoresponder" });
         }
-        // Zapisz GIF na Drive
-        _queueDriveFile("gif1", gifData.gif1);
       } catch(e) { console.error("Błąd GIF 1: " + e.message); }
     }
     if (gifData && gifData.gif2 && gifData.gif2.base64) {
       try {
-        var gifBlob2 = Utilities.newBlob(
-          Utilities.base64Decode(gifData.gif2.base64),
-          gifData.gif2.content_type || "image/gif",
-          gifData.gif2.filename     || "komiks_ai_retro.gif"
-        );
+        var gifBlob2     = Utilities.newBlob(Utilities.base64Decode(gifData.gif2.base64), gifData.gif2.content_type || "image/gif", gifData.gif2.filename || "komiks_ai_retro.gif");
         var htmlBodyGif2 = "<p>Komiks Retro – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
         try {
           msg.reply("", { htmlBody: htmlBodyGif2, attachments: [gifBlob2], name: "Komiks Retro GIF – Autoresponder" });
         } catch(e) {
           MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [retro GIF]", htmlBody: htmlBodyGif2, attachments: [gifBlob2], name: "Komiks Retro GIF – Autoresponder" });
         }
-        // Zapisz GIF na Drive
-        _queueDriveFile("gif2", gifData.gif2);
       } catch(e) { console.error("Błąd GIF 2: " + e.message); }
     }
   }
-
-  // ── ZAPIS NA DRIVE — obrazki, promptsy ───────────────────────────────────
-  _queueAllFromSection(data);
-  _scheduleDriveFlush();
 }
 
 function executeNawiazanieMailSend(data, recipient, subject, msg) {
@@ -919,8 +1024,6 @@ function executeNawiazanieMailSend(data, recipient, subject, msg) {
   } catch (e) {
     MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [nawiązanie]", htmlBody: data.reply_html, name: "Nawiązanie – Autoresponder" });
   }
-  // nawiazanie nie ma plików binarnych, ale wywołujemy dla spójności
-  _queueAllFromSection(data);
 }
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
@@ -928,7 +1031,8 @@ function _callBackend(sender, senderName, subject, body, url,
                       wantsScrabble, wantsAnaliza, wantsEmocje, wantsObrazek,
                       wantsGeneratorPdf, wantsSmierc, smircData,
                       attachments, previousBody, previousSubject,
-                      isBiz, isAllowed, isKnownSender, containsKeyword) {
+                      isBiz, isAllowed, isKnownSender, containsKeyword,
+                      testMode, threadId, retryResponders, attemptCount) {
   var secret  = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
   var payload = {
     sender:              sender,
@@ -944,15 +1048,21 @@ function _callBackend(sender, senderName, subject, body, url,
     etap:                smircData ? smircData.etap         : 1,
     data_smierci:        smircData ? smircData.data_smierci : "nieznanego dnia",
     historia:            smircData ? smircData.historia     : [],
-    wants_text_reply:    (isBiz || isAllowed || containsKeyword) ? true : false,
+    wants_text_reply:    (isBiz || isAllowed || isKnownSender || containsKeyword) ? true : false,
     attachments:         attachments        || [],
     previous_body:       previousBody       || null,
-    previous_subject:    previousSubject    || null
+    previous_subject:    previousSubject    || null,
+    save_to_drive:       false,
+    test_mode:           testMode          ? true : false,
+    thread_id:           threadId         || null,
+    retry_responders:    retryResponders  || [],
+    attempt_count:       attemptCount     || 1
   };
 
   console.log("Webhook — sender: " + payload.sender +
               " | smierc=" + payload.wants_smierc +
-              " | etap=" + payload.etap + " | data=" + payload.data_smierci);
+              " | etap=" + payload.etap + " | data=" + payload.data_smierci +
+              " | text_reply=" + payload.wants_text_reply);
 
   var options = {
     method:             "post",
@@ -964,11 +1074,28 @@ function _callBackend(sender, senderName, subject, body, url,
   try {
     var resp = UrlFetchApp.fetch(url, options);
     if (resp.getResponseCode() === 200) {
-      console.log("Webhook — odpowiedź OK (200)");
-      return { json: JSON.parse(resp.getContentText()) };
+      var text = resp.getContentText();
+      try {
+        var json = JSON.parse(text);
+        console.log("Webhook — odpowiedź OK (200)");
+        if (json && json.processed_status) {
+          _recordProcessedStatus(payload.sender, payload.subject, json.processed_status);
+        }
+        return { json: json };
+      } catch (e) {
+        console.error("Błąd parsowania JSON z backendu: " + e.message);
+        _reportBackendError(payload.sender, payload.subject, "Błąd parsowania JSON: " + e.message + " | odpowiedź: " + text);
+        return null;
+      }
     }
-    console.error("Backend zwrócił kod " + resp.getResponseCode());
-  } catch (e) { console.error("Błąd połączenia z backendem: " + e.message); }
+    var errMsg = "Backend zwrócił kod " + resp.getResponseCode();
+    console.error(errMsg);
+    _reportBackendError(payload.sender, payload.subject, errMsg + " | body: " + resp.getContentText());
+  } catch (e) {
+    var errMsg = "Błąd połączenia z backendem: " + e.message;
+    console.error(errMsg);
+    _reportBackendError(payload.sender, payload.subject, errMsg);
+  }
   return null;
 }
 
@@ -988,11 +1115,13 @@ function _stripQuotedText(body) {
   return result.join("\n").trim();
 }
 
-// ── GŁÓWNA FUNKCJA ────────────────────────────────────────────────────────────
 function __AAA_processEmails() {
   var props      = PropertiesService.getScriptProperties();
   var webhookUrl = props.getProperty("WEBHOOK_URL");
   if (!webhookUrl) { console.error("Brak WEBHOOK_URL!"); return; }
+
+  // Najpierw przetwórz oczekujące retry
+  _processPendingRetries(webhookUrl);
 
   var BIZ_LIST                   = _getListFromProps("BIZ_LIST");
   var ALLOWED_LIST               = _getListFromProps("ALLOWED_LIST");
@@ -1006,19 +1135,21 @@ function __AAA_processEmails() {
   var KEYWORDS_OBRAZEK           = _getListFromProps("KEYWORDS_OBRAZEK");
   var KEYWORDS_GENERATOR_PDF     = _getListFromProps("KEYWORDS_GENERATOR_PDF");
   var KEYWORDS_SMIERC            = _getListFromProps("KEYWORDS_SMIERC");
+  var KEYWORDS_TEST              = _getListFromProps("KEYWORDS_TEST");
   var DATA_SMIERCI               = props.getProperty("DATA_SMIERCI") || "nieznanego dnia";
 
-  var maskMode     = false;
-  var knownSenders = _getKnownSenders();
-  var webhookCalled = false;
+  var maskMode      = false;
+  var knownSenders  = _getKnownSenders();
 
   console.log("Znani nadawcy: " + knownSenders.length);
 
-  var threads = GmailApp.getInboxThreads(0, 80);
+  // Pobierz wątki i odwróć kolejność — zaczynamy od najstarszego
+  var threads = GmailApp.getInboxThreads(0, 80).reverse();
   for (var i = 0; i < threads.length; i++) {
     var thread = threads[i];
     if (!thread.isUnread()) continue;
 
+    var webhookCalled = false;  // reset dla każdego wątku — każdy mail może wywołać backend
     var messages   = thread.getMessages();
     var msg        = messages[messages.length - 1];
     var fromRaw    = msg.getFrom();
@@ -1030,21 +1161,30 @@ function __AAA_processEmails() {
     var plainBody  = _stripQuotedText(msg.getPlainBody());
     var searchText = plainBody + " " + subject;
 
-    // isBiz / isAllowed obliczamy PRZED blokiem RE:/FWD:
+    // ── FLAGI GLOBALNE — obliczane RAZ dla każdej osoby ──────────────────────
     var isBiz         = BIZ_LIST.indexOf(fromEmail) !== -1;
     var isAllowed     = ALLOWED_LIST.indexOf(fromEmail) !== -1;
     var isKnownSender = knownSenders.indexOf(fromEmail) !== -1;
 
+    // smircData obliczany raz — używany we wszystkich blokach
+    var smircData      = _getSmircData(fromEmail);
+    var isSmierc       = smircData !== null;
+
+    // Dwie główne flagi decydujące o wysyłce:
+    // shouldSendZwykly: znam tę osobę (allowed LUB ma historię)
+    // shouldSendSmierc: osoba ma arkusz śmierci
+    var shouldSendZwykly = isAllowed || isKnownSender;
+    var shouldSendSmierc = isSmierc;
+
     var isNewMsg = _isNewMessage(subject);
-    console.log("DEBUG: isNewMsg=" + isNewMsg + " from=" + fromEmail);
+    console.log("DEBUG: isNewMsg=" + isNewMsg + " from=" + fromEmail +
+                " | zwykly=" + shouldSendZwykly + " | smierc=" + shouldSendSmierc);
 
     // ── ODPOWIEDŹ (RE:/FWD:) ─────────────────────────────────────────────────
     if (!isNewMsg) {
       console.log("Odpowiedź (RE:/FWD:) od: " + fromEmail);
-      var smircDataForReply = _getSmircData(fromEmail);
 
-      if (smircDataForReply) {
-        console.log("Odpowiedź od osoby SMIERC: " + fromEmail + " etap=" + smircDataForReply.etap);
+      if (shouldSendSmierc || shouldSendZwykly) {
         thread.markRead();
         var previousDataReply = findLastMessageBySender(fromEmail);
         if (webhookCalled) { thread.markRead(); continue; }
@@ -1053,48 +1193,32 @@ function __AAA_processEmails() {
         var responseReply = _callBackend(
           fromEmail, senderName, subject, plainBody, webhookUrl,
           false, false, false, false, false,
-          true, smircDataForReply, [],
+          shouldSendSmierc, smircData, [],
           previousDataReply ? previousDataReply.body    : null,
           previousDataReply ? previousDataReply.subject : null,
-          isBiz, isAllowed, isKnownSender, false
+          isBiz, isAllowed, isKnownSender, false,
+          containsKeywordTest
         );
 
-        if (responseReply && responseReply.json && responseReply.json.smierc) {
-          var newEtapReply = responseReply.json.smierc.nowy_etap || smircDataForReply.etap;
-          executeSmircMailSend(responseReply.json.smierc, fromEmail, subject, msg, newEtapReply);
-          _updateSmircData(fromEmail, newEtapReply, plainBody, responseReply.json.smierc.reply_html, msg.getId());
-        }
-        // ALLOWED_LIST → wyślij też zwykły responder
-        if (isAllowed && responseReply && responseReply.json && responseReply.json.zwykly) {
-          executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-        }
-        saveToHistory(fromEmail, subject, plainBody);
-
-      } else if (isAllowed) {
-        thread.markRead();
-        var previousDataAllowed = findLastMessageBySender(fromEmail);
-        if (webhookCalled) { thread.markRead(); continue; }
-        webhookCalled = true;
-
-        var responseAllowed = _callBackend(
-          fromEmail, senderName, subject, plainBody, webhookUrl,
-          false, false, false, false, false,
-          false, null, [],
-          previousDataAllowed ? previousDataAllowed.body    : null,
-          previousDataAllowed ? previousDataAllowed.subject : null,
-          isBiz, isAllowed, isKnownSender, false
-        );
-        if (responseAllowed && responseAllowed.json && responseAllowed.json.zwykly) {
-          executeMailSend(responseAllowed.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        if (responseReply && responseReply.json) {
+          if (shouldSendSmierc && responseReply.json.smierc) {
+            var newEtapReply = responseReply.json.smierc.nowy_etap || smircData.etap;
+            executeSmircMailSend(responseReply.json.smierc, fromEmail, subject, msg, newEtapReply);
+            _updateSmircData(fromEmail, newEtapReply, plainBody, responseReply.json.smierc.reply_html, msg.getId());
+          }
+          if (shouldSendZwykly && responseReply.json.zwykly) {
+            executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+          }
         }
         saveToHistory(fromEmail, subject, plainBody);
+        break; // obsłużono — przerywamy, następny mail przy kolejnym triggerze
 
       } else {
         var labelRe = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
         thread.addLabel(labelRe);
         thread.markRead();
       }
-      continue;
+      continue; // RE/FWD bez flagi — tylko oznacz i idź dalej
     }
 
     // ── NOWA WIADOMOŚĆ ────────────────────────────────────────────────────────
@@ -1102,37 +1226,33 @@ function __AAA_processEmails() {
     var containsKeywordGeneratorPdf = _containsAny(searchText, KEYWORDS_GENERATOR_PDF);
     var wantsGeneratorPdf           = isAllowedGeneratorPdf || containsKeywordGeneratorPdf;
 
-    var containsKeywordSmierc = _containsAny(searchText, KEYWORDS_SMIERC);
-    var wantsSmierc = false;
-    var smircData   = null;
-
-    smircData = _getSmircData(fromEmail);
-
     // ── JOKER ────────────────────────────────────────────────────────────────
     var containsJoker = _containsAny(searchText, KEYWORDS_JOKER);
     if (containsJoker) {
       console.log("🃏 JOKER! Aktywacja dla: " + fromEmail);
-      if (!smircData) {
+
+      // Jeśli nie ma jeszcze arkusza śmierci — utwórz i ustaw flagę
+      if (!isSmierc) {
         if (_createSmircSheetForEmail(fromEmail, DATA_SMIERCI)) {
-          smircData = _getSmircData(fromEmail) || { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
-        } else {
-          smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
+          smircData      = _getSmircData(fromEmail) || { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
+          isSmierc       = true;
+          shouldSendSmierc = true;
         }
       }
-      wantsSmierc = true;
+      // JOKER zawsze wysyła wszystko — w tym zwykly jeśli znamy osobę
+      // (po JOKER osoba trafia do historii, więc przy kolejnym mailu shouldSendZwykly=true)
       thread.markRead();
-
-      var previousDataJoker = findLastMessageBySender(fromEmail);
       if (webhookCalled) { thread.markRead(); continue; }
       webhookCalled = true;
 
       var responseJoker = _callBackend(
         fromEmail, senderName, subject, plainBody, webhookUrl,
         true, true, true, true, true,
-        true, smircData, getAllAttachments(msg),
-        previousDataJoker ? previousDataJoker.body    : null,
-        previousDataJoker ? previousDataJoker.subject : null,
-        isBiz, isAllowed, isKnownSender, true
+        shouldSendSmierc, smircData, getAllAttachments(msg),
+        findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).body    : null,
+        findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).subject : null,
+        isBiz, isAllowed, isKnownSender, true,
+        containsKeywordTest
       );
 
       if (responseJoker && responseJoker.json) {
@@ -1145,7 +1265,7 @@ function __AAA_processEmails() {
         if (jj.obrazek)       executeObrazekMailSend(jj.obrazek, fromEmail, subject, msg);
         if (jj.nawiazanie)    executeNawiazanieMailSend(jj.nawiazanie, fromEmail, subject, msg);
         if (jj.generator_pdf) executeGeneratorPdfMailSend(jj.generator_pdf, fromEmail, subject, msg);
-        if (jj.smierc) {
+        if (shouldSendSmierc && jj.smierc) {
           var newEtapJoker = jj.smierc.nowy_etap || smircData.etap;
           executeSmircMailSend(jj.smierc, fromEmail, subject, msg, newEtapJoker);
           _updateSmircData(fromEmail, newEtapJoker, plainBody, jj.smierc.reply_html, msg.getId());
@@ -1153,15 +1273,13 @@ function __AAA_processEmails() {
         console.log("🃏 JOKER: wszystkie respondery obsłużone");
       }
       saveToHistory(fromEmail, subject, plainBody);
-      continue;
+      break; // JOKER obsłużony — przerywamy
     }
 
-    // ── SMIERC kontynuacja ────────────────────────────────────────────────────
-    if (smircData) {
-      wantsSmierc = true;
+    // ── SMIERC kontynuacja (nowa wiadomość od osoby z arkuszem śmierci) ──────
+    if (shouldSendSmierc) {
       console.log("SMIERC kontynuacja: " + fromEmail + " etap=" + smircData.etap);
       thread.markRead();
-      smircData = _getSmircData(fromEmail); // Świeża data z B2
 
       var previousData2 = findLastMessageBySender(fromEmail);
       if (webhookCalled) { thread.markRead(); continue; }
@@ -1173,40 +1291,48 @@ function __AAA_processEmails() {
         true, smircData, [],
         previousData2 ? previousData2.body    : null,
         previousData2 ? previousData2.subject : null,
-        isBiz, isAllowed, isKnownSender, false
+        isBiz, isAllowed, isKnownSender, false,
+        containsKeywordTest
       );
 
-      if (response2 && response2.json && response2.json.smierc) {
-        var newEtap2 = response2.json.smierc.nowy_etap || smircData.etap;
-        executeSmircMailSend(response2.json.smierc, fromEmail, subject, msg, newEtap2);
-        _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
-      }
-      // ALLOWED_LIST → wyślij też zwykły responder
-      if (isAllowed && response2 && response2.json && response2.json.zwykly) {
-        executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+      if (response2 && response2.json) {
+        if (response2.json.smierc) {
+          var newEtap2 = response2.json.smierc.nowy_etap || smircData.etap;
+          executeSmircMailSend(response2.json.smierc, fromEmail, subject, msg, newEtap2);
+          _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
+        }
+        // shouldSendZwykly — niezależna flaga, działa równocześnie ze śmiercią
+        if (shouldSendZwykly && response2.json.zwykly) {
+          executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        }
       }
       saveToHistory(fromEmail, subject, plainBody);
-      continue;
+      break; // SMIERC kontynuacja obsłużona — przerywamy
     }
 
-    // ── SMIERC start (nowy keyword) ───────────────────────────────────────────
+    // ── SMIERC start (nowe słowo kluczowe SMIERC, brak arkusza) ──────────────
+    var containsKeywordSmierc = _containsAny(searchText, KEYWORDS_SMIERC);
     if (containsKeywordSmierc) {
       if (_createSmircSheetForEmail(fromEmail, DATA_SMIERCI)) {
-        smircData   = _getSmircData(fromEmail);
-        wantsSmierc = true;
+        smircData        = _getSmircData(fromEmail);
+        isSmierc         = true;
+        shouldSendSmierc = true;
         console.log("SMIERC start: " + fromEmail);
       }
     }
 
-    var containsKeyword       = _containsAny(searchText, KEYWORDS)  || _containsAny(searchText, KEYWORDS1);
-    var containsKeyword2      = _containsAny(searchText, KEYWORDS2);
-    var containsKeyword3      = _containsAny(searchText, KEYWORDS3);
-    var containsKeyword4      = _containsAny(searchText, KEYWORDS4);
+    var containsKeyword        = _containsAny(searchText, KEYWORDS)  || _containsAny(searchText, KEYWORDS1);
+    var containsKeyword2       = _containsAny(searchText, KEYWORDS2);
+    var containsKeyword3       = _containsAny(searchText, KEYWORDS3);
+    var containsKeyword4       = _containsAny(searchText, KEYWORDS4);
     var containsKeywordObrazek = _containsAny(searchText, KEYWORDS_OBRAZEK);
+    var containsKeywordTest    = _containsAny(searchText, KEYWORDS_TEST);
 
-    if (!isBiz && !isAllowed && !isKnownSender && !containsKeyword &&
-        !containsKeyword2 && !containsKeyword3 && !containsKeyword4 &&
-        !containsKeywordObrazek && !wantsGeneratorPdf && !wantsSmierc) {
+    // Aktualizuj shouldSendZwykly jeśli zawiera słowo kluczowe
+    if (containsKeyword) shouldSendZwykly = true;
+
+    if (!isBiz && !shouldSendZwykly && !containsKeyword2 && !containsKeyword3 &&
+        !containsKeyword4 && !containsKeywordObrazek && !wantsGeneratorPdf && !shouldSendSmierc) {
       var labelSkip = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
       thread.addLabel(labelSkip);
       thread.markRead();
@@ -1234,7 +1360,7 @@ function __AAA_processEmails() {
       console.log("Załączników: " + allAttachments.length);
     }
 
-    if (!smircData && !wantsSmierc) {
+    if (!smircData && !shouldSendSmierc) {
       smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
     }
 
@@ -1245,9 +1371,10 @@ function __AAA_processEmails() {
     var response = _callBackend(
       fromEmail, senderName, subject, sanitizedBody, webhookUrl,
       containsKeyword2, containsKeyword3, containsKeyword4, containsKeywordObrazek,
-      wantsGeneratorPdf, wantsSmierc, smircData, allAttachments,
+      wantsGeneratorPdf, shouldSendSmierc, smircData, allAttachments,
       previousBody, previousSubject,
-      isBiz, isAllowed, isKnownSender, containsKeyword
+      isBiz, isAllowed, isKnownSender, containsKeyword,
+      containsKeywordTest
     );
 
     if (response && response.json) {
@@ -1256,7 +1383,7 @@ function __AAA_processEmails() {
       if (json.biznes && (isBiz || (!isAllowed && containsKeyword))) {
         executeMailSend(json.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
       }
-      if (json.zwykly && (isAllowed || (!isBiz && containsKeyword))) {
+      if (json.zwykly && shouldSendZwykly) {
         executeMailSend(json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
       }
       if (containsKeyword2 && json.scrabble) {
@@ -1277,12 +1404,13 @@ function __AAA_processEmails() {
       if (wantsGeneratorPdf && json.generator_pdf) {
         executeGeneratorPdfMailSend(json.generator_pdf, fromEmail, subject, msg);
       }
-      if (wantsSmierc && json.smierc) {
+      if (shouldSendSmierc && json.smierc) {
         var newEtap = json.smierc.nowy_etap || smircData.etap;
         executeSmircMailSend(json.smierc, fromEmail, subject, msg, newEtap);
         _updateSmircData(fromEmail, newEtap, sanitizedBody, json.smierc.reply_html, msg.getId());
       }
       saveToHistory(fromEmail, subject, sanitizedBody);
+      break; // główny blok obsłużony — przerywamy, następny przy kolejnym triggerze
     } else {
       console.warn("Backend nie odpowiedział dla: " + fromEmail);
     }

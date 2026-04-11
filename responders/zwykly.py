@@ -59,6 +59,7 @@ PROMPT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_prompt.json")
 CV_CONTENT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_cv_content.json")
 CV_PHOTO_FLUX_PATH = os.path.join(PROMPTS_DIR, "zwykly_cv_photo_flux.json")
 ICON_FLUX_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_icon_flux.json")
+SUBSTITUTE_IMAGE_PATH = os.path.join(BASE_DIR, "images", "zastepczy.jpg")
 STYLE_JS_PATH = os.path.join(PROMPTS_DIR, "zwykly_obrazek_tyler.js")
 ANKIETA_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_ankieta.json")
 HOROSKOP_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_horoskop.json")
@@ -1418,12 +1419,35 @@ def _png_to_jpg(image_obj: dict, panel_index: int) -> dict:
         return image_obj
 
 
-def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
+def _load_substitute_image() -> dict | None:
+    if not os.path.exists(SUBSTITUTE_IMAGE_PATH):
+        logger.warning("[test-mode] Brak pliku zastępczego: %s", SUBSTITUTE_IMAGE_PATH)
+        return None
+    try:
+        with open(SUBSTITUTE_IMAGE_PATH, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return {
+            "base64":       b64,
+            "content_type": "image/jpeg",
+            "filename":     "zastepczy.jpg",
+        }
+    except Exception as e:
+        logger.warning("[test-mode] Błąd odczytu zastepczy.jpg: %s", e)
+        return None
+
+
+def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = False) -> dict | None:
     """
     Generuje jeden obrazek FLUX z losowym seed.
     Próbuje każdy token HF po kolei.
     Zwraca dict z base64 lub None.
     """
+    if test_mode:
+        image = _load_substitute_image()
+        if image:
+            image = dict(image)
+            image["filename"] = f"tyler_panel{panel_index}_zastepczy.jpg"
+        return image
     tokens = _get_hf_tokens()
     if tokens and panel_index > 0:
         offset = (panel_index - 1) % len(tokens)
@@ -1515,7 +1539,7 @@ def _generate_flux_image(prompt: str, panel_index: int = 0) -> dict | None:
 # GENEROWANIE TRYPTYKU
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _generate_raw_email_image(body: str) -> dict | None:
+def _generate_raw_email_image(body: str, test_mode: bool = False) -> dict | None:
     """
     Generuje obrazek FLUX bezpośrednio z treści emaila — BEZ udziału Groq/DeepSeek.
     Prompt = surowa treść emaila skrócona do 400 znaków.
@@ -1526,7 +1550,7 @@ def _generate_raw_email_image(body: str) -> dict | None:
 
     logger.info("[raw-img] Generuję obrazek z surowej treści emaila (%.80s...)", raw_prompt)
 
-    img = _generate_flux_image(raw_prompt, panel_index=97)
+    img = _generate_flux_image(raw_prompt, panel_index=97, test_mode=test_mode)
     if not img or not img.get("base64"):
         logger.warning("[raw-img] Brak obrazka z surowej treści")
         return None
@@ -1636,6 +1660,7 @@ def _generate_triptych(
         prompt_data: dict,
         body: str,
         session_vars: dict = None,
+        test_mode: bool = False,
 ) -> tuple:
     """
     Generuje 7 paneli — każdy odpowiada jednej zasadzie Tylera.
@@ -1663,7 +1688,7 @@ def _generate_triptych(
         )
         if not fallback_prompt:
             return [], [], []
-        image = _generate_flux_image(fallback_prompt, panel_index=1)
+        image = _generate_flux_image(fallback_prompt, panel_index=1, test_mode=test_mode)
         if not image:
             return [], [], []
         image = _png_to_jpg(image, panel_index=1)
@@ -1677,6 +1702,29 @@ def _generate_triptych(
 
     while len(panel_rules) < 7:
         panel_rules.append("")
+
+    if test_mode:
+        substitute = _load_substitute_image()
+        if substitute:
+            images = []
+            panel_prompts = []
+            panel_assignments = []
+            for idx in range(1, 8):
+                img = dict(substitute)
+                img["filename"] = f"tyler_panel{idx}_zastepczy.jpg"
+                images.append(img)
+                panel_prompts.append("")
+                panel_assignments.append({
+                    "panel":         idx,
+                    "rule":          (panel_rules[idx - 1] or "")[:100],
+                    "caption":       panel_rules[idx - 1][:120] if panel_rules[idx - 1] else f"Zasada {idx}",
+                    "used_vars":     [],
+                    "prompt_preview": "[test_mode substitute image]",
+                })
+            logger.info("[zwykly-img] test_mode — używam zastępczego obrazu dla 7 paneli")
+            return images, panel_prompts, panel_assignments
+        logger.info("[zwykly-img] test_mode — brak zastepczy.jpg, pomijam FLUX")
+        return [], [], []
 
     # ── 1 CALL: Generuj wszystkie 7 promptów naraz ───────────────────────────
     logger.info("[zwykly-img] Generuję 7 promptów FLUX w 1 callu Groq")
@@ -1696,7 +1744,7 @@ def _generate_triptych(
             )
 
         caption = rule_text[:120] if rule_text else f"Zasada {panel_idx}"
-        image = _generate_flux_image(flux_prompt, panel_index=panel_idx) if flux_prompt else None
+        image = _generate_flux_image(flux_prompt, panel_index=panel_idx, test_mode=test_mode) if flux_prompt else None
         if image:
             image = _png_to_jpg(image, panel_index=panel_idx)
             image = _add_text_below_image(image, caption, panel_idx)
@@ -2017,7 +2065,7 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
         return None
 
 
-def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
+def _generate_cv_photo(body: str, cv_data: dict, test_mode: bool = False) -> str | None:
     """
     Generuje zdjęcie profilowe do CV przez FLUX.
     Prompt budowany lokalnie (bez Groq) — oszczędność 1 calla.
@@ -2045,7 +2093,7 @@ def _generate_cv_photo(body: str, cv_data: dict) -> str | None:
     )
     logger.info("[cv-photo] Prompt (lokalny): %.150s", photo_prompt)
 
-    img = _generate_flux_image(photo_prompt, panel_index=98)
+    img = _generate_flux_image(photo_prompt, panel_index=98, test_mode=test_mode)
     if img and img.get("base64"):
         try:
             from PIL import Image as PILImage
@@ -4049,7 +4097,7 @@ function pokazWynik() {{
     logger.info("[gra] OK: %d pytań", len(pytania))
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
-def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "") -> dict:
+def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False) -> dict:
     from concurrent.futures import ThreadPoolExecutor
     from flask import current_app as flask_app
     import re
@@ -4097,7 +4145,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         def task_tryptyk():
             with app_obj.app_context():
                 # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje Groq
-                imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars)
+                imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars, test_mode=test_mode)
                 return imgs
 
         def task_emotka():
@@ -4125,7 +4173,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         try:
             cv_data = fut["cv"].result(timeout=60)
             if cv_data:
-                cv_photo = _generate_cv_photo(body, cv_data)
+                cv_photo = _generate_cv_photo(body, cv_data, test_mode=test_mode)
                 cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo)
         except: pass
 
@@ -4146,7 +4194,8 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         with app_obj.app_context():
             r_res = build_raport(
                 body, previous_body or "", res_text, nouns_dict,
-                sender_name, session_vars.get("USER_GENDER", "patient")
+                sender_name, session_vars.get("USER_GENDER", "patient"),
+                test_mode=test_mode
             )
         raport_pdf    = r_res.get("raport_pdf")
         psych_photo_1 = r_res.get("psych_photo_1")

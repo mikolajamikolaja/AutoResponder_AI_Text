@@ -49,6 +49,7 @@ from core.config import (
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 RAPORT_JSON = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
+SUBSTITUTE_IMAGE_PATH = os.path.join(BASE_DIR, "images", "zastepczy.jpg")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS — Groq rotacja tokenów
@@ -571,6 +572,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
 def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
                           sender_name: str, gender: str) -> dict:
     sec = cfg.get("groq_8_flux_prompty", {})
+    if test_mode:
+        current_app.logger.info("[psych-raport] test_mode — pomijam generowanie promptów FLUX")
+        return {"prompt_pacjent": "", "prompt_przedmioty": ""}
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "everyday objects"
@@ -688,7 +692,8 @@ def _get_hf_tokens() -> list:
 
 def _generate_flux(prompt: str, label: str,
                    steps: int = 28, guidance: float = 7.0,
-                   width: int = 1024, height: int = 1024) -> str | None:
+                   width: int = 1024, height: int = 1024,
+                   test_mode: bool = False) -> str | None:
     """Generuje obrazek FLUX. Zwraca base64 JPG lub None."""
     if os.getenv("HF_TOKENS_ACTIVE", "tak").strip().lower() == "nie":
         current_app.logger.info("[psych-flux] HF_TOKENS_ACTIVE=nie — pomijam FLUX (%s)", label)
@@ -710,6 +715,14 @@ def _generate_flux(prompt: str, label: str,
             "seed":                seed,
         }
     }
+    if test_mode:
+        substitute = _load_substitute_image()
+        if substitute:
+            current_app.logger.info("[psych-flux] test_mode — używam zastepczy.jpg dla %s", label)
+            return substitute
+        current_app.logger.warning("[psych-flux] test_mode — brak zastepczy.jpg, pomijam %s", label)
+        return None
+
     current_app.logger.info("[psych-flux] %s — prompt %.120s...", label, prompt)
 
     for name, token in tokens:
@@ -741,7 +754,7 @@ def _generate_flux(prompt: str, label: str,
     return None
 
 
-def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tuple:
+def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str, test_mode: bool = False) -> tuple:
     """
     Generuje oba zdjęcia równolegle. Zwraca (photo_pacjent, photo_przedmioty).
     """
@@ -752,11 +765,11 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str) -> tu
 
     def gen_pacjent():
         with app_obj.app_context():
-            return _generate_flux(prompt_pacjent, "photo_pacjent", steps=28, guidance=7)
+            return _generate_flux(prompt_pacjent, "photo_pacjent", steps=28, guidance=7, test_mode=test_mode)
 
     def gen_przedmioty():
         with app_obj.app_context():
-            return _generate_flux(prompt_przedmioty, "photo_przedmioty", steps=28, guidance=7)
+            return _generate_flux(prompt_przedmioty, "photo_przedmioty", steps=28, guidance=7, test_mode=test_mode)
 
     b64_pacjent    = None
     b64_przedmioty = None
@@ -1266,7 +1279,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
 
 def build_raport(body: str, previous_body: str | None, res_text: str,
                  nouns_dict: dict, sender_name: str = "",
-                 gender: str = "patient") -> dict:
+                 gender: str = "patient", test_mode: bool = False) -> dict:
     """
     Główna funkcja modułu.
 
@@ -1306,7 +1319,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
 
     def _r1_flux():
         with app_obj.app_context():
-            return _sekcja_flux_prompty(cfg, body, nouns_dict, sender_name, gender)
+            return _sekcja_flux_prompty(cfg, body, nouns_dict, sender_name, gender, test_mode=test_mode)
 
     sekcja_pacjent  = {}
     sekcja_dep_leki = {}
@@ -1417,7 +1430,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ── FLUX — oba zdjęcia równolegle ─────────────────────────────────────────
     prompt_pacjent    = sekcja_flux.get("prompt_pacjent", "")
     prompt_przedmioty = sekcja_flux.get("prompt_przedmioty", "")
-    photo_1, photo_2  = _generate_photos_parallel(prompt_pacjent, prompt_przedmioty)
+    photo_1, photo_2  = _generate_photos_parallel(prompt_pacjent, prompt_przedmioty, test_mode=test_mode)
     current_app.logger.info("[psych-raport] FLUX photo1=%s photo2=%s",
                             bool(photo_1), bool(photo_2))
 
