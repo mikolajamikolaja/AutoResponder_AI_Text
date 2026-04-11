@@ -8,6 +8,8 @@ import time
 import requests
 from flask import current_app
 
+from core.logging_reporter import get_logger
+
 DEEPSEEK_API_KEY = os.getenv("API_KEY_DEEPSEEK")
 MODEL_BIZ        = os.getenv("MODEL_BIZ",   "deepseek-chat")
 MODEL_TYLER      = os.getenv("MODEL_TYLER", "deepseek-chat")
@@ -110,6 +112,8 @@ def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
                 current_app.logger.warning(
                     "API rate limit (429), próba %d/%d", attempt, max_retries
                 )
+                logger = get_logger()
+                logger.log_api_call("deepseek", model=model_name, success=False, error="RATE_LIMIT")
                 if attempt < max_retries:
                     wait = min(retry_delay * attempt, 30.0)  # cap 30s
                     current_app.logger.warning("Czekam %.0fs przed kolejną próbą", wait)
@@ -122,11 +126,15 @@ def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
                 current_app.logger.warning(
                     "API non-200 (%s): %s", resp.status_code, resp.text[:500]
                 )
+                logger = get_logger()
+                logger.log_api_call("deepseek", model=model_name, success=False, error=f"HTTP {resp.status_code}")
                 return None  # błędy 4xx/5xx nie mają sensu ponawiać
 
             try:
                 data = resp.json()
             except Exception:
+                logger = get_logger()
+                logger.log_api_call("deepseek", model=model_name, success=True)
                 return sanitize_model_output(resp.text)
 
             try:
@@ -141,6 +149,8 @@ def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
                 if not content:
                     content = json.dumps(data, ensure_ascii=False)
 
+            logger = get_logger()
+            logger.log_api_call("deepseek", model=model_name, success=True)
             return sanitize_model_output(content)
 
         except (requests.exceptions.Timeout,
@@ -149,6 +159,8 @@ def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
                 "API timeout/connection error (próba %d/%d): %s",
                 attempt, max_retries, e
             )
+            logger = get_logger()
+            logger.log_api_call("deepseek", model=model_name, success=False, error=str(e))
             if attempt < max_retries:
                 time.sleep(retry_delay)
             else:
@@ -159,6 +171,8 @@ def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
 
         except Exception as e:
             current_app.logger.exception("Nieoczekiwany błąd API: %s", e)
+            logger = get_logger()
+            logger.log_api_call("deepseek", model=model_name, success=False, error=str(e))
             return None
 
     return None

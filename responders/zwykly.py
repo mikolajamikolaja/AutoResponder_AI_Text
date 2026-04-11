@@ -1665,11 +1665,9 @@ def _generate_triptych(
     """
     Generuje 7 paneli — każdy odpowiada jednej zasadzie Tylera.
     OPTYMALIZACJA: 1 call Groq dla wszystkich 7 promptów naraz (zamiast 7 calli).
-    Obrazki FLUX generowane równolegle (max_workers=7).
+    Obrazki FLUX generowane sekwencyjnie.
     Jeśli HF_TOKEN nie działa → panel pomijany, zwracamy ile wygenerowano.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     if session_vars is None:
         session_vars = {}
 
@@ -1712,16 +1710,19 @@ def _generate_triptych(
             for idx in range(1, 8):
                 img = dict(substitute)
                 img["filename"] = f"tyler_panel{idx}_zastepczy.jpg"
+                # Dodaj napis z zasady na obrazek w test_mode
+                rule_text = (panel_rules[idx - 1] or "")[:120] if panel_rules[idx - 1] else f"Zasada {idx}"
+                img = _add_text_below_image(img, rule_text, idx)
                 images.append(img)
                 panel_prompts.append("")
                 panel_assignments.append({
                     "panel":         idx,
                     "rule":          (panel_rules[idx - 1] or "")[:100],
-                    "caption":       panel_rules[idx - 1][:120] if panel_rules[idx - 1] else f"Zasada {idx}",
+                    "caption":       rule_text,
                     "used_vars":     [],
-                    "prompt_preview": "[test_mode substitute image]",
+                    "prompt_preview": "[test_mode substitute image z napisem zasady]",
                 })
-            logger.info("[zwykly-img] test_mode — używam zastępczego obrazu dla 7 paneli")
+            logger.info("[zwykly-img] test_mode — używam zastępczego obrazu dla 7 paneli (+napisy)")
             return images, panel_prompts, panel_assignments
         logger.info("[zwykly-img] test_mode — brak zastepczy.jpg, pomijam FLUX")
         return [], [], []
@@ -1751,22 +1752,19 @@ def _generate_triptych(
         return panel_idx, image, flux_prompt, [], caption
 
     results = {}
-    logger.info("[zwykly-img] Generuję 7 paneli FLUX równolegle")
+    logger.info("[zwykly-img] Generuję 7 paneli FLUX sekwencyjnie")
 
-    with ThreadPoolExecutor(max_workers=7) as ex:
-        futures = {ex.submit(_gen_panel, i): i for i in range(1, 8)}
-        for fut in as_completed(futures):
-            try:
-                idx, img, prompt, uvars, caption = fut.result(timeout=120)
-                results[idx] = (img, prompt, uvars, caption)
-                if img:
-                    logger.info("[zwykly-img] Panel %d/7 OK", idx)
-                else:
-                    logger.warning("[zwykly-img] Panel %d/7 brak obrazka (HF limit lub brak zasady)", idx)
-            except Exception as e:
-                i = futures[fut]
-                logger.error("[zwykly-img] Panel %d/7 błąd: %s", i, e)
-                results[i] = (None, "", [], f"Zasada {i}")
+    for i in range(1, 8):
+        try:
+            idx, img, prompt, uvars, caption = _gen_panel(i)
+            results[idx] = (img, prompt, uvars, caption)
+            if img:
+                logger.info("[zwykly-img] Panel %d/7 OK", idx)
+            else:
+                logger.warning("[zwykly-img] Panel %d/7 brak obrazka (HF limit lub brak zasady)", idx)
+        except Exception as e:
+            logger.error("[zwykly-img] Panel %d/7 błąd: %s", i, e)
+            results[i] = (None, "", [], f"Zasada {i}")
 
     # Złóż w kolejności 1-7
     images, panel_prompts, panel_assignments = [], [], []
@@ -4098,11 +4096,10 @@ function pokazWynik() {{
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False) -> dict:
-    from concurrent.futures import ThreadPoolExecutor
     from flask import current_app as flask_app
     import re
 
-    logger.info("[zwykly] START - Optymalizacja Równoległa (v2 - oszczędny Groq)")
+    logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2 - oszczędny Groq)")
     app_obj = flask_app._get_current_object()
 
     # --- INICJALIZACJA ---
@@ -4122,11 +4119,8 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             txt, emo = _parse_response(raw)
             return txt, emo, prov, p_data, p_str
 
-    with ThreadPoolExecutor(max_workers=2) as setup_ex:
-        f_nouns = setup_ex.submit(_extract_nouns_groq, body)
-        f_main  = setup_ex.submit(_get_ai_main)
-        nouns_dict = f_nouns.result()
-        res_text, emotion_key, provider, prompt_data, user_msg = f_main.result()
+    nouns_dict = _extract_nouns_groq(body)
+    res_text, emotion_key, provider, prompt_data, user_msg = _get_ai_main()
 
     if not res_text:
         res_text = "### TYLER DURDEN\n\nSystem zawiódł..."
@@ -4135,58 +4129,61 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     for k, v in nouns_dict.items(): session_vars[k.upper()] = v
 
     # ── KROK 2: Zadania bez AI lub z 1 callem Groq każde ─────────────────────
-    # max_workers=5 — nie bombardujemy Groq równolegle
-    # Tryptyk używa teraz 1 calla Groq (zamiast 7)
-    # Emotka — bez Groq (plik lokalny)
-    # CV content — 1 call Groq
-    # Ankieta/Horoskop/RPG/Gra — każdy 1 call Groq, ale sekwencyjnie w swoim wątku
-    # RAPORT — uruchamiamy OSOBNO po tryptyku (4 calle Groq w raport.py)
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        def task_tryptyk():
-            with app_obj.app_context():
-                # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje Groq
-                imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars, test_mode=test_mode)
-                return imgs
+    # Sekwencyjnie, żeby każdy Groq był wykonywany pojedynczo.
+    def task_tryptyk():
+        with app_obj.app_context():
+            # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje Groq
+            imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars, test_mode=test_mode)
+            return imgs
 
-        def task_emotka():
-            with app_obj.app_context():
-                # _generate_icon_flux nie używa już Groq — zwraca plik lokalny
-                return _generate_icon_flux(body, emotion_key) or read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
+    def task_emotka():
+        with app_obj.app_context():
+            # _generate_icon_flux nie używa już Groq — zwraca plik lokalny
+            return _generate_icon_flux(body, emotion_key) or read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
 
-        fut = {
-            "tryptyk": ex.submit(task_tryptyk),
-            "emotka":  ex.submit(task_emotka),
-            "cv":      ex.submit(lambda: _generate_cv_content(body, previous_body, sender_email)),
-            "ankieta": ex.submit(lambda: _build_ankieta(res_text, body)),
-            "horo":    ex.submit(lambda: _build_horoskop(body, res_text)),
-            "rpg":     ex.submit(lambda: _build_karta_rpg(body, res_text)),
-            "gra":     ex.submit(lambda: _build_gra_html(body, res_text)),
-            "expl":    ex.submit(lambda: _build_explanation_txt(res_text, body))
-        }
+    try:
+        triptych_images = task_tryptyk()
+    except Exception:
+        triptych_images = []
 
-        try: triptych_images = fut["tryptyk"].result(timeout=240)
-        except: triptych_images = []
+    try:
+        png_b64 = task_emotka()
+    except Exception:
+        png_b64 = None
 
-        try: png_b64 = fut["emotka"].result(timeout=30)
-        except: pass
+    # Emotyka została usunięta z odpowiedzi
+    png_b64 = None
 
-        try:
-            cv_data = fut["cv"].result(timeout=60)
-            if cv_data:
-                cv_photo = _generate_cv_photo(body, cv_data, test_mode=test_mode)
-                cv_pdf_b64 = _build_cv_pdf(cv_data, cv_photo)
-        except: pass
+    try:
+        # CV PDF zostało usunięte z odpowiedzi
+        pass
+    except Exception:
+        cv_data = None
 
-        try: ankieta_html, ankieta_pdf = fut["ankieta"].result(timeout=60)
-        except: pass
-        try: horoskop_pdf = fut["horo"].result(timeout=60)
-        except: pass
-        try: karta_rpg_pdf = fut["rpg"].result(timeout=60)
-        except: pass
-        try: gra_html = fut["gra"].result(timeout=60)
-        except: pass
-        try: explanation_txt = fut["expl"].result(timeout=40)
-        except: pass
+    try:
+        ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
+    except Exception:
+        pass
+
+    try:
+        horoskop_pdf = _build_horoskop(body, res_text)
+    except Exception:
+        pass
+
+    try:
+        karta_rpg_pdf = _build_karta_rpg(body, res_text)
+    except Exception:
+        pass
+
+    try:
+        gra_html = _build_gra_html(body, res_text)
+    except Exception:
+        pass
+
+    try:
+        explanation_txt = _build_explanation_txt(res_text, body)
+    except Exception:
+        pass
 
     # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
     # Uruchamiamy po KROK 2, żeby nie rywalizować o klucze Groq z tryptyk/ankieta/horo/rpg/gra
@@ -4210,8 +4207,6 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
 
     return {
         "reply_html": build_html_reply(res_text),
-        "emoticon": {"base64": png_b64, "content_type": "image/png", "filename": f"emo_{emotion_key}.png"} if png_b64 else None,
-        "cv_pdf": {"base64": cv_pdf_b64, "content_type": "application/pdf", "filename": f"CV_{safe_name}.pdf"} if cv_pdf_b64 else None,
         "raport_pdf": raport_pdf,
         "psych_photo_1": psych_photo_1,
         "psych_photo_2": psych_photo_2,

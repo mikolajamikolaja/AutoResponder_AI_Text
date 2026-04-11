@@ -1,0 +1,163 @@
+================================================================================
+RAPORT WYKONANIA PROGRAMU
+Data/Czas: 2026-04-11 10:45:32
+================================================================================
+
+[00:00] INPUT
+  sender: john.doe@example.com
+  sender_name: John Doe
+  subject: Czy możesz mi pomóc?
+  body_length: 245
+  body_preview: Dzień dobry, mam problem z moim projektem. Chciałbym wiedzieć jak mogę to rozwiązać...
+
+[00:01] VARIABLES_DETECTED
+  sender: john.doe@example.com
+  sender_name: John Doe
+  has_previous_body: true
+  has_previous_subject: true
+  num_attachments: 0
+  save_to_drive: false
+  test_mode: false
+  is_retry: false
+  attempt_count: 1
+
+[00:02] DECISION
+  decision: previous_body_exists
+  condition: bool(previous_body or previous_subject)
+  result: true
+  reason: Znaleziono poprzednią wiadomość - zostanie wygenerowane nawiazanie
+
+[00:03] STEP
+  step: build_nawiazanie_section
+  status: running
+  timestamp: 0.15
+
+[00:05] API_CALL
+  api: Groq
+  model: mixtral-8b-7b-instruct-v0.1
+  tokens_used: 450
+  duration_sec: 2.34
+  success: true
+
+[00:07] DECISION
+  decision: nawiazanie_success
+  condition: bool(nawiazanie_result and nawiazanie_result.get('has_history'))
+  result: true
+  reason: Nawiazanie pomyślnie wygenerowane
+
+[00:08] STEP
+  step: skip_zwykly_because_nawiazanie_exists
+  status: completed
+  should_skip_zwykly: true
+  reason: Wybraliśmy TYLKO nawiazanie (Bot Tylera) zamiast wysyłać zwykly oddzielnie
+
+[00:10] STEP
+  step: generate_triptych_panels
+  status: running
+  timestamp: 0.45
+
+[00:12] API_CALL
+  api: Groq
+  model: mixtral-8b-7b-instruct-v0.1
+  tokens_used: 890
+  duration_sec: 3.12
+  success: true
+  details: Generacja 7 promptów FLUX w jednym callku
+
+[00:15] STEP
+  step: generate_flux_images
+  status: running
+  timestamp: 0.78
+  images_total: 7
+  mode: sequential
+
+[00:16] API_CALL
+  api: HuggingFace_FLUX
+  model: FLUX.1-schnell
+  tokens_used: 0
+  duration_sec: 4.56
+  success: true
+  details: Panel 1/7 wygenerowany
+
+[00:21] API_CALL
+  api: HuggingFace_FLUX
+  model: FLUX.1-schnell
+  tokens_used: 0
+  duration_sec: 4.23
+  success: true
+  details: Panel 2/7 wygenerowany
+
+... [skrót dla paneli 3-7] ...
+
+[00:48] TIMING
+  operation: triptych_generation_total
+  duration_sec: 15.34
+
+[00:50] SECTION_RESULT
+  section: zwykly
+  success: true
+  reply_html_length: 3245
+  triptych_images: 7
+  attachments_count: 0
+
+[00:52] DECISION
+  decision: test_mode_check
+  condition: bool(test_mode)
+  result: false
+  reason: Tryb produkcji - używamy FLUX
+
+[00:55] STEP
+  step: save_to_google_drive
+  status: running
+  timestamp: 1.45
+
+[00:57] API_CALL
+  api: GoogleDrive
+  model: files.create
+  tokens_used: 0
+  duration_sec: 1.23
+  success: true
+  details: Plik tyler_panel1.jpg zapisany
+
+... [skrót dla pozostałych plików] ...
+
+[01:12] STEP
+  step: save_to_history_sheet
+  status: running
+  timestamp: 1.89
+
+[01:14] API_CALL
+  api: GoogleSheets
+  model: values.update
+  tokens_used: 0
+  duration_sec: 0.87
+  success: true
+  details: Historia zapisana do HISTORY_SHEET_ID
+
+[01:15] STEP
+  step: webhook_response_preparation
+  status: completed
+  total_sections: 1
+  sections: ['nawiazanie']
+
+================================================================================
+PODSUMOWANIE
+================================================================================
+Całkowity czas: 1.45 sekund
+Liczba wpisów: 35
+
+Wywołania API:
+  ✓ Groq (2 calle)
+  ✓ HuggingFace_FLUX (7 calli)
+  ✓ GoogleDrive (1 call)
+  ✓ GoogleSheets (1 call)
+
+Decyzje:
+  ✓ previous_body_exists: true → wybraliśmy nawiazanie
+  ✓ nawiazanie_success: true
+  ✓ skip_zwykly_because_nawiazanie_exists: true → wysłaliśmy TYLKO nawiazanie
+  ✓ test_mode_check: false → tryb produkcji
+
+Błędy: 0
+
+================================================================================

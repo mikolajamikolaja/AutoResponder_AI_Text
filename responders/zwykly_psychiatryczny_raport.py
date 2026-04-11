@@ -8,7 +8,7 @@ Moduł obsługujący CAŁY pipeline raportu psychiatrycznego:
                             #4a tydzień2 dni 8-11 | #4b tydzień2 dni 12-14 | #5 wypis
       Runda 3: #7a zalecenia+rokowanie | #7b notatki_pielegniarek | #7c notatki_sprzataczki+incydenty
   - 2 wywołania DeepSeek (tone check + completeness check, merge JSON)
-  - 2 zdjęcia FLUX równolegle (ThreadPoolExecutor)
+  - 2 zdjęcia FLUX generowane sekwencyjnie
   - Budowanie DOCX (python-docx)
   - Zwraca dict: {raport_pdf, psych_photo_1, psych_photo_2}
 
@@ -29,7 +29,6 @@ import random
 import requests
 import time
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
@@ -42,6 +41,7 @@ from core.config import (
     HF_TIMEOUT,
     MAX_DLUGOSC_EMAIL,
 )
+from core.logging_reporter import get_logger
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ŚCIEŻKI
@@ -80,11 +80,19 @@ def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 3000) 
     try:
         resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=45)
         if resp.status_code == 200:
+            logger = get_logger()
+            logger.log_api_call("groq", model=GROQ_MODEL, success=True)
             return resp.json()["choices"][0]["message"]["content"].strip()
         if resp.status_code == 429:
+            logger = get_logger()
+            logger.log_api_call("groq", model=GROQ_MODEL, success=False, error="RATE_LIMIT")
             return "RATE_LIMIT"
+        logger = get_logger()
+        logger.log_api_call("groq", model=GROQ_MODEL, success=False, error=f"HTTP {resp.status_code}")
         current_app.logger.warning("[psych-raport] Groq HTTP %d", resp.status_code)
     except Exception as e:
+        logger = get_logger()
+        logger.log_api_call("groq", model=GROQ_MODEL, success=False, error=str(e))
         current_app.logger.warning("[psych-raport] Groq wyjątek: %s", e)
     return None
 
@@ -92,31 +100,29 @@ def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 3000) 
 def _call_groq_with_retry(system: str, user: str, max_tokens: int = 3000,
                            section_name: str = "?", max_attempts: int = 3) -> str | None:
     """
-    Wywołuje Groq z rotacją kluczy. Każdy klucz próbuje max_attempts razy.
-    Zwraca odpowiedź lub None jeśli wszystkie klucze zawiodły.
+    Wywołuje Groq z rotacją kluczy — metoda z test groq.py.
+    Dla każdego klucza próbuje raz, jeśli RATE_LIMIT lub błąd, przechodzi do następnego.
     """
     keys = _get_groq_keys()
     if not keys:
         current_app.logger.error("[psych-raport] Brak kluczy Groq dla sekcji %s", section_name)
         return None
 
-    for attempt in range(max_attempts):
-        for name, key in keys:
-            result = _call_groq_single(key, system, user, max_tokens)
-            if result and result != "RATE_LIMIT":
-                current_app.logger.info("[psych-raport] %s OK (klucz=%s attempt=%d)",
-                                        section_name, name, attempt + 1)
-                return result
-            if result == "RATE_LIMIT":
-                current_app.logger.warning("[psych-raport] %s RATE_LIMIT klucz=%s → następny",
-                                           section_name, name)
-                time.sleep(1)
-                continue
-        current_app.logger.warning("[psych-raport] %s — wszystkie klucze zawiodły attempt=%d/%d",
-                                   section_name, attempt + 1, max_attempts)
+    for name, key in keys:
+        result = _call_groq_single(key, system, user, max_tokens)
+        if result and result != "RATE_LIMIT":
+            current_app.logger.info("[psych-raport] %s OK (klucz=%s)",
+                                    section_name, name)
+            return result
+        if result == "RATE_LIMIT":
+            current_app.logger.warning("[psych-raport] %s RATE_LIMIT klucz=%s → następny",
+                                       section_name, name)
+        else:
+            current_app.logger.warning("[psych-raport] %s błąd klucz=%s → następny",
+                                       section_name, name)
 
-    current_app.logger.error("[psych-raport] %s — brak odpowiedzi po %d próbach",
-                             section_name, max_attempts)
+    current_app.logger.error("[psych-raport] %s — wszystkie klucze zawiodły",
+                             section_name)
     return None
 
 
@@ -197,6 +203,102 @@ def _load_substitute_image() -> dict | None:
     except Exception as e:
         current_app.logger.warning("[psych-test] Błąd odczytu zastepczy.jpg: %s", e)
         return None
+
+
+def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
+    """
+    Rozszerza obrazek o 18% na dole i dopisuje tekst Pillow.
+    Zwraca nowy dict z zaktualizowanym base64/filename.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        raw = base64.b64decode(image_obj["base64"])
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        W, H = img.size
+
+        # Pasek na dole — 18% wysokości, min 80px
+        bar_h = max(80, int(H * 0.18))
+        new_img = Image.new("RGB", (W, H + bar_h), (10, 10, 10))
+        new_img.paste(img, (0, 0))
+
+        draw = ImageDraw.Draw(new_img)
+
+        PADDING = 24
+        max_w = W - PADDING * 2
+
+        def load_font(size):
+            for font_path in [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+            ]:
+                try:
+                    return ImageFont.truetype(font_path, size)
+                except Exception:
+                    continue
+            return ImageFont.load_default()
+
+        def wrap_text(txt, fnt, max_px):
+            words = txt.split()
+            lines_out = []
+            current = ""
+            for word in words:
+                test = (current + " " + word).strip()
+                bbox = draw.textbbox((0, 0), test, font=fnt)
+                if bbox[2] - bbox[0] <= max_px:
+                    current = test
+                else:
+                    if current:
+                        lines_out.append(current)
+                    current = word
+            if current:
+                lines_out.append(current)
+            return lines_out
+
+        # Dobierz font_size tak żeby tekst zmieścił się w max 4 liniach w pasku
+        font_size = max(10, bar_h // 4)
+        for attempt in range(14):
+            font = load_font(font_size)
+            lines_out = wrap_text(text, font, max_w)
+            line_h = font_size + 6
+            total_h = len(lines_out) * line_h
+            if total_h <= bar_h - 8 and len(lines_out) <= 4:
+                break
+            font_size = max(10, font_size - 2)
+
+        lines_out = lines_out[:4]
+
+        # Rysuj tekst — wyśrodkowany w pasku
+        line_h = font_size + 6
+        total_text_h = len(lines_out) * line_h
+        y = H + (bar_h - total_text_h) // 2
+        for line in lines_out:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            tw = bbox[2] - bbox[0]
+            x = (W - tw) // 2
+            # cień
+            draw.text((x + 1, y + 1), line, font=font, fill=(0, 0, 0))
+            draw.text((x, y), line, font=font, fill=(220, 210, 180))
+            y += line_h
+
+        buf = io.BytesIO()
+        new_img.save(buf, format="JPEG", quality=85, optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"psych_{ts}_substitute.jpg"
+
+        result = dict(image_obj)
+        result["base64"] = b64
+        result["filename"] = filename
+        result["size_jpg"] = f"{len(buf.getvalue()) // 1024}KB"
+        result["caption"] = text
+        return result
+
+    except Exception as e:
+        current_app.logger.warning("[psych-txt] Błąd dopisywania tekstu: %s", e)
+        return image_obj
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -735,8 +837,11 @@ def _generate_flux(prompt: str, label: str,
     if test_mode:
         substitute = _load_substitute_image()
         if substitute:
+            # Dodaj tekst na dole jak w obrazkach Flux
+            caption = "pacjent" if label == "photo_pacjent" else "przedmioty"
+            substitute = _add_text_below_image(substitute, f"Zdjęcie zastępcze - {caption}", 0)
             current_app.logger.info("[psych-flux] test_mode — używam zastepczy.jpg dla %s", label)
-            return substitute
+            return substitute.get("base64")
         current_app.logger.warning("[psych-flux] test_mode — brak zastepczy.jpg, pomijam %s", label)
         return None
 
@@ -792,23 +897,26 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str, test_
     b64_przedmioty = None
 
     try:
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f1 = ex.submit(gen_pacjent)
-            f2 = ex.submit(gen_przedmioty)
-            try:
-                b64_pacjent    = f1.result(timeout=120)
-            except Exception as e:
-                current_app.logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
-            try:
-                b64_przedmioty = f2.result(timeout=120)
-            except Exception as e:
-                current_app.logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
+        try:
+            b64_pacjent = gen_pacjent()
+        except Exception as e:
+            current_app.logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
+        try:
+            b64_przedmioty = gen_przedmioty()
+        except Exception as e:
+            current_app.logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
     except Exception as e:
-        current_app.logger.error("[psych-flux] Błąd ThreadPoolExecutor: %s", e)
+        current_app.logger.error("[psych-flux] Błąd generowania zdjęć: %s", e)
 
     def _wrap(b64, suffix):
         if not b64:
             return None
+        if isinstance(b64, dict):
+            return {
+                "base64":       b64.get("base64"),
+                "content_type": b64.get("content_type", "image/jpeg"),
+                "filename":     b64.get("filename", f"psych_{suffix}_{ts}.jpg"),
+            }
         return {
             "base64":       b64,
             "content_type": "image/jpeg",
@@ -1343,27 +1451,25 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     sekcja_diagnozy = {}
     sekcja_flux     = {}
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {
-            "pacjent":  ex.submit(_r1_pacjent),
-            "depozyt":  ex.submit(_r1_depozyt),
-            "diagnozy": ex.submit(_r1_diagnozy),
-            "flux":     ex.submit(_r1_flux),
-        }
-        for name, fut in futures.items():
-            try:
-                result = fut.result(timeout=90)
-                if name == "pacjent":
-                    sekcja_pacjent  = result
-                elif name == "depozyt":
-                    sekcja_dep_leki = result
-                elif name == "diagnozy":
-                    sekcja_diagnozy = result
-                elif name == "flux":
-                    sekcja_flux     = result
-                current_app.logger.info("[psych-raport] Runda1 %s OK", name)
-            except Exception as e:
-                current_app.logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
+    for name, fn in [
+        ("pacjent", _r1_pacjent),
+        ("depozyt", _r1_depozyt),
+        ("diagnozy", _r1_diagnozy),
+        ("flux", _r1_flux),
+    ]:
+        try:
+            result = fn()
+            if name == "pacjent":
+                sekcja_pacjent  = result
+            elif name == "depozyt":
+                sekcja_dep_leki = result
+            elif name == "diagnozy":
+                sekcja_diagnozy = result
+            elif name == "flux":
+                sekcja_flux     = result
+            current_app.logger.info("[psych-raport] Runda1 %s OK", name)
+        except Exception as e:
+            current_app.logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
 
     data_przyjecia = sekcja_pacjent.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
     leki_lista     = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
@@ -1389,25 +1495,23 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     dni_8_14     = []
     sekcja_wypis = {}
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        futures2 = {
-            "tydzien1": ex.submit(_r2_tydzien1),
-            "tydzien2": ex.submit(_r2_tydzien2),
-            "wypis":    ex.submit(_r2_wypis),
-        }
-        for name, fut in futures2.items():
-            try:
-                result = fut.result(timeout=120)
-                if name == "tydzien1":
-                    dni_1_7      = result
-                elif name == "tydzien2":
-                    dni_8_14     = result
-                elif name == "wypis":
-                    sekcja_wypis = result
-                current_app.logger.info("[psych-raport] Runda2 %s OK (%s elementów)",
-                                        name, len(result) if isinstance(result, list) else "?")
-            except Exception as e:
-                current_app.logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
+    for name, fn in [
+        ("tydzien1", _r2_tydzien1),
+        ("tydzien2", _r2_tydzien2),
+        ("wypis", _r2_wypis),
+    ]:
+        try:
+            result = fn()
+            if name == "tydzien1":
+                dni_1_7      = result
+            elif name == "tydzien2":
+                dni_8_14     = result
+            elif name == "wypis":
+                sekcja_wypis = result
+            current_app.logger.info("[psych-raport] Runda2 %s OK (%s elementów)",
+                                    name, len(result) if isinstance(result, list) else "?")
+        except Exception as e:
+            current_app.logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
 
     # ══════════════════════════════════════════════════════════════════════════
     # RUNDA 3 — zalecenia/notatki/incydenty (trzy wywołania równolegle)

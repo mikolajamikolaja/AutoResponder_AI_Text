@@ -15,6 +15,16 @@ Zmienne środowiskowe (Render → Environment):
   Metoda A (Service Account):
     GMAIL_SERVICE_ACCOUNT_JSON — cała zawartość pliku JSON service account
                                   (jako jedna linia, skopiuj z pliku .json)
+    lub oddzielne zmienne środowiskowe Render:
+      GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY
+      GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL
+      GMAIL_SERVICE_ACCOUNT_PROJECT_ID
+      GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID
+      GMAIL_SERVICE_ACCOUNT_CLIENT_ID
+      GMAIL_SERVICE_ACCOUNT_AUTH_URI
+      GMAIL_SERVICE_ACCOUNT_TOKEN_URI
+      GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL
+      GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL
 
   Metoda B (OAuth2 Refresh Token):
     GMAIL_CLIENT_ID        — OAuth2 Client ID z Google Cloud Console
@@ -41,7 +51,18 @@ SMTP_USER      = os.getenv("SMTP_USER", "")
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Bot")
 
 # Metoda A — Service Account
-_SA_JSON_STR = os.getenv("GMAIL_SERVICE_ACCOUNT_JSON", "")
+_SA_JSON_STR = os.getenv("GMAIL_SERVICE_ACCOUNT_JSON", "").strip()
+
+_GMAIL_SERVICE_ACCOUNT_TYPE = os.getenv("GMAIL_SERVICE_ACCOUNT_TYPE", "service_account").strip()
+_GMAIL_SERVICE_ACCOUNT_PROJECT_ID = os.getenv("GMAIL_SERVICE_ACCOUNT_PROJECT_ID", "").strip()
+_GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID = os.getenv("GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID", "").strip()
+_GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY = os.getenv("GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY", "").replace("\\n", "\n").strip()
+_GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL = os.getenv("GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL", "").strip()
+_GMAIL_SERVICE_ACCOUNT_CLIENT_ID = os.getenv("GMAIL_SERVICE_ACCOUNT_CLIENT_ID", "").strip()
+_GMAIL_SERVICE_ACCOUNT_AUTH_URI = os.getenv("GMAIL_SERVICE_ACCOUNT_AUTH_URI", "https://accounts.google.com/o/oauth2/auth").strip()
+_GMAIL_SERVICE_ACCOUNT_TOKEN_URI = os.getenv("GMAIL_SERVICE_ACCOUNT_TOKEN_URI", "https://oauth2.googleapis.com/token").strip()
+_GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL = os.getenv("GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs").strip()
+_GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL = os.getenv("GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL", "").strip()
 
 # Metoda B — OAuth2 Refresh Token
 _CLIENT_ID     = os.getenv("GMAIL_CLIENT_ID", "")
@@ -54,13 +75,42 @@ GMAIL_SCOPES   = ["https://www.googleapis.com/auth/gmail.send"]
 
 # ── AUTORYZACJA ───────────────────────────────────────────────────────────────
 
+def _load_gmail_service_account():
+    if _SA_JSON_STR:
+        try:
+            return json.loads(_SA_JSON_STR)
+        except json.JSONDecodeError:
+            logger.error("[gmail] Nieprawidłowe GMAIL_SERVICE_ACCOUNT_JSON")
+            return None
+
+    if not _GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY or not _GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL:
+        return None
+
+    return {
+        "type": _GMAIL_SERVICE_ACCOUNT_TYPE,
+        "project_id": _GMAIL_SERVICE_ACCOUNT_PROJECT_ID,
+        "private_key_id": _GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID,
+        "private_key": _GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY,
+        "client_email": _GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL,
+        "client_id": _GMAIL_SERVICE_ACCOUNT_CLIENT_ID,
+        "auth_uri": _GMAIL_SERVICE_ACCOUNT_AUTH_URI,
+        "token_uri": _GMAIL_SERVICE_ACCOUNT_TOKEN_URI,
+        "auth_provider_x509_cert_url": _GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL,
+        "client_x509_cert_url": _GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL,
+    }
+
+
 def _get_access_token_service_account() -> Optional[str]:
     """Pobiera access token przez Service Account + JWT (metoda A)."""
     try:
         import time
         import jwt  # pip install PyJWT cryptography
 
-        sa  = json.loads(_SA_JSON_STR)
+        sa = _load_gmail_service_account()
+        if not sa:
+            logger.error("[gmail] Brak konfiguracji Service Account dla Gmail API")
+            return None
+
         now = int(time.time())
         payload = {
             "iss":   sa["client_email"],
@@ -223,6 +273,7 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
         "karta_rpg_pdf", "raport_pdf", "debug_txt",
         "explanation_txt", "plakat_svg", "gra_html",
         "image", "image2", "prompt1_txt", "prompt2_txt",
+        "log_svg", "log_txt",
     ]
 
     # Pola listowe (każde to lista dict-ów z kluczem "base64")

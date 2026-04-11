@@ -27,11 +27,11 @@ import os
 import base64
 import io
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 import requests
 
 from drive_utils import upload_file_to_drive, update_sheet_with_data, save_to_history_sheet
+from core.logging_reporter import init_logger, get_logger
 
 
 from responders.zwykly        import build_zwykly_section
@@ -50,33 +50,38 @@ app = Flask(__name__)
 
 
 def _run_parallel(tasks: dict, flask_app) -> dict:
-    """Uruchamia słownik {klucz: lambda} równolegle, zwraca {klucz: wynik}."""
+    """Uruchamia słownik {klucz: lambda} sekwencyjnie, zwraca {klucz: wynik}."""
     results = {}
-    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = {executor.submit(fn): key for key, fn in tasks.items()}
-        for future in as_completed(futures):
-            key = futures[future]
-            try:
-                results[key] = future.result()
-            except Exception as e:
-                flask_app.logger.error(
-                    "Błąd responderu '%s': %s\n%s", key, e, traceback.format_exc()
-                )
-                results[key] = {}
+    for key, fn in tasks.items():
+        try:
+            results[key] = fn()
+        except Exception as e:
+            flask_app.logger.error(
+                "Błąd responderu '%s': %s\n%s", key, e, traceback.format_exc()
+            )
+            results[key] = {}
     return results
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    # Inicjalizuj logger dla tego żądania
+    logger = init_logger()
+    
     data = request.json or {}
     body = data.get("body", "")
 
     if not body or not body.strip():
+        logger.log_decision("empty_body_check", "body.strip() == ''", False)
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
 
+    # Loguj oryginalną wiadomość
+    sender = data.get("sender", "")
+    sender_name = data.get("sender_name", "")
+    subject = data.get("subject", "")
+    logger.log_input(sender, subject, body, sender_name)
+
     # ── Pola nadawcy i historia ───────────────────────────────────────────────
-    sender           = data.get("sender",      "")
-    sender_name      = data.get("sender_name", "")
     previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None
     attachments      = data.get("attachments")      or []
@@ -84,6 +89,19 @@ def webhook():
     test_mode        = bool(data.get("test_mode"))
     retry_responders = data.get("retry_responders") or []
     attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
+
+    # Loguj zmienne
+    logger.log_variables_detected({
+        "sender": sender,
+        "sender_name": sender_name,
+        "has_previous_body": bool(previous_body),
+        "has_previous_subject": bool(previous_subject),
+        "num_attachments": len(attachments),
+        "save_to_drive": save_to_drive,
+        "test_mode": test_mode,
+        "is_retry": bool(retry_responders),
+        "attempt_count": attempt_count,
+    })
 
     # ── Konfiguracja Drive ───────────────────────────────────────────────────
     drive_folder_id = os.getenv("DRIVE_FOLDER_ID")
@@ -111,7 +129,8 @@ def webhook():
     requested_sections = set(retry_responders) if is_retry else set()
     if not is_retry:
         if wants_text_reply:
-            requested_sections.update(["zwykly", "biznes"])
+            # requested_sections.update(["zwykly", "biznes"])  # Wyłączone
+            pass
         if wants_scrabble:
             requested_sections.add("scrabble")
         if wants_nawiazanie:
@@ -153,7 +172,7 @@ def webhook():
             subject    = f"Re: {previous_subject or 'Twoja wiadomość'}",
             html_body  = html_fala1,
             zalaczniki = zbierz_zalaczniki_z_response(
-                {k: response_data[k] for k in ("zwykly", "biznes", "scrabble")
+                {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "log")
                  if k in response_data}
             ),
         )
@@ -220,6 +239,31 @@ def webhook():
     if wave2:
         response_data.update(_run_parallel(wave2, flask_app))
 
+        # ── Generuj logi ──────────────────────────────────────────────────────
+        logger = get_logger()
+        groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
+        deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
+        nouns = []  # Jeśli analiza wykrywa nouns, dodać tutaj
+
+        log_txt_content = f"Podsumowanie wykonania:\n- Groq użyty: {groq_count} razy\n- DeepSeek użyty: {deepseek_count} razy\n- Rzeczowniki wykryte: {', '.join(nouns) if nouns else 'brak'}\n"
+        log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
+        response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
+
+        svg_content = '''<svg width="500" height="100" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#000"/>
+    </marker>
+  </defs>
+  <text x="10" y="30" font-size="16" font-family="Arial">Email received</text>
+  <line x1="120" y1="25" x2="180" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="190" y="30" font-size="16" font-family="Arial">Processing</text>
+  <line x1="280" y1="25" x2="340" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="350" y="30" font-size="16" font-family="Arial">Response sent</text>
+</svg>'''
+        log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
+        response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
+
         # ── WYSYŁKA PO FALI 2 ─────────────────────────────────────────────────
         html_fala2 = "".join(filter(None, [
             response_data.get("obrazek",       {}).get("reply_html", ""),
@@ -235,7 +279,7 @@ def webhook():
             html_body  = html_fala2 or "<p>Załączniki z drugiej fali.</p>",
             zalaczniki = zbierz_zalaczniki_z_response(
                 {k: response_data[k] for k in
-                 ("obrazek", "emocje", "analiza", "generator_pdf", "smierc")
+                 ("obrazek", "emocje", "analiza", "generator_pdf", "smierc", "log")
                  if k in response_data}
             ),
         )
@@ -256,7 +300,8 @@ def webhook():
     if not is_retry:
         requested_sections = set()
         if wants_text_reply:
-            requested_sections.update(["zwykly", "biznes"])
+            # requested_sections.update(["zwykly", "biznes"])  # Wyłączone
+            pass
         if wants_scrabble:
             requested_sections.add("scrabble")
         if wants_analiza:
@@ -381,6 +426,9 @@ def webhook():
         sender_name or sender or "(brak)",
     )
 
+    # Finalizuj logger
+    logger.finalize()
+
     return jsonify(response_data), 200
 
 
@@ -403,11 +451,8 @@ def webhook_gif():
     def gen_gif2():
         return make_gif(png2_b64) if png2_b64 else None
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future_gif1 = executor.submit(gen_gif1)
-        future_gif2 = executor.submit(gen_gif2)
-        gif1_b64    = future_gif1.result()
-        gif2_b64    = future_gif2.result()
+    gif1_b64 = gen_gif1()
+    gif2_b64 = gen_gif2()
 
     app.logger.info("/webhook_gif — GIFy: gif1=%s gif2=%s",
                     bool(gif1_b64), bool(gif2_b64))

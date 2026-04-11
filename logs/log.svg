@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1200 1400" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 24px; font-weight: bold; text-anchor: middle; }
+      .step-box { fill: #e1f5ff; stroke: #01579b; stroke-width: 2; }
+      .decision-box { fill: #fff3e0; stroke: #e65100; stroke-width: 2; }
+      .process-box { fill: #f3e5f5; stroke: #4a148c; stroke-width: 2; }
+      .endpoint-box { fill: #e8f5e9; stroke: #1b5e20; stroke-width: 2; }
+      .label { font-size: 12px; text-anchor: middle; font-family: Arial; }
+      .arrow { stroke: #333; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .api-call { fill: #ffebee; stroke: #b71c1c; stroke-width: 2; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#333" />
+    </marker>
+  </defs>
+  
+  <!-- Tytuł -->
+  <text x="600" y="30" class="title">PRZEPŁYW ROZUMOWANIA BOT TYLERA</text>
+  
+  <!-- 1. START: Otrzymanie maila -->
+  <rect x="450" y="60" width="300" height="60" class="step-box" rx="5"/>
+  <text x="600" y="95" class="label">1. GAS odebiera mail</text>
+  
+  <!-- Strzałka w dół -->
+  <path d="M 600 120 L 600 150" class="arrow"/>
+  
+  <!-- 2. Logowanie wejścia -->
+  <rect x="450" y="150" width="300" height="60" class="process-box" rx="5"/>
+  <text x="600" y="185" class="label">2. LOGGER: oryginalna wiadomość</text>
+  
+  <!-- Strzałka -->
+  <path d="M 600 210 L 600 240" class="arrow"/>
+  
+  <!-- 3. Wykrywanie zmiennych -->
+  <rect x="450" y="240" width="300" height="60" class="step-box" rx="5"/>
+  <text x="600" y="275" class="label">3. Ekstraktuj zmienne (sender, subject, body...)</text>
+  
+  <!-- Strzałka -->
+  <path d="M 600 300 L 600 330" class="arrow"/>
+  
+  <!-- 4. LOGGER: zmienne -->
+  <rect x="450" y="330" width="300" height="60" class="process-box" rx="5"/>
+  <text x="600" y="365" class="label">4. LOGGER: zmienne_wykryte</text>
+  
+  <!-- Strzałka -->
+  <path d="M 600 390 L 600 420" class="arrow"/>
+  
+  <!-- 5. Decyzja: czy previous_body? -->
+  <polygon points="600,420 750,480 600,540 450,480" class="decision-box"/>
+  <text x="600" y="490" class="label">Czy jest</text>
+  <text x="600" y="505" class="label">previous_body?</text>
+  
+  <!-- TAK - nawiazanie -->
+  <path d="M 750 480 L 850 480" class="arrow"/>
+  <text x="800" y="470" class="label">TAK</text>
+  
+  <rect x="850" y="450" width="280" height="60" class="step-box" rx="5"/>
+  <text x="990" y="485" class="label">Generuj NAWIĄZANIE</text>
+  <text x="990" y="500" class="label">(bot_tylera.py)</text>
+  
+  <!-- Strzałka od TAK -->
+  <path d="M 990 510 L 990 620 L 600 620" class="arrow"/>
+  
+  <!-- NIE - zwykly -->
+  <path d="M 600 540 L 600 600" class="arrow"/>
+  <text x="610" y="570" class="label">NIE</text>
+  
+  <rect x="450" y="600" width="300" height="60" class="step-box" rx="5"/>
+  <text x="600" y="635" class="label">Generuj ZWYKLY</text>
+  <text x="600" y="650" class="label">(zwykly.py)</text>
+  
+  <!-- Łączenie ścieżek -->
+  <path d="M 600 660 L 600 700" class="arrow"/>
+  
+  <!-- 6. Paralelne callki Groq sekwencyjnie (nowa logika) -->
+  <rect x="400" y="700" width="400" height="100" class="api-call" rx="5"/>
+  <text x="600" y="730" class="label">6. SEKWENCYJNA OBRÓBKA AI:</text>
+  <text x="600" y="750" class="label">- Rzeczowniki (Groq #1)</text>
+  <text x="600" y="770" class="label">- Główna odpowiedź (Groq #2)</text>
+  <text x="600" y="785" class="label">- Pozostałe sekcje po kolei</text>
+  
+  <!-- LOGGER -->
+  <path d="M 600 800 L 600 830" class="arrow"/>
+  <rect x="450" y="830" width="300" height="60" class="process-box" rx="5"/>
+  <text x="600" y="865" class="label">7. LOGGER: decyzje + API calls</text>
+  
+  <!-- Decyzja test_mode -->
+  <path d="M 600 890 L 600 920" class="arrow"/>
+  <polygon points="600,920 750,980 600,1040 450,980" class="decision-box"/>
+  <text x="600" y="985" class="label">Test Mode?</text>
+  
+  <!-- TEST MODE = TAK -->
+  <path d="M 450 980 L 300 980" class="arrow"/>
+  <text x="375" y="970" class="label">TAK</text>
+  
+  <rect x="50" y="950" width="250" height="60" class="step-box" rx="5"/>
+  <text x="175" y="985" class="label">Użyj zastępczych</text>
+  <text x="175" y="1000" class="label">obrazów + napisy</text>
+  
+  <!-- TEST MODE = NIE -->
+  <path d="M 600 1040 L 600 1070" class="arrow"/>
+  <text x="610" y="1055" class="label">NIE</text>
+  
+  <rect x="450" y="1070" width="300" height="60" class="step-box" rx="5"/>
+  <text x="600" y="1105" class="label">Generuj obrazy FLUX</text>
+  
+  <!-- Łączenie testmode ścieżek -->
+  <path d="M 175 950 L 175 850 L 600 850 L 600 900" class="arrow"/>
+  <path d="M 600 1130 L 600 900" class="arrow"/>
+  
+  <!-- 8. Zapis do Google Drive -->
+  <path d="M 600 900 L 600 1150" class="arrow"/>
+  <rect x="450" y="1150" width="300" height="60" class="step-box" rx="5"/>
+  <text x="600" y="1185" class="label">8. Zapis do Google Drive</text>
+  
+  <!-- LOGGER -->
+  <path d="M 600 1210 L 600 1240" class="arrow"/>
+  <rect x="450" y="1240" width="300" height="60" class="process-box" rx="5"/>
+  <text x="600" y="1275" class="label">9. LOGGER: podsumowanie</text>
+  
+  <!-- Koniec -->
+  <path d="M 600 1300 L 600 1330" class="arrow"/>
+  <rect x="450" y="1330" width="300" height="40" class="endpoint-box" rx="5"/>
+  <text x="600" y="1360" class="label">KONIEC - Wysłanie maila</text>
+  
+  <!-- Legenda -->
+  <text x="50" y="100" class="title" style="font-size: 14px; text-anchor: start;">LEGENDA:</text>
+  <rect x="50" y="110" width="20" height="20" class="step-box"/>
+  <text x="80" y="125" class="label" style="text-anchor: start;">Krok procesu</text>
+  
+  <rect x="50" y="140" width="20" height="20" class="decision-box"/>
+  <text x="80" y="155" class="label" style="text-anchor: start;">Decyzja warunkowa</text>
+  
+  <rect x="50" y="170" width="20" height="20" class="process-box"/>
+  <text x="80" y="185" class="label" style="text-anchor: start;">Logowanie/Zapis</text>
+  
+  <rect x="50" y="200" width="20" height="20" class="api-call"/>
+  <text x="80" y="215" class="label" style="text-anchor: start;">Wywołanie API</text>
+  
+  <rect x="50" y="230" width="20" height="20" class="endpoint-box"/>
+  <text x="80" y="245" class="label" style="text-anchor: start;">Koniec</text>
+</svg>

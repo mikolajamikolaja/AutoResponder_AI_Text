@@ -10,7 +10,7 @@ Przepływ:
      → HF FLUX.1-schnell generuje obrazek PNG #1
   3. Scenariusz (Y) + styl z pliku prompts/3_prompt_obrazek_styl.txt
      → HF FLUX.1-schnell generuje obrazek PNG #2
-  Kroki 2 i 3 wykonywane ASYNCHRONICZNIE (ThreadPoolExecutor).
+  Kroki 2 i 3 wykonywane sekwencyjnie, aby unikać jednoczesnych wywołań API.
   Style pobierane WYŁĄCZNIE z plików 2_ i 3_ — brak fallbacków stylu w kodzie.
 
 Tokeny HF w Render: HF_TOKEN, HF_TOKEN1 ... HF_TOKEN20
@@ -21,7 +21,6 @@ import os
 import re
 import base64
 import requests
-from concurrent.futures import ThreadPoolExecutor
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
@@ -251,11 +250,8 @@ def build_obrazek_section(body: str) -> dict:
         with app.app_context():
             return _generate_image_hf(prompt2, "obrazek_2")
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        future1 = executor.submit(gen1)
-        future2 = executor.submit(gen2)
-        png1 = future1.result()
-        png2 = future2.result()
+    png1 = gen1()
+    png2 = gen2()
 
     png1_b64 = base64.b64encode(png1).decode("ascii") if png1 else None
     png2_b64 = base64.b64encode(png2).decode("ascii") if png2 else None

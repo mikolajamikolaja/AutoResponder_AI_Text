@@ -1035,13 +1035,13 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
   }
 }
 
-function executeNawiazanieMailSend(data, recipient, subject, msg) {
+function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
   if (!data || !data.has_history || !data.reply_html) return;
   try {
-    msg.reply("", { htmlBody: data.reply_html, name: "Nawiązanie – Autoresponder" });
+    msg.reply("", { htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder" });
     console.log("Wysłano nawiązanie -> " + recipient);
   } catch (e) {
-    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [nawiązanie]", htmlBody: data.reply_html, name: "Nawiązanie – Autoresponder" });
+    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [nawiązanie]", htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder" });
   }
 }
 
@@ -1284,12 +1284,14 @@ function __AAA_processEmails() {
       if (responseJoker && responseJoker.json) {
         var jj = responseJoker.json;
         if (jj.biznes)        executeMailSend(jj.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
-        if (jj.zwykly)        executeMailSend(jj.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        // Wysyłaj TYLKO zwykly jeśli NIE ma nawiazania (oddzielenie odpowiedzi)
+        if (jj.zwykly && !jj.nawiazanie)        executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera");
         if (jj.scrabble)      executeScrabbleMailSend(jj.scrabble, fromEmail, subject, msg);
         if (jj.analiza)       executeAnalizaMailSend(jj.analiza, fromEmail, subject, msg);
         if (jj.emocje)        executeEmocjeMailSend(jj.emocje, fromEmail, subject, msg);
         if (jj.obrazek)       executeObrazekMailSend(jj.obrazek, fromEmail, subject, msg);
-        if (jj.nawiazanie)    executeNawiazanieMailSend(jj.nawiazanie, fromEmail, subject, msg);
+        // Wysyłaj nawiazanie z nazwą Bot Tylera (zawiera pełną historię + zdania AI)
+        if (jj.nawiazanie)    executeNawiazanieMailSend(jj.nawiazanie, fromEmail, subject, msg, "Bot Tylera");
         if (jj.generator_pdf) executeGeneratorPdfMailSend(jj.generator_pdf, fromEmail, subject, msg);
         if (shouldSendSmierc && jj.smierc) {
           var newEtapJoker = jj.smierc.nowy_etap || smircData.etap;
