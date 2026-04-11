@@ -570,7 +570,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
-                          sender_name: str, gender: str) -> dict:
+                          sender_name: str, gender: str, test_mode: bool = False) -> dict:
     sec = cfg.get("groq_8_flux_prompty", {})
     if test_mode:
         current_app.logger.info("[psych-raport] test_mode — pomijam generowanie promptów FLUX")

@@ -141,6 +141,25 @@ function _getKnownSenders() {
   } catch(e) { console.error("Błąd _getKnownSenders: " + e.message); return []; }
 }
 
+function _isAlreadyProcessed(sender, subject) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var stored = cache.get("PROCESSED_IDS") || "[]";
+    var list = JSON.parse(stored);
+    if (!Array.isArray(list)) return false;
+    for (var i = 0; i < list.length; i++) {
+      var entry = list[i];
+      if (entry.sender === sender && entry.subject === subject) {
+        return true;
+      }
+    }
+    return false;
+  } catch (e) {
+    console.error("Błąd sprawdzania PROCESSED_IDS: " + e.message);
+    return false;
+  }
+}
+
 function _recordProcessedStatus(sender, subject, processedStatus) {
   if (!sender || !subject || !processedStatus) return;
   var entry = {
@@ -1160,6 +1179,13 @@ function __AAA_processEmails() {
     var subject    = msg.getSubject();
     var plainBody  = _stripQuotedText(msg.getPlainBody());
     var searchText = plainBody + " " + subject;
+
+    // Sprawdź czy wiadomość już była przetworzona
+    if (_isAlreadyProcessed(fromEmail, subject)) {
+      console.log("Wiadomość już przetworzona, pomijam: " + fromEmail + " | " + subject);
+      thread.markRead();
+      continue;
+    }
 
     // ── FLAGI GLOBALNE — obliczane RAZ dla każdej osoby ──────────────────────
     var isBiz         = BIZ_LIST.indexOf(fromEmail) !== -1;

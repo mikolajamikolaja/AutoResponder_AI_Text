@@ -31,6 +31,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 import requests
 
+from drive_utils import upload_file_to_drive, update_sheet_with_data
+
 
 from responders.zwykly        import build_zwykly_section
 from responders.biznes        import build_biznes_section
@@ -82,6 +84,10 @@ def webhook():
     test_mode        = bool(data.get("test_mode"))
     retry_responders = data.get("retry_responders") or []
     attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
+
+    # ── Konfiguracja Drive ───────────────────────────────────────────────────
+    drive_folder_id = os.getenv("DRIVE_FOLDER_ID")
+    smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
 
     # ── Flagi żądania ─────────────────────────────────────────────────────────
     wants_scrabble      = bool(data.get("wants_scrabble"))
@@ -279,6 +285,65 @@ def webhook():
         }
     else:
         response_data["processed_status"] = {"status": "ok"}
+
+    # ── Zapis do Google Drive jeśli włączone ──────────────────────────────────
+    if save_to_drive and drive_folder_id:
+        drive_uploads = []
+        for key, value in response_data.items():
+            if isinstance(value, dict):
+                # Obrazy
+                if "images" in value and isinstance(value["images"], list):
+                    for img in value["images"]:
+                        if "base64" in img and "filename" in img:
+                            upload_result = upload_file_to_drive(
+                                img["base64"], img["filename"], img.get("content_type", "image/png"), drive_folder_id
+                            )
+                            if upload_result:
+                                img["drive_url"] = upload_result["url"]
+                                drive_uploads.append(f"{img['filename']}: {upload_result['url']}")
+                            else:
+                                app.logger.error(f"Błąd uploadu {img['filename']} do Drive")
+
+                # PDF
+                if "pdf" in value and isinstance(value["pdf"], dict) and "base64" in value["pdf"]:
+                    upload_result = upload_file_to_drive(
+                        value["pdf"]["base64"], value["pdf"]["filename"], "application/pdf", drive_folder_id
+                    )
+                    if upload_result:
+                        value["pdf"]["drive_url"] = upload_result["url"]
+                        drive_uploads.append(f"{value['pdf']['filename']}: {upload_result['url']}")
+                    else:
+                        app.logger.error(f"Błąd uploadu PDF {value['pdf']['filename']} do Drive")
+
+                # Debug txt dla smierc
+                if "debug_txt" in value and isinstance(value["debug_txt"], dict) and "base64" in value["debug_txt"]:
+                    upload_result = upload_file_to_drive(
+                        value["debug_txt"]["base64"], value["debug_txt"]["filename"], "text/plain", drive_folder_id
+                    )
+                    if upload_result:
+                        value["debug_txt"]["drive_url"] = upload_result["url"]
+                        drive_uploads.append(f"{value['debug_txt']['filename']}: {upload_result['url']}")
+                    else:
+                        app.logger.error(f"Błąd uploadu debug txt do Drive")
+
+        if drive_uploads:
+            app.logger.info(f"Zapisano do Drive: {', '.join(drive_uploads)}")
+
+    # ── Aktualizacja arkusza śmierci jeśli potrzebne ──────────────────────────
+    if smierc_sheet_id and "smierc" in response_data and response_data["smierc"]:
+        smierc_data = response_data["smierc"]
+        if "nowy_etap" in smierc_data:
+            # Przykład: zaktualizuj arkusz z nowym etapem
+            # Zakładamy format: email w nazwie zakładki, dane w kolumnach
+            # To wymaga dostosowania do Twojej struktury arkusza
+            try:
+                # Przykładowa aktualizacja — dostosuj do potrzeb
+                range_name = f"{sender.replace('@', '_').replace('.', '_')}!A{smierc_data['nowy_etap'] + 1}"
+                values = [[smierc_data["nowy_etap"], "", body[:2000], smierc_data.get("reply_html", "")[:2000], ""]]
+                update_sheet_with_data(smierc_sheet_id, range_name, values)
+                app.logger.info(f"Zaktualizowano arkusz śmierci dla {sender}, etap {smierc_data['nowy_etap']}")
+            except Exception as e:
+                app.logger.error(f"Błąd aktualizacji arkusza śmierci: {e}")
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     smierc_data        = response_data.get("smierc", {})
