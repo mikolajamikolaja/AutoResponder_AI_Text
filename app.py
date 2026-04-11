@@ -289,7 +289,7 @@ def webhook():
             html_body  = html_fala2 or "<p>Załączniki z drugiej fali.</p>",
             zalaczniki = zbierz_zalaczniki_z_response(
                 {k: response_data[k] for k in
-                 ("obrazek", "emocje", "analiza", "generator_pdf", "smierc", "log")
+                 ("obrazek", "emocje", "analiza", "generator_pdf", "smierc", "log", "log_txt", "log_svg")
                  if k in response_data}
             ),
         )
