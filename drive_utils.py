@@ -6,6 +6,7 @@ Utility functions for Google Drive integration.
 import os
 import io
 import base64
+from datetime import datetime
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2 import service_account
@@ -117,4 +118,58 @@ def update_sheet_with_data(sheet_id, range_name, values):
         return True
     except Exception as e:
         print(f"Błąd aktualizacji arkusza: {e}")
+        return False
+
+def save_to_history_sheet(sheet_id, sender, subject, body):
+    """
+    Zapisuje wiadomość do arkusza historii (jak w GAS).
+
+    Args:
+        sheet_id: str (ID arkusza historii)
+        sender: str
+        subject: str
+        body: str
+
+    Returns:
+        bool: True jeśli sukces
+    """
+    if not sheet_id:
+        print("Brak HISTORY_SHEET_ID — nie zapisuję historii")
+        return False
+
+    try:
+        # Znajdź ostatni wiersz i dodaj nowy
+        drive_service = get_drive_service()
+        if not drive_service:
+            print("Błąd: nie można połączyć z Google Drive")
+            return False
+            
+        sheets_service = build('sheets', 'v4', credentials=drive_service.credentials)
+        
+        # Pobierz ostatni wiersz
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range='Sheet1!A:A'
+        ).execute()
+        
+        last_row = len(result.get('values', [])) + 1
+        
+        # Dodaj nowy wiersz
+        range_name = f'Sheet1!A{last_row}:D{last_row}'
+        values = [[datetime.now().isoformat(), sender, subject or "", (body or "")[:2000]]]
+        
+        body_update = {
+            'values': values
+        }
+        sheets_service.spreadsheets().values().update(
+            spreadsheetId=sheet_id,
+            range=range_name,
+            valueInputOption='RAW',
+            body=body_update
+        ).execute()
+        
+        print(f"Zapisano historię dla {sender}")
+        return True
+    except Exception as e:
+        print(f"Błąd zapisu historii: {e}")
         return False

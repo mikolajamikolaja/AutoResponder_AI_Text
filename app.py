@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, jsonify
 import requests
 
-from drive_utils import upload_file_to_drive, update_sheet_with_data
+from drive_utils import upload_file_to_drive, update_sheet_with_data, save_to_history_sheet
 
 
 from responders.zwykly        import build_zwykly_section
@@ -88,6 +88,7 @@ def webhook():
     # ── Konfiguracja Drive ───────────────────────────────────────────────────
     drive_folder_id = os.getenv("DRIVE_FOLDER_ID")
     smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
+    history_sheet_id = os.getenv("HISTORY_SHEET_ID")
 
     # ── Flagi żądania ─────────────────────────────────────────────────────────
     wants_scrabble      = bool(data.get("wants_scrabble"))
@@ -158,6 +159,7 @@ def webhook():
         )
 
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
+    wave2 = {}
     if is_retry:
         if "obrazek" in requested_sections:
             wave2["obrazek"] = lambda: run(build_obrazek_section, body)
@@ -344,6 +346,12 @@ def webhook():
                 app.logger.info(f"Zaktualizowano arkusz śmierci dla {sender}, etap {smierc_data['nowy_etap']}")
             except Exception as e:
                 app.logger.error(f"Błąd aktualizacji arkusza śmierci: {e}")
+
+    # ── Zapis do arkusza historii ─────────────────────────────────────────────
+    if history_sheet_id:
+        success = save_to_history_sheet(history_sheet_id, sender, data.get("subject", ""), body)
+        if not success:
+            app.logger.error(f"Błąd zapisu do arkusza historii dla {sender}")
 
     # ── Logowanie ─────────────────────────────────────────────────────────────
     smierc_data        = response_data.get("smierc", {})

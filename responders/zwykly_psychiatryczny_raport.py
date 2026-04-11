@@ -182,6 +182,23 @@ def _merge_dicts(base: dict, override: dict) -> dict:
     return result
 
 
+def _load_substitute_image() -> dict | None:
+    if not os.path.exists(SUBSTITUTE_IMAGE_PATH):
+        current_app.logger.warning("[psych-test] Brak pliku zastępczego: %s", SUBSTITUTE_IMAGE_PATH)
+        return None
+    try:
+        with open(SUBSTITUTE_IMAGE_PATH, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        return {
+            "base64":       b64,
+            "content_type": "image/jpeg",
+            "filename":     "zastepczy.jpg",
+        }
+    except Exception as e:
+        current_app.logger.warning("[psych-test] Błąd odczytu zastepczy.jpg: %s", e)
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ŁADOWANIE CFG
 # ─────────────────────────────────────────────────────────────────────────────
