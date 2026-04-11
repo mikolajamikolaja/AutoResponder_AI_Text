@@ -25,3 +25,9 @@ openpyxl>=3.1.0
 
 # Zamiana AcroForm.button (reportlab nie ma) → fpdf2 do ankiety PDF
 fpdf2>=2.7.0
+
+# Dodane dla Google Drive/Sheets API
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0

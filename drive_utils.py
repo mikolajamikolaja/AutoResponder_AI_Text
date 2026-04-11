@@ -14,8 +14,11 @@ from google.oauth2 import service_account
 # Ścieżka do pliku credentials (service account key JSON)
 SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_SERVICE_ACCOUNT_KEY_PATH', 'service_account.json')
 
-# Scopes dla Google Drive API
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+# Scopes dla Google Drive i Sheets API
+SCOPES = [
+    'https://www.googleapis.com/auth/drive.file',
+    'https://www.googleapis.com/auth/spreadsheets'
+]
 
 def get_drive_service():
     """Zwraca uwierzytelnioną usługę Google Drive."""
