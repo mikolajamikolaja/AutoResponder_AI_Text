@@ -141,7 +141,7 @@ function _getKnownSenders() {
   } catch(e) { console.error("Błąd _getKnownSenders: " + e.message); return []; }
 }
 
-function _isAlreadyProcessed(sender, subject) {
+function _isAlreadyProcessed(msgId) {
   try {
     var cache = CacheService.getScriptCache();
     var stored = cache.get("PROCESSED_IDS") || "[]";
@@ -149,7 +149,7 @@ function _isAlreadyProcessed(sender, subject) {
     if (!Array.isArray(list)) return false;
     for (var i = 0; i < list.length; i++) {
       var entry = list[i];
-      if (entry.sender === sender && entry.subject === subject) {
+      if (entry.msg_id === msgId) {
         return true;
       }
     }
@@ -160,12 +160,11 @@ function _isAlreadyProcessed(sender, subject) {
   }
 }
 
-function _recordProcessedStatus(sender, subject, processedStatus) {
-  if (!sender || !subject || !processedStatus) return;
+function _recordProcessedStatus(msgId, processedStatus) {
+  if (!msgId || !processedStatus) return;
   var entry = {
     ts: new Date().toISOString(),
-    sender: sender,
-    subject: subject,
+    msg_id: msgId,
     processed_status: processedStatus
   };
   try {
@@ -328,7 +327,7 @@ function _processPendingRetries(webhookUrl) {
 
     var attachments = _getRetryAttachments(entry.thread_id);
     var response = _callBackend(
-      entry.sender, entry.sender_name, entry.subject, entry.body, webhookUrl,
+      entry.sender, entry.sender_name, entry.subject, entry.body, webhookUrl, entry.msg_id || "",
       entry.retry_responders.indexOf("scrabble") !== -1,
       entry.retry_responders.indexOf("analiza") !== -1,
       entry.retry_responders.indexOf("emocje") !== -1,
@@ -1046,7 +1045,7 @@ function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
 }
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
-function _callBackend(sender, senderName, subject, body, url,
+function _callBackend(sender, senderName, subject, body, url, msgId,
                       wantsScrabble, wantsAnaliza, wantsEmocje, wantsObrazek,
                       wantsGeneratorPdf, wantsSmierc, smircData,
                       attachments, previousBody, previousSubject,
@@ -1054,6 +1053,7 @@ function _callBackend(sender, senderName, subject, body, url,
                       testMode, threadId, retryResponders, attemptCount) {
   var secret  = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
   var payload = {
+    msg_id:              msgId            || "",
     sender:              sender,
     sender_name:         senderName        || "",
     subject:             subject,
@@ -1098,7 +1098,7 @@ function _callBackend(sender, senderName, subject, body, url,
         var json = JSON.parse(text);
         console.log("Webhook — odpowiedź OK (200)");
         if (json && json.processed_status) {
-          _recordProcessedStatus(payload.sender, payload.subject, json.processed_status);
+          _recordProcessedStatus(payload.msg_id, json.processed_status);
         }
         return { json: json };
       } catch (e) {
@@ -1171,6 +1171,7 @@ function __AAA_processEmails() {
     var webhookCalled = false;  // reset dla każdego wątku — każdy mail może wywołać backend
     var messages   = thread.getMessages();
     var msg        = messages[messages.length - 1];
+    var msgId      = msg.getId();
     var fromRaw    = msg.getFrom();
     var fromEmail  = extractEmail(fromRaw).toLowerCase();
     var senderName = "";
@@ -1181,8 +1182,8 @@ function __AAA_processEmails() {
     var searchText = plainBody + " " + subject;
 
     // Sprawdź czy wiadomość już była przetworzona
-    if (_isAlreadyProcessed(fromEmail, subject)) {
-      console.log("Wiadomość już przetworzona, pomijam: " + fromEmail + " | " + subject);
+    if (_isAlreadyProcessed(msgId)) {
+      console.log("Wiadomość już przetworzona, pomijam: " + msgId + " | " + subject);
       thread.markRead();
       continue;
     }
@@ -1217,7 +1218,7 @@ function __AAA_processEmails() {
         webhookCalled = true;
 
         var responseReply = _callBackend(
-          fromEmail, senderName, subject, plainBody, webhookUrl,
+          fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
           false, false, false, false, false,
           shouldSendSmierc, smircData, [],
           previousDataReply ? previousDataReply.body    : null,
@@ -1272,7 +1273,7 @@ function __AAA_processEmails() {
       webhookCalled = true;
 
       var responseJoker = _callBackend(
-        fromEmail, senderName, subject, plainBody, webhookUrl,
+        fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
         true, true, true, true, true,
         shouldSendSmierc, smircData, getAllAttachments(msg),
         findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).body    : null,
@@ -1284,8 +1285,7 @@ function __AAA_processEmails() {
       if (responseJoker && responseJoker.json) {
         var jj = responseJoker.json;
         if (jj.biznes)        executeMailSend(jj.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
-        // Wysyłaj TYLKO zwykly jeśli NIE ma nawiazania (oddzielenie odpowiedzi)
-        if (jj.zwykly && !jj.nawiazanie)        executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera");
+        if (jj.zwykly)        executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera");
         if (jj.scrabble)      executeScrabbleMailSend(jj.scrabble, fromEmail, subject, msg);
         if (jj.analiza)       executeAnalizaMailSend(jj.analiza, fromEmail, subject, msg);
         if (jj.emocje)        executeEmocjeMailSend(jj.emocje, fromEmail, subject, msg);
@@ -1314,7 +1314,7 @@ function __AAA_processEmails() {
       webhookCalled = true;
 
       var response2 = _callBackend(
-        fromEmail, senderName, subject, plainBody, webhookUrl,
+        fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
         false, false, false, false, false,
         true, smircData, [],
         previousData2 ? previousData2.body    : null,
@@ -1397,7 +1397,7 @@ function __AAA_processEmails() {
     webhookCalled = true;
 
     var response = _callBackend(
-      fromEmail, senderName, subject, sanitizedBody, webhookUrl,
+      fromEmail, senderName, subject, sanitizedBody, webhookUrl, msgId,
       containsKeyword2, containsKeyword3, containsKeyword4, containsKeywordObrazek,
       wantsGeneratorPdf, shouldSendSmierc, smircData, allAttachments,
       previousBody, previousSubject,

@@ -269,6 +269,7 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
     # Pola pojedyncze (każde to dict z kluczem "base64")
     SINGLE_FIELDS = [
         "pdf", "emoticon", "cv_pdf", "log_psych",
+        "psych_photo_1", "psych_photo_2",
         "ankieta_html", "ankieta_pdf", "horoskop_pdf",
         "karta_rpg_pdf", "raport_pdf", "debug_txt",
         "explanation_txt", "plakat_svg", "gra_html",

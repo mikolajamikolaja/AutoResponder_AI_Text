@@ -165,16 +165,26 @@ def webhook():
         response_data.get("nawiazanie", {}).get("reply_html", ""),
         response_data.get("scrabble",   {}).get("reply_html", ""),
     ]))
+    zalaczniki_fala1 = zbierz_zalaczniki_z_response(
+        {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "log")
+         if k in response_data}
+    )
     if html_fala1.strip() and ("zwykly" in requested_sections or "biznes" in requested_sections or "nawiazanie" in requested_sections):
         wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
             subject    = f"Re: {previous_subject or 'Twoja wiadomość'}",
             html_body  = html_fala1,
-            zalaczniki = zbierz_zalaczniki_z_response(
-                {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "log")
-                 if k in response_data}
-            ),
+            zalaczniki = zalaczniki_fala1,
+        )
+    elif zalaczniki_fala1:
+        # Wysyłka tylko załączników, jeśli nie ma tekstu
+        wyslij_odpowiedz(
+            to_email   = sender,
+            to_name    = sender_name,
+            subject    = f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)",
+            html_body  = "<p>Załączniki z pierwszej fali.</p>",
+            zalaczniki = zalaczniki_fala1,
         )
 
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
