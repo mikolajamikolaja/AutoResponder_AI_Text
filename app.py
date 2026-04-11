@@ -129,7 +129,7 @@ def webhook():
     requested_sections = set(retry_responders) if is_retry else set()
     if not is_retry:
         if wants_text_reply:
-            # requested_sections.update(["zwykly", "biznes"])  # Wyłączone
+            requested_sections.update(["zwykly", "biznes"])  # Włączone
             pass
         if wants_scrabble:
             requested_sections.add("scrabble")
