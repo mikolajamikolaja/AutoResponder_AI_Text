@@ -1144,6 +1144,13 @@ function __AAA_processEmails() {
   var KEYWORDS_JOKER             = _getListFromProps("KEYWORDS_JOKER");
   var KEYWORDS_GENERATOR_PDF     = _getListFromProps("KEYWORDS_GENERATOR_PDF");
   var KEYWORDS_SMIERC            = _getListFromProps("KEYWORDS_SMIERC");
+  // ── KEYWORDS_TEST ────────────────────────────────────────────────────────
+  // KEYWORDS_TEST - lista słów kluczowych aby wyłączyć FLUX w respondericach
+  // Gdy wiadomość zawiera słowo z KEYWORDS_TEST, zostaje wysłany disable_flux=true
+  // do backend. Respondenci którzy generują obrazki (zwykly, emocje, itp) sprawdzą
+  // ten parametr i wy pominąć generowanie FLUX, ale ODRAŻĄJE!
+  // KEYWORDS_TEST NIE wpływa na rzeczy które respondenci będą uruchomieni, tylko
+  // że w nich czegoś można wyłączyć.
   var KEYWORDS_TEST              = _getListFromProps("KEYWORDS_TEST");
   var DATA_SMIERCI               = props.getProperty("DATA_SMIERCI") || "nieznanego dnia";
 
@@ -1398,7 +1405,11 @@ function __AAA_processEmails() {
     if (webhookCalled) { continue; }
     webhookCalled = true;
 
-    // KEYWORDS_TEST to parametr do wyłączenia FLUX, ale TYLKO jeśli wysyłamy odpowiedź
+    // ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
+    // KEYWORDS_TEST - jeśli jest to słowo w mailu, to wyślij disable_flux=true
+    // (ale TYLKO jeśli robimy odpowiedź). Respondenci sprawdzą ten parametr i
+    // wy generowanie Flux (obrazków), ale odrażąje uruchomić, aby nie marnować
+    // tokenów HF_TOKEN.
     var disableFlux = containsKeywordTest && (isBiz || isAllowed || isKnownSender || containsKeyword || containsKeyword2 || containsKeyword3 || containsKeyword4 || shouldSendSmierc);
     
     var response = _callBackend(

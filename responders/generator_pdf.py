@@ -703,9 +703,14 @@ def _build_pdf_bytes(exam: dict, sender_name: str = "") -> bytes:
 #  Publiczny interfejs responderu
 # ─────────────────────────────────────────────────────────────
 def build_generator_pdf_section(body: str, sender_name: str = "",
-                                 n: int = 10, diff: str = "sredni") -> dict:
+                                 n: int = 10, diff: str = "sredni", test_mode: bool = False) -> dict:
     """
-    Główna funkcja responderu.
+    Główna funkcja respondoru - generator PDF.
+    
+    Parametr test_mode:
+    - Jeśli test_mode=True (z KEYWORDS_TEST via app.py disable_flux),
+      generator_pdf może wy generowanie Flux jeśli sobie to funkcjonuje.
+    
     Zwraca dict:
       {
         "reply_html": str,

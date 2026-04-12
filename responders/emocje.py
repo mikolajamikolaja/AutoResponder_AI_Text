@@ -684,7 +684,14 @@ def _build_reply_html(label: str, totals: dict, perc: dict,
 
 
 # ── Główna funkcja responderu ─────────────────────────────────────────────────
-def build_emocje_section(body: str, attachments: list = None) -> dict:
+def build_emocje_section(body: str, attachments: list = None, test_mode: bool = False) -> dict:
+    """
+    Emocje responder - generuje analizę emocji w mailu.
+    
+    Parametr test_mode:
+    - Jeśli test_mode=True (z KEYWORDS_TEST via app.py disable_flux),
+      można wy generowanie Flux jeśli emocje sobie funkcjonuje ten obraz.
+    """
     cats = _load_categories()
 
     images     = []

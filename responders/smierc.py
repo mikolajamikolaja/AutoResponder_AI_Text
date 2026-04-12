@@ -811,9 +811,13 @@ def build_smierc_section(
         **kwargs
 ) -> dict:
     """
-    Obsluguje dwa sposoby wywolania:
+    Obsługuje dwa sposoby wywołania:
       A) Z app.py — argumenty wprost
-      B) Stary styl — slownik data={}
+      B) Stary styl — słownik data={}
+    
+    Parametr test_mode (via kwargs):
+    - Jeśli test_mode=True (z KEYWORDS_TEST via app.py disable_flux),
+      smierc.py może wy generowanie Flux jeśli to funkcjonuje w tym responderycie.
     
     ZMIANA: Wiadomości zawierają wyliczone dni od śmierci!
     """
@@ -827,6 +831,8 @@ def build_smierc_section(
     else:
         etap = int(etap)
 
+    # ── KEYWORDS_TEST (disable_flux) → test_mode ──────────────────────────────
+    # Jeśli test_mode=True, wy generowanie Flux (obrazków) w tym responderycie
     test_mode = bool(kwargs.get("test_mode", False))
 
     etapy_dict, style_dict = _load_config_xlsx()

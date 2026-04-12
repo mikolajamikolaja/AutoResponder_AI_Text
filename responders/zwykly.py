@@ -1451,7 +1451,14 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
     Generuje jeden obrazek FLUX z losowym seed.
     Próbuje każdy token HF po kolei.
     Zwraca dict z base64 lub None.
+    
+    Parametr test_mode:
+    - Jeśli test_mode=True (przychodzi z KEYWORDS_TEST via disable_flux),
+      to zwracamy zastępczy obrazek zamiast generować FLUX.
+    - To oszczędza tokeny HF_TOKEN.
     """
+    # ── KEYWORDS_TEST (disable_flux) → test_mode ──────────────────────────────
+    # Jeśli test_mode=True, wy generowanie FLUX i użyj zastępczego obrazka
     if test_mode:
         image = _load_substitute_image()
         if image:
@@ -4250,9 +4257,18 @@ function pokazWynik() {{
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
 def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False, attachments: list = None) -> dict:
+    """
+    Zwykły responder - generuje odpowiedź tekstową i obrazki FLUX.
+    
+    Parametr test_mode:
+    - Jeśli test_mode=True (pochodzi z KEYWORDS_TEST via app.py disable_flux),
+      to zwracamy zastępczy obrazek zamiast generować FLUX.
+    - To oszczędza tokeny HF_TOKEN bez zmiany logiki respondentów.
+    """
     from flask import current_app as flask_app
     import re
     from responders.analiza import build_analiza_section
+    from responders.analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive
 
     logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2 - oszczędny Groq)")
     app_obj = flask_app._get_current_object()

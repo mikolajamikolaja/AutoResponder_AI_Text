@@ -140,103 +140,145 @@ def _format_log_entry_data(data: object) -> list:
 
 def _build_log_svg_content(logger) -> str:
     """
-    Generuje SVG diagram przepływu (flowchart) na podstawie logger.entries.
-    Pokazuje: INPUT → DECISIONS → API CALLS → SECTIONS → OUTPUT
+    Rozszerzony diagram SVG przebiegu autorespondera.
+    Pokazuje: INPUT → DECISIONS → TIMELINE → API CALLS → SECTIONS → OUTPUT
     """
     entries = logger.entries
     if not entries:
-        return '''<svg width="800" height="200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200">
-  <text x="10" y="50" font-size="16" font-family="Arial">Brak danych logowania</text>
+        return '''<svg width="1000" height="300" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300">
+  <text x="10" y="150" font-size="16" font-family="Arial">Brak danych logowania</text>
 </svg>'''
 
     # Zbierz informacje z logów
     input_data = next((e for e in entries if e['type'] == 'INPUT'), None)
     api_calls = [e for e in entries if e['type'] == 'API_CALL']
     section_results = [e for e in entries if e['type'] == 'SECTION_RESULT']
+    decisions = [e for e in entries if e['type'] == 'DECISION']
     
     # Zlicz API calls
-    groq_success = sum(1 for e in api_calls if e['data'].get('api') == 'groq' and e['data'].get('success'))
-    groq_fail = sum(1 for e in api_calls if e['data'].get('api') == 'groq' and not e['data'].get('success'))
-    deepseek_success = sum(1 for e in api_calls if e['data'].get('api') == 'deepseek' and e['data'].get('success'))
-    deepseek_fail = sum(1 for e in api_calls if e['data'].get('api') == 'deepseek' and not e['data'].get('success'))
+    groq_all = [e for e in api_calls if e['data'].get('api') == 'groq']
+    groq_success = sum(1 for e in groq_all if e['data'].get('success'))
+    groq_fail = len(groq_all) - groq_success
     
-    sections_ok = [e['data'].get('section') for e in section_results if e['data'].get('success')]
-    sections_fail = [e['data'].get('section') for e in section_results if not e['data'].get('success')]
+    deepseek_all = [e for e in api_calls if e['data'].get('api') == 'deepseek']
+    deepseek_success = sum(1 for e in deepseek_all if e['data'].get('success'))
+    deepseek_fail = len(deepseek_all) - deepseek_success
     
-    # Funkcja do escapowania tekstu dla XML/SVG
+    sections_ok = sum(1 for e in section_results if e['data'].get('success'))
+    sections_fail = len(section_results) - sections_ok
+    
+    # Harmonogram czasowy
+    first_ts = entries[0].get('timestamp', 0)
+    last_ts = entries[-1].get('timestamp', 0)
+    total_time = last_ts - first_ts
+    
     def escape_xml(text):
-        return (str(text)
-                .replace('&', '&amp;')
-                .replace('<', '&lt;')
-                .replace('>', '&gt;')
-                .replace('"', '&quot;')
-                .replace("'", '&apos;')
-                .replace('&nbsp;', '&#160;'))  # Zamień &nbsp; na prawidłową encję XML
+        return (str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                .replace('"', '&quot;').replace("'", '&apos;').replace('&nbsp;', '&#160;'))
     
-    # Buduj SVG z diagramem pionowym (góra do dołu)
-    width, height = 900, max(500, 100 + len(section_results) * 30)
+    # Wymiary SVG
+    num_timeline_items = min(len(entries), 15)
+    height = 200 + len(section_results) * 30 + num_timeline_items * 20 + 200
+    width = 1200
+    
     svg = f'''<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">
   <defs>
     <style>
       .box {{ fill: #e8f4f8; stroke: #0066cc; stroke-width: 2; }}
-      .success {{ fill: #d4edda; stroke: #28a745; }}
-      .error {{ fill: #f8d7da; stroke: #dc3545; }}
-      .text {{ font-family: Arial; font-size: 13px; }}
-      .title {{ font-weight: bold; font-size: 15px; }}
+      .success {{ fill: #d4edda; stroke: #28a745; stroke-width: 2; }}
+      .error {{ fill: #f8d7da; stroke: #dc3545; stroke-width: 2; }}
+      .warning {{ fill: #fff3cd; stroke: #ffc107; stroke-width: 2; }}
+      .info {{ fill: #d1ecf1; stroke: #17a2b8; stroke-width: 2; }}
+      .text {{ font-family: 'Courier New', monospace; font-size: 12px; }}
+      .title {{ font-weight: bold; font-size: 16px; }}
+      .subtitle {{ font-size: 11px; fill: #666; }}
+      .metric {{ font-size: 11px; font-weight: bold; }}
     </style>
   </defs>
   
   <!-- BACKGROUND -->
-  <rect width="{width}" height="{height}" fill="#f9f9f9" stroke="#ccc" stroke-width="1"/>
+  <rect width="{width}" height="{height}" fill="#fafafa" stroke="#ddd" stroke-width="1"/>
   
-  <!-- Title -->
-  <text x="20" y="30" class="text title">Diagram Przebiegu AutoRespondera</text>
+  <!-- NAGŁÓWEK -->
+  <rect x="0" y="0" width="{width}" height="40" fill="#1a1a2e" stroke="none"/>
+  <text x="20" y="26" class="title" fill="#e8d5b0">Diagram Przebiegu AutoRespondera</text>
+  <text x="{width-400}" y="26" class="subtitle" fill="#aaa">Czas: {total_time:.2f}s | Wpisy: {len(entries)} | Sekcje: {sections_ok}✓ {sections_fail}✗</text>
 '''
     
-    y_pos = 70
+    y_pos = 60
     
-    # INPUT
+    # SEKCJA 1: INPUT
     sender = input_data['data'].get('sender', '?') if input_data else "?"
-    body_preview = (input_data['data'].get('body_preview', '')[:50] + "...") if input_data else ""
-    svg += f'''  <!-- INPUT SECTION -->
-  <rect x="20" y="{y_pos}" width="300" height="80" class="box"/>
-  <text x="30" y="{y_pos+20}" class="text title">📧 WEJŚCIE</text>
-  <text x="30" y="{y_pos+40}" class="text">Nadawca: {escape_xml(sender)}</text>
-  <text x="30" y="{y_pos+55}" class="text">Treść: {escape_xml(body_preview)}</text>
-  <line x1="170" y1="{y_pos+80}" x2="170" y2="{y_pos+110}" stroke="#0066cc" stroke-width="2" marker-end="url(#arrowhead)"/>
+    subject = input_data['data'].get('subject', '?') if input_data else "?"
+    body_preview = (input_data['data'].get('body_preview', '')[:35] + "...") if input_data else ""
+    
+    svg += f'''  <!-- SEKCJA 1: WEJŚCIE -->
+  <rect x="20" y="{y_pos}" width="340" height="110" class="box"/>
+  <text x="30" y="{y_pos+20}" class="title">📧 WEJŚCIE</text>
+  <text x="30" y="{y_pos+42}" class="text">Nadawca: {escape_xml(sender)}</text>
+  <text x="30" y="{y_pos+60}" class="text">Temat: {escape_xml(subject[:35])}</text>
+  <text x="30" y="{y_pos+78}" class="text">Treść: {escape_xml(body_preview)}</text>
 '''
     
     y_pos += 140
     
-    # API CALLS STATUS
-    svg += f'''  <!-- API CALLS SECTION -->
-  <rect x="20" y="{y_pos}" width="300" height="90" class="{'success' if groq_success > 0 else 'error'}"/>
-  <text x="30" y="{y_pos+20}" class="text title">⚙️ API CALLS</text>
-  <text x="30" y="{y_pos+40}" class="text">Groq: ✓{groq_success} ✗{groq_fail}</text>
-  <text x="30" y="{y_pos+55}" class="text">DeepSeek: ✓{deepseek_success} ✗{deepseek_fail}</text>
-  <text x="30" y="{y_pos+70}" class="text">Razem API: {len(api_calls)}</text>
-  <line x1="170" y1="{y_pos+90}" x2="170" y2="{y_pos+120}" stroke="#0066cc" stroke-width="2" marker-end="url(#arrowhead)"/>
+    # SEKCJA 2: DECYZJE
+    if decisions:
+        svg += f'''  <!-- SEKCJA 2: DECYZJE PRZEPŁYWU -->
+  <rect x="20" y="{y_pos}" width="340" height="{50 + min(len(decisions), 4) * 20}" class="info"/>
+  <text x="30" y="{y_pos+20}" class="title">🎯 DECYZJE: {len(decisions)}</text>
+'''
+        for i, decision in enumerate(decisions[:4]):
+            result = decision['data'].get('result', '?')
+            decision_text = decision['data'].get('decision', 'N/A')[:25]
+            svg += f'  <text x="30" y="{y_pos+40+i*18}" class="text">• {decision_text} → {result}</text>\n'
+        
+        y_pos += 70 + min(len(decisions), 4) * 20
+    
+    # SEKCJA 3: STATYSTYKA API
+    svg += f'''  <!-- SEKCJA 3: API CALLS STATYSTYKA -->
+  <rect x="20" y="{y_pos}" width="1160" height="130" class="{'success' if (groq_success > 0 or deepseek_success > 0) else 'error'}"/>
+  <text x="30" y="{y_pos+20}" class="title">⚙️ API CALLS — PRÓBY vs SKUTECZNE</text>
+  <rect x="30" y="{y_pos+35}" width="540" height="80" fill="rgba(0,0,0,0.03)" stroke="none"/>
+  <text x="40" y="{y_pos+50}" class="metric">GROQ PRÓBY: {len(groq_all)}</text>
+  <text x="40" y="{y_pos+68}" class="metric">GROQ SKUTECZNE: {groq_success}</text>
+  <text x="40" y="{y_pos+86}" class="metric">GROQ NIEUDANE: {groq_fail}</text>
+  <rect x="590" y="{y_pos+35}" width="590" height="80" fill="rgba(0,0,0,0.03)" stroke="none"/>
+  <text x="600" y="{y_pos+50}" class="metric">DEEPSEEK PRÓBY: {len(deepseek_all)}</text>
+  <text x="600" y="{y_pos+68}" class="metric">DEEPSEEK SKUTECZNE: {deepseek_success}</text>
+  <text x="600" y="{y_pos+86}" class="metric">DEEPSEEK NIEUDANE: {deepseek_fail}</text>
 '''
     
-    y_pos += 150
+    y_pos += 160
     
-    # SECTIONS
-    svg += f'''  <!-- SECTIONS SECTION -->
-  <rect x="20" y="{y_pos}" width="860" height="{max(60, len(section_results) * 25 + 20)}" class="box"/>
-  <text x="30" y="{y_pos+20}" class="text title">📋 SEKCJE RESPONDENTÓW</text>
+    # SEKCJA 4: HARMONOGRAM CZASOWY
+    svg += f'''  <!-- SEKCJA 4: HARMONOGRAM CZASOWY WYKONANIA -->
+  <rect x="20" y="{y_pos}" width="1160" height="{60 + num_timeline_items * 20}" class="warning"/>
+  <text x="30" y="{y_pos+20}" class="title">⏱️ HARMONOGRAM CZASOWY PIERWSZYCH {num_timeline_items} ETAPÓW</text>
 '''
+    for i, entry in enumerate(entries[:num_timeline_items]):
+        ts = entry.get('timestamp', 0)
+        entry_type = entry['type'][:18]
+        delta = ts - first_ts
+        pct = (delta / total_time * 100) if total_time > 0 else 0
+        svg += f'  <rect x="30" y="{y_pos+35+i*20}" width="{pct*8}" height="16" fill="#ffc107" opacity="0.6" stroke="none"/>\n'
+        svg += f'  <text x="40" y="{y_pos+47+i*20}" class="text">+{delta:5.2f}s [{entry_type:18s}]</text>\n'
     
-    y_offset = y_pos + 40
-    for i, section_name in enumerate(sections_ok):
-        svg += f'  <rect x="40" y="{y_offset + i*25}" width="200" height="20" class="success"/>\n'
-        svg += f'  <text x="50" y="{y_offset + i*25 + 15}" class="text">✓ {escape_xml(section_name)}</text>\n'
+    y_pos += 80 + num_timeline_items * 20
     
-    for i, section_name in enumerate(sections_fail):
-        svg += f'  <rect x="280" y="{y_offset + i*25}" width="200" height="20" class="error"/>\n'
-        svg += f'  <text x="290" y="{y_offset + i*25 + 15}" class="text">✗ {escape_xml(section_name)}</text>\n'
+    # SEKCJA 5: SEKCJE RESPONDENTÓW
+    section_details = [(e['data'].get('section'), e['data'].get('success')) for e in section_results]
+    svg += f'''  <!-- SEKCJA 5: SEKCJE RESPONDENTÓW -->
+  <rect x="20" y="{y_pos}" width="1160" height="{60 + max(len(section_details), 1) * 28}" class="box"/>
+  <text x="30" y="{y_pos+20}" class="title">📋 SEKCJE RESPONDENTÓW: {sections_ok}✓ {sections_fail}✗</text>
+'''
+    for i, (section_name, success) in enumerate(section_details):
+        box_class = 'success' if success else 'error'
+        status = '✓' if success else '✗'
+        svg += f'  <rect x="30" y="{y_pos+35+i*28}" width="1140" height="24" class="{box_class}"/>\n'
+        svg += f'  <text x="40" y="{y_pos+53+i*28}" class="text">{status} {section_name.upper() if section_name else "UNKNOWN"}</text>\n'
     
-    svg += '''
-  <!-- Arrow marker definition -->
+    svg += '''  <!-- Arrow marker -->
   <defs>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
       <polygon points="0,0 10,5 0,10" fill="#0066cc"/>
@@ -251,12 +293,25 @@ def _build_log_txt_content(logger, response_data) -> str:
     """
     Generuje tekst loggera z podsumowaniem wykonania.
     """
-    groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
-    deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
+    # API Calls — liczenie prób i skutecznych
+    api_calls = [e for e in logger.entries if e['type'] == 'API_CALL']
+    groq_calls = [e for e in api_calls if e['data'].get('api') == 'groq']
+    groq_success = sum(1 for e in groq_calls if e['data'].get('success'))
+    groq_total = len(groq_calls)
+    
+    deepseek_calls = [e for e in api_calls if e['data'].get('api') == 'deepseek']
+    deepseek_success = sum(1 for e in deepseek_calls if e['data'].get('success'))
+    deepseek_total = len(deepseek_calls)
+    
     nouns_dict = response_data.get('zwykly', {}).get('nouns_dict', {})
     detected_nouns = []
     if isinstance(nouns_dict, dict):
         detected_nouns = [v for v in nouns_dict.values() if isinstance(v, str) and v.strip()]
+    
+    # Liczenie sekcji
+    section_results = [e for e in logger.entries if e['type'] == 'SECTION_RESULT']
+    sections_success = sum(1 for e in section_results if e['data'].get('success'))
+    sections_total = len(section_results)
 
     lines = []
     lines.append("=" * 88)
@@ -277,16 +332,65 @@ def _build_log_txt_content(logger, response_data) -> str:
     lines.append(f"- Słowa kluczowe: {'TAK (keywords użyte)' if keywords_used else 'NIE'}")
     lines.append("")
     
-    lines.append("1. ZBIORCZE INFORMACJE")
-    lines.append(f"- Groq użyty: {groq_count} razy")
-    lines.append(f"- DeepSeek użyty: {deepseek_count} razy")
-    lines.append(f"- Rzeczowniki wykryte: {', '.join(detected_nouns) if detected_nouns else 'brak'}")
+    lines.append("1. STATYSTYKA API CALLS — PRÓBY vs SKUTECZNE")
+    groq_success = sum(1 for e in groq_calls if e['data'].get('success'))
+    deepseek_success = sum(1 for e in deepseek_calls if e['data'].get('success'))
+    groq_total = len(groq_calls)
+    deepseek_total = len(deepseek_calls)
+    
+    if groq_total > 0:
+        groq_accuracy = (groq_success / groq_total * 100)
+        lines.append(f"- Groq: {groq_total} PRÓB | {groq_success} SKUTECZNYCH (dokładność: {groq_accuracy:.1f}%)")
+    else:
+        lines.append(f"- Groq: 0 prób")
+    
+    if deepseek_total > 0:
+        deepseek_accuracy = (deepseek_success / deepseek_total * 100)
+        lines.append(f"- DeepSeek: {deepseek_total} PRÓB | {deepseek_success} SKUTECZNYCH (dokładność: {deepseek_accuracy:.1f}%)")
+    else:
+        lines.append(f"- DeepSeek: 0 prób")
+    
+    lines.append(f"- RAZEM API CALLS: {len(api_calls)}")
     lines.append("")
-    lines.append("2. SEKCJE I KANAŁY WYWOŁAŃ")
+    lines.append("2. SEKCJE RESPONDENTÓW — REALIZACJA")
+    lines.append(f"- Sekcje uruchomione: {sections_total}")
+    lines.append(f"- Sekcje pomyślne: {sections_success}")
+    if sections_total > 0:
+        success_rate = (sections_success / sections_total * 100)
+        lines.append(f"- Współczynnik sukcesu: {success_rate:.1f}%")
+    lines.append("")
+    lines.append("3. PRZEFILTROWANA LISTA SEKCJI")
     section_keys = [k for k in response_data.keys() if k not in ("log_txt", "log_svg", "log")]
-    lines.append(f"- Sekcje odpowiedzi: {', '.join(sorted(section_keys)) if section_keys else '(brak)'}")
+    if section_keys:
+        for section_name in sorted(section_keys):
+            section_data = response_data.get(section_name, {})
+            has_html = bool(section_data.get('reply_html', '').strip())
+            has_attachments = len(section_data.get('docx_list', [])) > 0 or len(section_data.get('images', [])) > 0
+            status = '✓' if (has_html or has_attachments) else '✗'
+            lines.append(f"  {status} {section_name.upper()}")
+            if has_html:
+                lines.append(f"      - HTML: {len(section_data.get('reply_html', ''))} znaków")
+            if has_attachments:
+                lines.append(f"      - Załączniki: {len(section_data.get('docx_list', []))} + {len(section_data.get('images', []))} obrazów")
+    else:
+        lines.append("  (brak wygenerowanych sekcji)")
     lines.append("")
-    lines.append("3. WPISY LOGGERA — szczegóły wykonania")
+    
+    lines.append("4. HARMONOGRAM CZASOWY WYKONANIA")
+    if logger.entries:
+        first_ts = logger.entries[0].get('timestamp', 0)
+        last_ts = logger.entries[-1].get('timestamp', 0)
+        total_time = last_ts - first_ts
+        lines.append(f"- Czas całkowity: {total_time:.2f}s")
+        lines.append("- Pierwsze 10 etapów:")
+        for i, entry in enumerate(logger.entries[:10]):
+            ts = entry.get('timestamp', 0)
+            delta = ts - first_ts
+            type_str = entry['type'][:20].ljust(20)
+            lines.append(f"  [{i+1:2d}] +{delta:6.2f}s: {type_str}")
+    lines.append("")
+    
+    lines.append("5. SZCZEGÓŁOWE WPISY LOGGERA")
     for entry in logger.entries:
         timestamp = entry.get('timestamp', 0.0)
         lines.append(f"[{entry['type']}] +{timestamp:.2f}s")
@@ -294,10 +398,29 @@ def _build_log_txt_content(logger, response_data) -> str:
         lines.append("")
 
     if detected_nouns:
-        lines.append("4. WYEKSTRAHOWANE RZECZOWNIKI")
+        lines.append("6. WYEKSTRAHOWANE RZECZOWNIKI")
         for noun in detected_nouns:
             lines.append(f"- {noun}")
         lines.append("")
+    
+    lines.append("7. WNIOSKI I PODSUMOWANIE")
+    sections_rate = (sections_success / sections_total * 100) if sections_total > 0 else 0
+    if sections_rate == 100:
+        lines.append("- Status: ✓ SUCCESS — Wszystkie sekcje wygenerowane pomyślnie!")
+    elif sections_rate >= 75:
+        lines.append(f"- Status: ✓ DOBRY — Wykonanie prawie bez problemów ({sections_rate:.0f}% sukcesu)")
+    elif sections_rate >= 50:
+        lines.append(f"- Status: ⚠ ŚREDNI — Napotkane problemy (tylko {sections_rate:.0f}% sekcji pomyślnych)")
+    else:
+        lines.append(f"- Status: ✗ ZŁY — Znaczne problemy ({sections_rate:.0f}% sekcji pomyślnych)")
+    
+    if groq_total > 0:
+        lines.append(f"- Groq: {(groq_success/groq_total*100):.0f}% odpowiedzi było skutecznych")
+    if deepseek_total > 0:
+        lines.append(f"- DeepSeek: {(deepseek_success/deepseek_total*100):.0f}% odpowiedzi było skutecznych")
+    if keywords_used:
+        lines.append("- ⓘ KEYWORDS_TEST był aktywny — FLUX wyrwany")
+    lines.append("")
 
     lines.append("=" * 88)
     lines.append("KONIEC PODSUMOWANIA")
@@ -334,14 +457,23 @@ def webhook():
     attachments      = data.get("attachments")      or []
     save_to_drive    = bool(data.get("save_to_drive"))
     test_mode        = bool(data.get("test_mode"))
-    disable_flux     = bool(data.get("disable_flux"))  # KEYWORDS_TEST parameter — wyłącza FLUX, ale NIE wpływa na historię/drive
+    # ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
+    # KEYWORDS_TEST to parametr flagi do ZABLOKOWANIA generowania obrazków FLUX
+    # w konkretnym responderycie, ale NIE zmienia logikę którzy respondenci się
+    # uruchamiają ani nie wpływa na zapis do historii/drive.
+    # Każdy responder dostaje disable_flux i sam decyduje czy generować Flux czy nie.
+    disable_flux     = bool(data.get("disable_flux"))  # disable_flux=True ⟷ wyłącz FLUX w tym requestzie
     retry_responders = data.get("retry_responders") or []
     attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
     skip_save_to_history = bool(data.get("skip_save_to_history"))
     
-    # ── Obsługa KEYWORDS_TEST (disable_flux) ──────────────────────────────────
-    # KEYWORDS_TEST to parametr do wyłączenia FLUX w konkretnym requestzie.
-    # NIE wpływa na zapis do historii ani Drive — tylko na generowanie obrazków.
+    # ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
+    # KEYWORDS_TEST - parametr aby wyłączyć generowanie FLUX (obrazków) w respondericach.
+    # Pochodzi z GAS script gdy wiadomość zawiera słowo z listy KEYWORDS_TEST.
+    # disable_flux=True przesilany jako test_mode do respondentów. Respondenci którzy
+    # generują Flux (zwykly, emocje, itp) sprawdzają ten parametr i wy generowanie.
+    # WAŻNE: disable_flux NIE wpływa na zapis do historii, Drive, ani które respondenci
+    # się uruchamiają — TYLKO na to czy generować Flux czy nie.
     keywords_used = False
     if disable_flux:
         keywords_used = True
@@ -399,10 +531,16 @@ def webhook():
     requested_sections = set(retry_responders) if is_retry else set()
     if not is_retry:
         if wants_text_reply:
-            requested_sections.update(["zwykly", "biznes"])  # Włączone
-            pass
+            requested_sections.update(["zwykly", "biznes"])
+        
         if wants_scrabble:
             requested_sections.add("scrabble")
+        if wants_analiza:
+            requested_sections.add("analiza")
+        if wants_emocje:
+            requested_sections.add("emocje")
+        if wants_generator_pdf:
+            requested_sections.add("generator_pdf")
         if wants_nawiazanie:
             requested_sections.add("nawiazanie")
 
@@ -411,17 +549,22 @@ def webhook():
         _prev   = previous_body
         _sender = sender
         _sname  = sender_name
+        # ── test_mode ze KEYWORDS_TEST (disable_flux) ──────────────────────────
+        # Jeśli disable_flux=True (z KEYWORDS_TEST w mailu), to zwykly.py
+        # dostanie test_mode=True i wy generowanie Flux (będzie zastępczy obrazek)
         wave1["zwykly"] = lambda: run(
             build_zwykly_section,
             body,
             _prev,
             _sender,
             _sname,
-            test_mode=disable_flux or test_mode,  # KEYWORDS_TEST (disable_flux) → test_mode dla FLUX
+            test_mode=disable_flux or test_mode,
             attachments=attachments,
         )
     if "biznes" in requested_sections:
         wave1["biznes"] = lambda: run(build_biznes_section, body)
+    if "scrabble" in requested_sections:
+        wave1["scrabble"] = lambda: run(build_scrabble_section, body)
     if "nawiazanie" in requested_sections:
         wave1["nawiazanie"] = lambda: run(
             build_nawiazanie_section,
@@ -431,8 +574,28 @@ def webhook():
             sender=sender,
             sender_name=sender_name,
         )
-    if "scrabble" in requested_sections:
-        wave1["scrabble"] = lambda: run(build_scrabble_section, body)
+    # Specjalne respondery (mogą być uruchamiane odrębnie)
+    if "analiza" in requested_sections:
+        wave1["analiza"] = lambda: run(
+            build_analiza_section,
+            body,
+            attachments,
+            sender=sender,
+            sender_name=sender_name,
+            # disable_flux / test_mode: jeśli KEYWORDS_TEST jest w mailu,
+            # analiza.py dostanie test_mode=True (jeśli implementuje Flux)
+            test_mode=disable_flux or test_mode,
+        )
+    if "emocje" in requested_sections:
+        # disable_flux: jeśli KEYWORDS_TEST, wyłącz Flux w emocje
+        wave1["emocje"] = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
+    if "generator_pdf" in requested_sections:
+        _sn   = sender_name
+        _body = body
+        # disable_flux: jeśli KEYWORDS_TEST, wyłącz Flux w generator_pdf
+        wave1["generator_pdf"] = lambda: run(
+            build_generator_pdf_section, _body, sender_name=_sn, test_mode=disable_flux or test_mode
+        )
 
     response_data = _run_parallel(wave1, flask_app)
 
@@ -452,17 +615,21 @@ def webhook():
     response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
 
     # ── WYSYŁKA PO FALI 1 ─────────────────────────────────────────────────────
+    # Wyślij wszystkie respondery które zostały wygenerowane
     html_fala1 = "".join(filter(None, [
         response_data.get("zwykly",     {}).get("reply_html", ""),
         response_data.get("biznes",     {}).get("reply_html", ""),
+        response_data.get("analiza",    {}).get("reply_html", ""),
+        response_data.get("emocje",     {}).get("reply_html", ""),
         response_data.get("nawiazanie", {}).get("reply_html", ""),
         response_data.get("scrabble",   {}).get("reply_html", ""),
+        response_data.get("generator_pdf", {}).get("reply_html", ""),
     ]))
     zalaczniki_fala1 = zbierz_zalaczniki_z_response(
-        {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "log", "log_txt", "log_svg")
+        {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "analiza", "emocje", "generator_pdf", "log", "log_txt", "log_svg")
          if k in response_data}
     )
-    if html_fala1.strip() and ("zwykly" in requested_sections or "biznes" in requested_sections or "nawiazanie" in requested_sections):
+    if html_fala1.strip() and ("zwykly" in requested_sections or "biznes" in requested_sections or "nawiazanie" in requested_sections or "analiza" in requested_sections or "emocje" in requested_sections or "scrabble" in requested_sections or "generator_pdf" in requested_sections):
         success = wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
@@ -484,17 +651,20 @@ def webhook():
             to_email   = sender,
             to_name    = sender_name,
             subject    = f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)",
-            html_body  = "<p>Załączniki z pierwszej fali.</p>",
+            html_body  = "<p>Załączniki.</p>",
             zalaczniki = zalaczniki_fala1,
         )
         if success and history_sheet_id and not skip_save_to_history:
-            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)", "Załączniki z pierwszej fali", is_response=True)
+            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)", "Załączniki", is_response=True)
 
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
     wave2 = {}
     if is_retry:
+        # ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────
+        # Przesyłam test_mode=disable_flux do wave2 respondentów także w retry,
+        # aby respondenci wiedzieli że mają wy generowanie FLUX
         if "emocje" in requested_sections:
-            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
+            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
         if "analiza" in requested_sections:
             wave2["analiza"] = lambda: run(
                 build_analiza_section,
@@ -502,12 +672,13 @@ def webhook():
                 attachments,
                 sender=sender,
                 sender_name=sender_name,
+                test_mode=disable_flux or test_mode,
             )
         if "generator_pdf" in requested_sections:
             _sn   = sender_name
             _body = body
             wave2["generator_pdf"] = lambda: run(
-                build_generator_pdf_section, _body, sender_name=_sn
+                build_generator_pdf_section, _body, sender_name=_sn, test_mode=disable_flux or test_mode
             )
         if "smierc" in requested_sections:
             _sender       = sender
@@ -526,7 +697,8 @@ def webhook():
             )
     else:
         if wants_emocje:
-            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
+            # disable_flux ze KEYWORDS_TEST blokuje FLUX w responderycie
+            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
         if wants_analiza:
             wave2["analiza"] = lambda: run(
                 build_analiza_section,
@@ -534,12 +706,15 @@ def webhook():
                 attachments,
                 sender=sender,
                 sender_name=sender_name,
+                # disable_flux z KEYWORDS_TEST przekazywany jako test_mode
+                test_mode=disable_flux or test_mode,
             )
         if wants_generator_pdf:
             _sn   = sender_name
             _body = body
+            # disable_flux: jeśli KEYWORDS_TEST, wyłącz Flux w generator_pdf
             wave2["generator_pdf"] = lambda: run(
-                build_generator_pdf_section, _body, sender_name=_sn
+                build_generator_pdf_section, _body, sender_name=_sn, test_mode=disable_flux or test_mode
             )
         if wants_smierc:
             _sender       = sender
@@ -610,25 +785,8 @@ def webhook():
             return bool(value.get("has_history") or value.get("reply_html"))
         return bool(value)
 
-    if not is_retry:
-        requested_sections = set()
-        if wants_text_reply:
-            # requested_sections.update(["zwykly", "biznes"])  # Wyłączone
-            pass
-        if wants_scrabble:
-            requested_sections.add("scrabble")
-        if wants_analiza:
-            requested_sections.add("analiza")
-        if wants_emocje:
-            requested_sections.add("emocje")
-        if wants_generator_pdf:
-            requested_sections.add("generator_pdf")
-        if wants_smierc:
-            requested_sections.add("smierc")
-        if wants_nawiazanie:
-            requested_sections.add("nawiazanie")
-    else:
-        requested_sections = set(retry_responders)
+    # Użyj już zdefiniowanego requested_sections (z Fali 1)
+    # Nie buduj go znowu!
 
     failed_sections = [key for key in requested_sections if not section_success(key, response_data.get(key))]
     if failed_sections:

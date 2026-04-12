@@ -27,6 +27,8 @@ from typing import Optional
 import requests
 from flask import current_app
 
+from .analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive
+
 logger = logging.getLogger(__name__)
 
 # ── KLUCZE API ────────────────────────────────────────────────────────────────
@@ -248,109 +250,69 @@ def _fallback_gra() -> dict:
 
 # ── HTML MAILA (CSS :target, zero JS) ────────────────────────────────────────
 
-def _buduj_html_email(gra: dict, sender_name: str) -> str:
-    kroki  = gra["kroki"]
-    wyrok  = gra.get("wyrok", "Brak wyroku - błąd w generowaniu gry.")
-    sn     = sender_name or "Użytkowniku"
-
+def _buduj_html_email_pierwsza_gra(gra: dict, sender_name: str, diagram_jpg_b64: str) -> str:
+    """
+    Buduje HTML dla reply_html — pokazuje TYLKO pierwsze pytanie + diagram JPG
+    """
+    kroki = gra.get("kroki", [])
+    if not kroki:
+        return "<p>Brak pytań gry.</p>"
+    
+    first_krok = kroki[0]
+    intro = first_krok.get("intro", "")
+    pytanie = first_krok.get("pytanie", "")
+    opcje = first_krok.get("opcje", {})
+    sn = sender_name or "Użytkowniku"
+    
     css = """<style>
-  body{margin:0;padding:0;background:#f5f0e8;}
-  .wrap{font-family:'Courier New',monospace;max-width:620px;margin:0 auto;background:#f5f0e8;color:#1a1a2e;}
-  .hdr{background:#1a1a2e;color:#e8d5b0;padding:22px 28px 16px;border-bottom:4px solid #8b6914;}
-  .hdr h1{margin:0 0 4px;font-size:20px;letter-spacing:2px;}
-  .hdr .sub{font-size:10px;color:#8b6914;letter-spacing:3px;text-transform:uppercase;}
-
-  /* Wszystkie kroki ukryte domyślnie */
-  .krok{display:none;}
-  /* Krok 1 widoczny na start */
-  #k1{display:block;}
-  /* Gdy inny krok jest :target, odkryj go */
-  .krok:target{display:block;}
-
-  .kbody{padding:22px 28px;border-bottom:2px dashed #c8b89a;}
-  .knr{font-size:10px;color:#8b6914;letter-spacing:4px;text-transform:uppercase;margin-bottom:8px;}
-  .intro{font-style:italic;color:#666;font-size:13px;padding:8px 12px;border-left:3px solid #c8b89a;margin-bottom:14px;}
-  .pyt{font-size:16px;font-weight:bold;color:#1a1a2e;margin-bottom:18px;line-height:1.5;}
-  .opc{margin-bottom:4px;}
-
-  /* Każda opcja to link do sekcji reakcji */
-  .olink{
-    display:block;margin:7px 0;padding:10px 16px;
-    background:#1a1a2e;color:#e8d5b0 !important;
-    text-decoration:none !important;font-size:13px;
-    font-family:'Courier New',monospace;
-  }
-  .olink .lit{color:#8b6914;font-weight:bold;margin-right:10px;}
-
-  /* Sekcje reakcji — ukryte, odkrywane przez :target */
-  .r{display:none;padding:12px 28px 0;}
-  .r:target{display:block;}
-  .rbox{background:#ede8de;padding:12px 16px;border-left:4px solid #8b6914;font-style:italic;font-size:13px;color:#333;margin-bottom:12px;}
-  .rdalej{
-    display:inline-block;padding:9px 22px;
-    background:#8b6914;color:#f5f0e8 !important;
-    text-decoration:none !important;font-size:11px;
-    font-family:'Courier New',monospace;letter-spacing:2px;text-transform:uppercase;
-    margin-bottom:16px;
-  }
-
-  /* Wyrok */
-  #wyrok{display:none;}
-  #wyrok:target{display:block;}
-  .wyrok-body{background:#1a1a2e;color:#e8d5b0;padding:28px;}
-  .wyrok-body h2{color:#8b6914;margin-top:0;letter-spacing:2px;}
-  .wt{font-size:14px;line-height:1.8;color:#d4c5a0;}
-  .prot{margin-top:18px;font-size:10px;color:#6a5a3a;letter-spacing:1px;border-top:1px solid #333;padding-top:14px;}
-  .ftр{padding:14px 28px;font-size:10px;color:#999;letter-spacing:2px;text-align:center;border-top:1px solid #c8b89a;}
+  body { margin: 0; padding: 0; background: #f5f0e8; }
+  .wrap { font-family: 'Courier New', monospace; max-width: 720px; margin: 0 auto; background: #fff; }
+  .hdr { background: #1a1a2e; color: #e8d5b0; padding: 22px 28px 16px; border-bottom: 4px solid #8b6914; }
+  .hdr h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: 2px; }
+  .hdr .sub { font-size: 10px; color: #8b6914; letter-spacing: 3px; text-transform: uppercase; }
+  .body { padding: 28px; }
+  .knr { font-size: 10px; color: #8b6914; letter-spacing: 4px; text-transform: uppercase; margin-bottom: 8px; }
+  .intro { font-style: italic; color: #666; font-size: 13px; padding: 8px 12px; border-left: 3px solid #c8b89a; margin-bottom: 14px; }
+  .pyt { font-size: 16px; font-weight: bold; color: #1a1a2e; margin-bottom: 18px; line-height: 1.5; }
+  .opc { margin-bottom: 4px; }
+  .olink { display: block; margin: 7px 0; padding: 10px 16px; background: #1a1a2e; color: #e8d5b0 !important; text-decoration: none !important; font-size: 13px; font-family: 'Courier New', monospace; }
+  .olink .lit { color: #8b6914; font-weight: bold; margin-right: 10px; }
+  .diagram-wrap { margin: 28px 0; padding: 20px; border: 2px dashed #8b6914; background: #faf8f4; }
+  .diagram-wrap p { font-size: 11px; color: #666; margin: 0 0 14px 0; line-height: 1.6; }
+  .diagram-img { max-width: 100%; height: auto; border: 1px solid #c8b89a; }
+  .ft { padding: 14px 28px; font-size: 9px; color: #999; text-align: center; border-top: 1px solid #c8b89a; background: #f5f0e8; }
 </style>"""
-
-    html = f"{css}\n<div class='wrap'>\n"
-    html += f"<div class='hdr'><h1>EDEK RESPONDER™</h1><div class='sub'>System Zaawansowanego Doprecyzowywania · Sesja: {sn}</div></div>\n"
-
-    for i, krok in enumerate(kroki, 1):
-        nr      = krok.get("nr", i)
-        intro   = krok.get("intro", "")
-        pytanie = krok.get("pytanie", "")
-        opcje   = krok.get("opcje", {})
-        nastepny = f"k{i+1}" if i < MAX_KROKOW else "wyrok"
-
-        # Buduj opcje i ich sekcje reakcji
-        opcje_html   = ""
-        reakcje_html = ""
-        for lit, val in opcje.items():
-            tekst   = val.get("tekst", lit)
-            reakcja = val.get("reakcja", "")
-            r_id    = f"r{i}{lit}"
-            opcje_html   += f"<a href='#{r_id}' class='olink'><span class='lit'>{lit})</span>{tekst}</a>\n"
-            reakcje_html += (
-                f"<div id='{r_id}' class='r'>"
-                f"<div class='rbox'>{reakcja}</div>"
-                f"<a href='#{nastepny}' class='rdalej'>→ Przejdź dalej</a>"
-                f"</div>\n"
-            )
-
-        html += (
-            f"<div id='k{i}' class='krok'>"
-            f"<div class='kbody'>"
-            f"<div class='knr'>Pytanie {i} z {MAX_KROKOW}</div>"
-            f"<div class='intro'>{intro}</div>"
-            f"<div class='pyt'>{pytanie}</div>"
-            f"<div class='opc'>{opcje_html}</div>"
-            f"</div></div>\n"
-            f"{reakcje_html}"
-        )
-
-    # Wyrok
-    html += (
-        f"<div id='wyrok' class='krok'>"
-        f"<div class='wyrok-body'>"
-        f"<h2>⚖ WYROK KOŃCOWY</h2>"
-        f"<div class='wt'>{wyrok.replace(chr(10),'<br>')}</div>"
-        f"<div class='prot'>Protokół: {MAX_KROKOW} pytań · Korespondent: NIEJASNY · Sesja zamknięta.</div>"
-        f"</div></div>\n"
-        f"<div class='ftр'>Edek Responder™ v1.0 &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</div>\n"
-        f"</div>"
-    )
+    
+    opcje_html = ""
+    for lit in ["A", "B", "C"]:
+        if lit in opcje:
+            tekst = opcje[lit].get("tekst", lit)
+            opcje_html += f"<a href='#' class='olink'><span class='lit'>{lit})</span> {tekst}</a>\n"
+    
+    diagram_html = ""
+    if diagram_jpg_b64:
+        diagram_html = f"""<div class="diagram-wrap">
+<p><strong>Mapa całej gry:</strong> {len(kroki)} pytań × 3 opcje = {len(kroki)*3} ścieżek decyzyjnych. 
+Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>edek_diagram_interaktywny.html</strong></p>
+<img src="data:image/jpeg;base64,{diagram_jpg_b64}" alt="Diagram struktury gry Edka" class="diagram-img" />
+</div>"""
+    
+    html = f"""{css}
+<div class="wrap">
+  <div class="hdr">
+    <h1>EDEK RESPONDER™</h1>
+    <div class="sub">System Zaawansowanego Doprecyzowywania · Sesja: {sn}</div>
+  </div>
+  <div class="body">
+    <div class="knr">Pytanie 1 z {len(kroki)}</div>
+    <div class="intro">{intro}</div>
+    <div class="pyt">{pytanie}</div>
+    <div class="opc">{opcje_html}</div>
+    {diagram_html}
+  </div>
+  <div class="ft">Edek Responder™ v2.0 · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Edek nigdy nie miał.</div>
+</div>"""
+    
     return html
 
 
@@ -506,16 +468,23 @@ render();
 def build_analiza_section(body: str,
                            attachments: list = None,
                            sender: str = "",
-                           sender_name: str = "") -> dict:
+                           sender_name: str = "",
+                           test_mode: bool = False) -> dict:
     """
-    Generuje Edek Responder:
+    Edek Responder - generuje grę logiczną.
+    
+    Parametr test_mode:
+    - Jeśli test_mode=True (z KEYWORDS_TEST via app.py disable_flux),
+      analiza.py może wy generowanie Flux jeśli to funkcjonuje w tym responderycie.
+    
+    Zwraca:
       reply_html — treść maila (CSS :target, bez JS)
       gra_html   — plik HTML do załączenia jako pojedynczy attachment
       docx_list  — [{"base64":..., "filename":"edek_gra.html", "content_type":"text/html"}]
 
     W app.py zaktualizuj wywołanie:
       build_analiza_section(body, attachments,
-                            sender=sender, sender_name=sender_name)
+                            sender=sender, sender_name=sender_name, test_mode=disable_flux)
     """
     if not body or not body.strip():
         return {
@@ -545,8 +514,23 @@ def build_analiza_section(body: str,
             }
         })
 
-    # ── Buduj oba formaty ─────────────────────────────────────────────────────
-    reply_html   = _buduj_html_email(gra_data, sn)
+    # ── GENERUJ DIAGRAMY ──────────────────────────────────────────────────────
+    # JPG diagram (1024x1024) — z oddali, pokazuje całą strukturę
+    diagram_jpg_bytes = generate_jpg_diagram(gra_data)
+    diagram_jpg_b64 = ""
+    if diagram_jpg_bytes:
+        diagram_jpg_b64 = base64.b64encode(diagram_jpg_bytes).decode("ascii")
+        logger.info("[edek] JPG diagram: %d bytes", len(diagram_jpg_bytes))
+    
+    # SVG HTML interaktywny  
+    diagram_svg_html = generate_svg_html_interactive(gra_data, sn)
+    diagram_svg_b64 = base64.b64encode(diagram_svg_html.encode("utf-8")).decode("ascii")
+    logger.info("[edek] SVG diagram: %d bytes", len(diagram_svg_html.encode("utf-8")))
+    
+    # ── Buduj HTML do maila — TYLKO pierwsza gra + diagram JPG ─────────────────
+    reply_html   = _buduj_html_email_pierwsza_gra(gra_data, sn, diagram_jpg_b64)
+    
+    # ── Pełny HTML do gry (stary format) — załącznik ─────────────────────────
     gra_html_str = _buduj_gra_html(gra_data, sn)
     gra_html_b64 = base64.b64encode(gra_html_str.encode("utf-8")).decode("ascii")
 
@@ -560,9 +544,22 @@ def build_analiza_section(body: str,
             "content_type": "text/html",
         },
         "docx_list": [
+            # Diagram interaktywny SVG
+            {
+                "base64":       diagram_svg_b64,
+                "filename":     "edek_diagram_interaktywny.html",
+                "content_type": "text/html",
+            },
+            # Diagram JPG z oddali
+            {
+                "base64":       diagram_jpg_b64,
+                "filename":     "edek_diagram_mapa.jpg",
+                "content_type": "image/jpeg",
+            },
+            # Stary format gry (pełny HTML)
             {
                 "base64":       gra_html_b64,
-                "filename":     "edek_gra.html",
+                "filename":     "edek_gra_pelna.html",
                 "content_type": "text/html",
             }
         ],
