@@ -332,10 +332,11 @@ def webhook():
     keywords_used = False
     if "KEYWORDS_TEST" in body.upper():
         skip_save_to_history = True
+        save_to_drive = False  # Wyłącz zapis do Drive dla testów
         test_mode = True  # Włącz tryb testowy dla KEYWORDS_TEST
         keywords_used = True
         logger.set_metadata("keywords_used", True)
-        logger.log_decision("keywords_test", "KEYWORDS_TEST found", "skip_save_to_history=True, test_mode=True")
+        logger.log_decision("keywords_test", "KEYWORDS_TEST found", "skip_save_to_history=True, save_to_drive=False, test_mode=True")
 
     # Loguj zmienne
     logger.log_variables_detected({
@@ -358,8 +359,12 @@ def webhook():
     
     # ── Sprawdzenie statusu użytkownika ───────────────────────────────────────
     from drive_utils import check_user_in_sheet
-    in_history_status = "tak" if check_user_in_sheet(history_sheet_id, sender) else "nie"
-    in_requiem_status = "tak" if check_user_in_sheet(smierc_sheet_id, sender) else "nie"
+    if not test_mode:  # Nie sprawdzaj użytkownika dla testów
+        in_history_status = "tak" if check_user_in_sheet(history_sheet_id, sender) else "nie"
+        in_requiem_status = "tak" if check_user_in_sheet(smierc_sheet_id, sender) else "nie"
+    else:
+        in_history_status = "test_mode"
+        in_requiem_status = "test_mode"
     logger.set_metadata("in_history", in_history_status)
     logger.set_metadata("in_requiem", in_requiem_status)
 
@@ -667,7 +672,8 @@ def webhook():
                 app.logger.error(f"Błąd aktualizacji arkusza śmierci: {e}")
 
     # ── Zapis do arkusza historii ─────────────────────────────────────────────
-    if history_sheet_id:
+    skip_save_to_history = bool(data.get("skip_save_to_history"))
+    if history_sheet_id and not skip_save_to_history:
         success = save_to_history_sheet(history_sheet_id, sender, data.get("subject", ""), body)
         if not success:
             app.logger.error(f"Błąd zapisu do arkusza historii dla {sender}")

@@ -246,7 +246,7 @@ def check_user_in_sheet(sheet_id, email, sheet_name='Historia'):
         # Pobierz wszystkie dane z arkusza (zakładamy że email jest w kolumnie B - indeks 1)
         result = sheets_service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
-            range=f'{sheet_name}!B:B'  # Kolumna B zawiera email
+            range=f'{sheet_name}!B1:B10000'  # Kolumna B zawiera email, zakres od B1 do B10000
         ).execute()
 
         values = result.get('values', [])
