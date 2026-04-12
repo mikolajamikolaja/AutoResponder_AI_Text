@@ -330,13 +330,12 @@ def webhook():
     
     # ── Obsługa KEYWORDS_TEST: nie dodawaj do historii ─────────────────────────
     keywords_used = False
-    if "KEYWORDS_TEST" in body.upper():
+    if test_mode:
         skip_save_to_history = True
         save_to_drive = False  # Wyłącz zapis do Drive dla testów
-        test_mode = True  # Włącz tryb testowy dla KEYWORDS_TEST
         keywords_used = True
         logger.set_metadata("keywords_used", True)
-        logger.log_decision("keywords_test", "KEYWORDS_TEST found", "skip_save_to_history=True, save_to_drive=False, test_mode=True")
+        logger.log_decision("keywords_test", "test_mode=True", "skip_save_to_history=True, save_to_drive=False")
 
     # Loguj zmienne
     logger.log_variables_detected({

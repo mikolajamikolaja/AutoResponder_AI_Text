@@ -250,7 +250,7 @@ def _fallback_gra() -> dict:
 
 def _buduj_html_email(gra: dict, sender_name: str) -> str:
     kroki  = gra["kroki"]
-    wyrok  = gra["wyrok"]
+    wyrok  = gra.get("wyrok", "Brak wyroku - błąd w generowaniu gry.")
     sn     = sender_name or "Użytkowniku"
 
     css = """<style>
