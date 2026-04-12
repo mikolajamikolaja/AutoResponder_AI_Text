@@ -959,9 +959,9 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
   attachLogFiles(data, attachments, attachedNames);
   var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
   try {
-    msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Analiza Powtórzeń – Autoresponder" });
+    msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Doprecyzuj analiza - autoresponder" });
   } catch (e) {
-    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, attachments: attachments, name: "Analiza Powtórzeń – Autoresponder" });
+    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, attachments: attachments, name: "Doprecyzuj analiza - autoresponder" });
   }
 }
 
