@@ -1,0 +1,17 @@
+================================================================================
+RAPORT WYKONANIA PROGRAMU
+Data/Czas: 2026-04-12 22:30:45
+================================================================================
+
+[00:00] INPUT
+  sender: test@example.com
+  body_preview: Test message
+
+[00:00] API_CALL
+  api: groq
+  success: True
+
+[00:00] SECTION_RESULT
+  section: analiza
+  success: True
+

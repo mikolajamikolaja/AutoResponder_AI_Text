@@ -163,6 +163,16 @@ def _build_log_svg_content(logger) -> str:
     sections_ok = [e['data'].get('section') for e in section_results if e['data'].get('success')]
     sections_fail = [e['data'].get('section') for e in section_results if not e['data'].get('success')]
     
+    # Funkcja do escapowania tekstu dla XML/SVG
+    def escape_xml(text):
+        return (str(text)
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;')
+                .replace('"', '&quot;')
+                .replace("'", '&apos;')
+                .replace('&nbsp;', '&#160;'))  # Zamień &nbsp; na prawidłową encję XML
+    
     # Buduj SVG z diagramem pionowym (góra do dołu)
     width, height = 900, max(500, 100 + len(section_results) * 30)
     svg = f'''<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">
@@ -191,8 +201,8 @@ def _build_log_svg_content(logger) -> str:
     svg += f'''  <!-- INPUT SECTION -->
   <rect x="20" y="{y_pos}" width="300" height="80" class="box"/>
   <text x="30" y="{y_pos+20}" class="text title">📧 WEJŚCIE</text>
-  <text x="30" y="{y_pos+40}" class="text">Nadawca: {sender}</text>
-  <text x="30" y="{y_pos+55}" class="text">Treść: {body_preview}</text>
+  <text x="30" y="{y_pos+40}" class="text">Nadawca: {escape_xml(sender)}</text>
+  <text x="30" y="{y_pos+55}" class="text">Treść: {escape_xml(body_preview)}</text>
   <line x1="170" y1="{y_pos+80}" x2="170" y2="{y_pos+110}" stroke="#0066cc" stroke-width="2" marker-end="url(#arrowhead)"/>
 '''
     
@@ -219,11 +229,11 @@ def _build_log_svg_content(logger) -> str:
     y_offset = y_pos + 40
     for i, section_name in enumerate(sections_ok):
         svg += f'  <rect x="40" y="{y_offset + i*25}" width="200" height="20" class="success"/>\n'
-        svg += f'  <text x="50" y="{y_offset + i*25 + 15}" class="text">✓ {section_name}</text>\n'
+        svg += f'  <text x="50" y="{y_offset + i*25 + 15}" class="text">✓ {escape_xml(section_name)}</text>\n'
     
     for i, section_name in enumerate(sections_fail):
         svg += f'  <rect x="280" y="{y_offset + i*25}" width="200" height="20" class="error"/>\n'
-        svg += f'  <text x="290" y="{y_offset + i*25 + 15}" class="text">✗ {section_name}</text>\n'
+        svg += f'  <text x="290" y="{y_offset + i*25 + 15}" class="text">✗ {escape_xml(section_name)}</text>\n'
     
     svg += '''
   <!-- Arrow marker definition -->

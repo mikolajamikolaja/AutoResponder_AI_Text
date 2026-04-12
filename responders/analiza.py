@@ -348,7 +348,7 @@ def _buduj_html_email(gra: dict, sender_name: str) -> str:
         f"<div class='wt'>{wyrok.replace(chr(10),'<br>')}</div>"
         f"<div class='prot'>Protokół: {MAX_KROKOW} pytań · Korespondent: NIEJASNY · Sesja zamknięta.</div>"
         f"</div></div>\n"
-        f"<div class='ftр'>Edek Responder™ v1.0 &nbsp;·&nbsp; Dziękuje za cierpliwość i żałuje, że jej nie miał.</div>\n"
+        f"<div class='ftр'>Edek Responder™ v1.0 &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</div>\n"
         f"</div>"
     )
     return html
@@ -437,7 +437,7 @@ footer{{padding:13px 32px;font-size:10px;color:var(--mid);letter-spacing:2px;tex
     <div class="wt"  id="wt"></div>
     <div class="prot" id="prot"></div>
   </div>
-  <footer>Edek Responder™ v1.0 &nbsp;·&nbsp; Dziękuje za cierpliwość i żałuje, że jej nie miał.</footer>
+  <footer>Edek Responder™ v1.0 &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</footer>
 </div>
 <script>
 const G={gra_json};
