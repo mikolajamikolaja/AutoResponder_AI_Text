@@ -158,6 +158,42 @@ def webhook():
 
     response_data = _run_parallel(wave1, flask_app)
 
+    def _ensure_top_level_logs():
+        if "log_txt" in response_data and "log_svg" in response_data:
+            return
+        logger = get_logger()
+        groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
+        deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
+        nouns = []  # Jeśli analiza wykrywa nouns, dodać tutaj
+
+        log_txt_content = f"Podsumowanie wykonania:\n- Groq użyty: {groq_count} razy\n- DeepSeek użyty: {deepseek_count} razy\n- Rzeczowniki wykryte: {', '.join(nouns) if nouns else 'brak'}\n"
+        log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
+        response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
+
+        svg_content = '''<svg width="500" height="100" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#000"/>
+    </marker>
+  </defs>
+  <text x="10" y="30" font-size="16" font-family="Arial">Email received</text>
+  <line x1="120" y1="25" x2="180" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="190" y="30" font-size="16" font-family="Arial">Processing</text>
+  <line x1="280" y1="25" x2="340" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="350" y="30" font-size="16" font-family="Arial">Response sent</text>
+</svg>'''
+        log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
+        response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
+
+    has_wave2 = False
+    if is_retry:
+        has_wave2 = bool({"obrazek", "emocje", "analiza", "generator_pdf", "smierc"} & requested_sections)
+    else:
+        has_wave2 = bool(wants_obrazek or wants_emocje or wants_analiza or wants_generator_pdf or wants_smierc)
+
+    if not has_wave2:
+        _ensure_top_level_logs()
+
     # ── WYSYŁKA PO FALI 1 ─────────────────────────────────────────────────────
     html_fala1 = "".join(filter(None, [
         response_data.get("zwykly",     {}).get("reply_html", ""),
@@ -166,26 +202,30 @@ def webhook():
         response_data.get("scrabble",   {}).get("reply_html", ""),
     ]))
     zalaczniki_fala1 = zbierz_zalaczniki_z_response(
-        {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "log")
+        {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "log", "log_txt", "log_svg")
          if k in response_data}
     )
     if html_fala1.strip() and ("zwykly" in requested_sections or "biznes" in requested_sections or "nawiazanie" in requested_sections):
-        wyslij_odpowiedz(
+        success = wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
             subject    = f"Re: {previous_subject or 'Twoja wiadomość'}",
             html_body  = html_fala1,
             zalaczniki = zalaczniki_fala1,
         )
+        if success and history_sheet_id:
+            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'}", html_fala1[:1000], is_response=True)
     elif zalaczniki_fala1:
         # Wysyłka tylko załączników, jeśli nie ma tekstu
-        wyslij_odpowiedz(
+        success = wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
             subject    = f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)",
             html_body  = "<p>Załączniki z pierwszej fali.</p>",
             zalaczniki = zalaczniki_fala1,
         )
+        if success and history_sheet_id:
+            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)", "Załączniki z pierwszej fali", is_response=True)
 
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
     wave2 = {}
@@ -282,7 +322,7 @@ def webhook():
             response_data.get("generator_pdf", {}).get("reply_html", ""),
             response_data.get("smierc",        {}).get("reply_html", ""),
         ]))
-        wyslij_odpowiedz(
+        success_fala2 = wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
             subject    = f"Re: {previous_subject or 'Twoja wiadomość'} (część 2)",
@@ -293,6 +333,8 @@ def webhook():
                  if k in response_data}
             ),
         )
+        if success_fala2 and history_sheet_id:
+            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'} (część 2)", (html_fala2 or "Załączniki")[:1000], is_response=True)
 
     # Zabezpieczenie — nawiazanie zawsze ma has_history
     if "nawiazanie" not in response_data:

@@ -155,7 +155,7 @@ def update_sheet_with_data(sheet_id, range_name, values):
         return False
 
 
-def save_to_history_sheet(sheet_id, sender, subject, body):
+def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
     """
     Zapisuje wiadomość do arkusza historii.
 
@@ -164,6 +164,7 @@ def save_to_history_sheet(sheet_id, sender, subject, body):
         sender: str
         subject: str
         body: str
+        is_response: bool (czy to odpowiedź czy wiadomość wejścia)
 
     Returns:
         bool: True jeśli sukces
@@ -173,27 +174,26 @@ def save_to_history_sheet(sheet_id, sender, subject, body):
         return False
 
     try:
+        from datetime import datetime, timezone, timedelta
         credentials = _get_credentials()
         sheets_service = build('sheets', 'v4', credentials=credentials)
 
-        # Pobierz ostatni wiersz
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=sheet_id,
-            range='Sheet1!A:A'
-        ).execute()
+        # Użyj UTC+2 (polska letnia) zamiast UTC - bardziej czytelne dla użytkownika
+        warsaw_tz = timezone(timedelta(hours=2))  # UTC+2 CEST (letnia)
+        timestamp = datetime.now(tz=warsaw_tz).isoformat()
+        
+        # Użyj append() aby uniknąć problemów z parsowaniem zakresu
+        msg_type = "ODPOWIEDŹ" if is_response else "WEJŚCIE"
+        values = [[timestamp, sender, msg_type, subject or "", (body or "")[:1000]]]
 
-        last_row = len(result.get('values', [])) + 1
-        range_name = f'Sheet1!A{last_row}:D{last_row}'
-        values = [[datetime.now().isoformat(), sender, subject or "", (body or "")[:2000]]]
-
-        sheets_service.spreadsheets().values().update(
+        sheets_service.spreadsheets().values().append(
             spreadsheetId=sheet_id,
-            range=range_name,
+            range='Sheet1!A1:E',
             valueInputOption='RAW',
             body={'values': values}
         ).execute()
 
-        print(f"Zapisano historię dla {sender}")
+        print(f"Zapisano {msg_type} historii dla {sender} ({timestamp})")
         return True
     except Exception as e:
         print(f"Błąd zapisu historii: {e}")

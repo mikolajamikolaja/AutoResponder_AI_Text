@@ -349,25 +349,34 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 def _call_groq(system: str, user: str, max_tokens: int = 6000) -> str | None:
     """
     Wywołuje Groq API SEKWENCYJNIE — próbuje klucze po kolei.
-    Następny klucz tylko gdy poprzedni zwróci 429.
+    Następny klucz jeśli: 429 (rate limit), None (timeout/błąd), lub pusty string.
     """
     groq_keys = _get_groq_keys()
     if not groq_keys:
         logger.warning("[groq] Brak kluczy w env")
         return None
     logger.info("[groq] Odpytywanie %d kluczy SEKWENCYJNIE", len(groq_keys))
-    for name, key in groq_keys:
+    failed_reasons = []
+    for i, (name, key) in enumerate(groq_keys, 1):
         try:
+            logger.debug("[groq] Klucz %d/%d: %s", i, len(groq_keys), name)
             result = _call_groq_single(key, system, user, max_tokens)
         except Exception as e:
             logger.warning("[groq] Wyjątek klucz=%s: %s", name, e)
+            failed_reasons.append(f"{name}:exception")
             continue
+        
         if result and result != "RATE_LIMIT":
-            logger.info("[groq] OK klucz=%s (%d znaków)", name, len(result))
+            logger.info("[groq] ✓ Sukces klucz=%s (%d znaków) na próbie %d/%d", name, len(result), i, len(groq_keys))
             return result
         elif result == "RATE_LIMIT":
-            logger.warning("[groq] 429 klucz=%s — próbuję następny", name)
-    logger.error("[groq] Wszystkie %d kluczy wyczerpane", len(groq_keys))
+            logger.warning("[groq] ⚠ Rate limit (429) klucz=%s — próbuję następny", name)
+            failed_reasons.append(f"{name}:429")
+        else:
+            logger.warning("[groq] ⚠ Błąd/timeout klucz=%s — próbuję następny", name)
+            failed_reasons.append(f"{name}:None")
+    
+    logger.error("[groq] ✗ Wszystkie %d kluczy wyczerpane! Historia: %s", len(groq_keys), " → ".join(failed_reasons))
     return None
 
 def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
@@ -632,7 +641,7 @@ def _extract_nouns_groq(body: str) -> dict:
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)  # Zwiększony z 30 na 60s
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"].strip()
         elif resp.status_code == 429:
@@ -2509,7 +2518,10 @@ def _get_groq_keys() -> list:
 
 def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> str | None:
     """Wywołuje Groq z jednym kluczem. Zwraca tekst lub None."""
+    import time
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    timeout_sec = 60  # Dopasowane do test_groq.py (zamiast 30)
+    temperature = 0.7  # Zmniejszone z 0.9 dla stabilności
     payload = {
         "model": GROQ_MODEL,
         "messages": [
@@ -2517,19 +2529,29 @@ def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> 
             {"role": "user", "content": user}
         ],
         "max_tokens": max_tokens,
-        "temperature": 0.9,
+        "temperature": temperature,
     }
+    logger.debug("[groq-single] Timeout=%ds, temperature=%.1f, max_tokens=%d", timeout_sec, temperature, max_tokens)
     try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        start = time.time()
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=timeout_sec)
+        elapsed = time.time() - start
+        logger.info("[groq-single] HTTP %s w %.2fs", resp.status_code, elapsed)
         if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            logger.info("[groq-single] OK: %d znaków w %.2fs", len(result), elapsed)
+            return result
         elif resp.status_code == 429:
+            logger.warning("[groq-single] RATE_LIMIT (429) — spróbuję następny klucz")
             return "RATE_LIMIT"
         else:
-            logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:100])
+            logger.warning("[groq-single] HTTP %s: %s", resp.status_code, resp.text[:100])
             return None
+    except requests.exceptions.Timeout:
+        logger.warning("[groq-single] TIMEOUT po %ds", timeout_sec)
+        return None
     except Exception as e:
-        logger.warning("[groq] Wyjątek: %s", str(e)[:80])
+        logger.warning("[groq-single] Wyjątek: %s", str(e)[:80])
         return None
 
     # ═══════════════════════════════════════════════════════════════════════════════

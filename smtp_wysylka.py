@@ -254,7 +254,10 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
     Obsługiwane sekcje: zwykly, biznes, scrabble, analiza, emocje,
                         obrazek, generator_pdf, smierc, nawiazanie.
 
-    Pola pojedyncze (obiekt z base64):
+    Top-level fields (BEZPOŚREDNIO w response_data):
+      log_svg, log_txt
+
+    Pola pojedyncze w sekcjach (obiekt z base64):
       pdf, emoticon, cv_pdf, log_psych, ankieta_html, ankieta_pdf,
       horoskop_pdf, karta_rpg_pdf, raport_pdf, debug_txt,
       explanation_txt, plakat_svg, gra_html, image, image2,
@@ -266,6 +269,9 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
     result: List[dict] = []
     seen_filenames: set = set()
 
+    # TOP-LEVEL FIELDS — bezpośrednio w response_data (nie wewnątrz sekcji)
+    TOP_LEVEL_FIELDS = ["log_svg", "log_txt"]
+
     # Pola pojedyncze (każde to dict z kluczem "base64")
     SINGLE_FIELDS = [
         "pdf", "emoticon", "cv_pdf", "log_psych",
@@ -274,7 +280,6 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
         "karta_rpg_pdf", "raport_pdf", "debug_txt",
         "explanation_txt", "plakat_svg", "gra_html",
         "image", "image2", "prompt1_txt", "prompt2_txt",
-        "log_svg", "log_txt",
     ]
 
     # Pola listowe (każde to lista dict-ów z kluczem "base64")
@@ -302,15 +307,24 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
         logger.debug("[zbierz] Dodano załącznik: %s (%s)",
                      filename, item.get("content_type", "?"))
 
+    # ── Top-level fields (np. log_svg z app.py) ──────────────────────────────
+    for field in TOP_LEVEL_FIELDS:
+        if field in response_data:
+            _dodaj(response_data[field])
+
+    # ── Sekcje respondery (zwykly, biznes, emocje, etc.) ────────────────────
     for section_key, section_val in response_data.items():
+        # Przeskocz top-level fields
+        if section_key in TOP_LEVEL_FIELDS:
+            continue
         if not isinstance(section_val, dict):
             continue
 
-        # Pola pojedyncze
+        # Pola pojedyncze w sekcji
         for field in SINGLE_FIELDS:
             _dodaj(section_val.get(field))
 
-        # Pola listowe
+        # Pola listowe w sekcji
         for field in LIST_FIELDS:
             arr = section_val.get(field)
             if isinstance(arr, list):

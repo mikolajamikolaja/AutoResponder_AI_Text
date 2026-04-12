@@ -90,24 +90,22 @@ function saveToHistory(senderEmail, subject, body) {
     if (!sheetId) { console.warn("Brak HISTORY_SHEET_ID"); return; }
     var ss      = SpreadsheetApp.openById(sheetId);
     var sheet   = ss.getSheets()[0];
-    var lastRow = sheet.getLastRow();
-    var foundRow = -1;
-    if (lastRow >= 2) {
-      var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
-      for (var i = 0; i < emailCol.length; i++) {
-        if ((emailCol[i][0] || "").toString().toLowerCase().trim() === senderEmail.toLowerCase().trim()) {
-          foundRow = i + 2; break;
-        }
-      }
-    }
-    var rowData = [new Date(), senderEmail, subject || "", (body || "").substring(0, 2000)];
-    if (foundRow !== -1) {
-      sheet.getRange(foundRow, 1, 1, 4).setValues([rowData]);
-    } else {
-      sheet.appendRow(rowData);
-    }
+    var rowData = [new Date(), senderEmail, "WEJ\u015aCIE", subject || "", (body || "").substring(0, 1000)];
+    sheet.appendRow(rowData);
     console.log("Historia zapisana dla: " + senderEmail);
   } catch (e) { console.error("Błąd zapisu historii: " + e.message); }
+}
+
+function saveResponseToHistory(senderEmail, subject, body) {
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
+    if (!sheetId) { console.warn("Brak HISTORY_SHEET_ID"); return; }
+    var ss      = SpreadsheetApp.openById(sheetId);
+    var sheet   = ss.getSheets()[0];
+    var rowData = [new Date(), senderEmail, "ODPOWIED\u017a", subject || "", (body || "").substring(0, 1000)];
+    sheet.appendRow(rowData);
+    console.log("Odpowied\u017a zapisana dla: " + senderEmail);
+  } catch (e) { console.error("Błąd zapisu odpowiedzi: " + e.message); }
 }
 
 function findLastMessageBySender(senderEmail) {
@@ -118,10 +116,14 @@ function findLastMessageBySender(senderEmail) {
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) return null;
     var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+    // Szukaj od końca ostatniego WEJŚCIA (nie ODPOWIEDZI)
     for (var i = emailCol.length - 1; i >= 0; i--) {
       if ((emailCol[i][0] || "").toString().toLowerCase().trim() === senderEmail.toLowerCase().trim()) {
-        var row = sheet.getRange(i + 2, 3, 1, 2).getValues()[0];
-        return { subject: (row[0] || "").toString(), body: (row[1] || "").toString() };
+        var typeCell = sheet.getRange(i + 2, 3, 1, 1).getValues()[0][0];  // Kolumna 3 = typ
+        if (typeCell === "WEJŚCIE") {  // Szukaj tylko WEJŚCIA, nie ODPOWIEDZI
+          var row = sheet.getRange(i + 2, 4, 1, 2).getValues()[0];  // Kolumny 4-5 (subject, body)
+          return { subject: (row[0] || "").toString(), body: (row[1] || "").toString() };
+        }
       }
     }
     return null;
@@ -1231,10 +1233,12 @@ function __AAA_processEmails() {
           if (shouldSendSmierc && responseReply.json.smierc) {
             var newEtapReply = responseReply.json.smierc.nowy_etap || smircData.etap;
             executeSmircMailSend(responseReply.json.smierc, fromEmail, subject, msg, newEtapReply);
+            saveResponseToHistory(fromEmail, subject, responseReply.json.smierc.reply_html || "");
             _updateSmircData(fromEmail, newEtapReply, plainBody, responseReply.json.smierc.reply_html, msg.getId());
           }
           if (shouldSendZwykly && responseReply.json.zwykly) {
             executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+            saveResponseToHistory(fromEmail, subject, responseReply.json.zwykly.reply_html || "");
           }
         }
         saveToHistory(fromEmail, subject, plainBody);
@@ -1284,18 +1288,19 @@ function __AAA_processEmails() {
 
       if (responseJoker && responseJoker.json) {
         var jj = responseJoker.json;
-        if (jj.biznes)        executeMailSend(jj.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
-        if (jj.zwykly)        executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera");
-        if (jj.scrabble)      executeScrabbleMailSend(jj.scrabble, fromEmail, subject, msg);
-        if (jj.analiza)       executeAnalizaMailSend(jj.analiza, fromEmail, subject, msg);
-        if (jj.emocje)        executeEmocjeMailSend(jj.emocje, fromEmail, subject, msg);
-        if (jj.obrazek)       executeObrazekMailSend(jj.obrazek, fromEmail, subject, msg);
+        if (jj.biznes)        { executeMailSend(jj.biznes, fromEmail, subject, msg, "Notariusz – Informacja"); saveResponseToHistory(fromEmail, subject, jj.biznes.reply_html || ""); }
+        if (jj.zwykly)        { executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
+        if (jj.scrabble)      { executeScrabbleMailSend(jj.scrabble, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
+        if (jj.analiza)       { executeAnalizaMailSend(jj.analiza, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.analiza.reply_html || ""); }
+        if (jj.emocje)        { executeEmocjeMailSend(jj.emocje, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
+        if (jj.obrazek)       { executeObrazekMailSend(jj.obrazek, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.obrazek.reply_html || ""); }
         // Wysyłaj nawiazanie z nazwą Bot Tylera (zawiera pełną historię + zdania AI)
-        if (jj.nawiazanie)    executeNawiazanieMailSend(jj.nawiazanie, fromEmail, subject, msg, "Bot Tylera");
-        if (jj.generator_pdf) executeGeneratorPdfMailSend(jj.generator_pdf, fromEmail, subject, msg);
+        if (jj.nawiazanie)    { executeNawiazanieMailSend(jj.nawiazanie, fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.nawiazanie.reply_html || ""); }
+        if (jj.generator_pdf) { executeGeneratorPdfMailSend(jj.generator_pdf, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.generator_pdf.reply_html || ""); }
         if (shouldSendSmierc && jj.smierc) {
           var newEtapJoker = jj.smierc.nowy_etap || smircData.etap;
           executeSmircMailSend(jj.smierc, fromEmail, subject, msg, newEtapJoker);
+          saveResponseToHistory(fromEmail, subject, jj.smierc.reply_html || "");
           _updateSmircData(fromEmail, newEtapJoker, plainBody, jj.smierc.reply_html, msg.getId());
         }
         console.log("🃏 JOKER: wszystkie respondery obsłużone");
@@ -1327,11 +1332,13 @@ function __AAA_processEmails() {
         if (response2.json.smierc) {
           var newEtap2 = response2.json.smierc.nowy_etap || smircData.etap;
           executeSmircMailSend(response2.json.smierc, fromEmail, subject, msg, newEtap2);
+          saveResponseToHistory(fromEmail, subject, response2.json.smierc.reply_html || "");
           _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
         }
         // shouldSendZwykly — niezależna flaga, działa równocześnie ze śmiercią
         if (shouldSendZwykly && response2.json.zwykly) {
           executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+          saveResponseToHistory(fromEmail, subject, response2.json.zwykly.reply_html || "");
         }
       }
       saveToHistory(fromEmail, subject, plainBody);

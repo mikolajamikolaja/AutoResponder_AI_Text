@@ -328,15 +328,17 @@ def _call_groq(system: str, user: str) -> str | None:
         "model": GROQ_MODEL,
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
-        "max_tokens": 300, "temperature": 0.95,
+        "max_tokens": 300, "temperature": 0.7,  # Zmniejszone z 0.95
     }
     try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)  # Zwiększony z 30
         if resp.status_code == 200:
             result = resp.json()["choices"][0]["message"]["content"].strip()
             current_app.logger.info("[groq] OK: %.150s", result)
             return result
         current_app.logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:150])
+    except requests.exceptions.Timeout:
+        current_app.logger.warning("[groq] TIMEOUT (60s)")
     except Exception as e:
         current_app.logger.warning("[groq] Wyjatek: %s", str(e)[:100])
     return None
@@ -383,15 +385,17 @@ def _call_groq_flux(system: str, user: str) -> str | None:
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": user}],
         "max_tokens": 2000,
-        "temperature": 0.95,
+        "temperature": 0.7,  # Zmniejszone z 0.95
     }
     try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
+        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)  # Zwiększony z 30
         if resp.status_code == 200:
             result = resp.json()["choices"][0]["message"]["content"].strip()
             current_app.logger.info("[groq-flux] OK: %.150s", result)
             return result
         current_app.logger.warning("[groq-flux] HTTP %s: %s", resp.status_code, resp.text[:150])
+    except requests.exceptions.Timeout:
+        current_app.logger.warning("[groq-flux] TIMEOUT (60s)")
     except Exception as e:
         current_app.logger.warning("[groq-flux] Wyjatek: %s", str(e)[:100])
     return None
