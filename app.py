@@ -100,16 +100,16 @@ def _build_log_txt_content(logger, response_data: dict) -> str:
     lines.append("=" * 88)
     lines.append(f"Start: {logger.start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
-    lines.append("[1] ZBIORCZE INFORMACJE"]
+    lines.append("1. ZBIORCZE INFORMACJE")
     lines.append(f"- Groq użyty: {groq_count} razy")
     lines.append(f"- DeepSeek użyty: {deepseek_count} razy")
     lines.append(f"- Rzeczowniki wykryte: {', '.join(detected_nouns) if detected_nouns else 'brak'}")
     lines.append("")
-    lines.append("[2] SEKCJE I KANAŁY WYWOŁAŃ"]
+    lines.append("2. SEKCJE I KANAŁY WYWOŁAŃ")
     section_keys = [k for k in response_data.keys() if k not in ("log_txt", "log_svg", "log")]
     lines.append(f"- Sekcje odpowiedzi: {', '.join(sorted(section_keys)) if section_keys else '(brak)'}")
     lines.append("")
-    lines.append("[3] WPISY LOGGERA — szczegóły wykonania")
+    lines.append("3. WPISY LOGGERA — szczegóły wykonania")
     for entry in logger.entries:
         timestamp = entry.get('timestamp', 0.0)
         lines.append(f"[{entry['type']}] +{timestamp:.2f}s")
@@ -117,7 +117,7 @@ def _build_log_txt_content(logger, response_data: dict) -> str:
         lines.append("")
 
     if detected_nouns:
-        lines.append("[4] WYEKSTRAHOWANE RZECZOWNIKI"]
+        lines.append("4. WYEKSTRAHOWANE RZECZOWNIKI")
         for noun in detected_nouns:
             lines.append(f"- {noun}")
         lines.append("")
