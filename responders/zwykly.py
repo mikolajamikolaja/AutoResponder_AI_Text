@@ -138,6 +138,7 @@ from core.config import (
     TYLER_JPG_QUALITY,
     EMOCJA_MAP,
     FALLBACK_EMOT,
+    HF_TOKEN_BLACKLIST,
 )
 
 
@@ -1362,7 +1363,7 @@ def _render_template(text: str, vars_dict: dict) -> tuple:
 
 # Globalny set tokenów HF trwale wyczerpanych (402/401/403) w tej sesji serwera.
 # Raz dodany token nigdy nie jest próbowany ponownie — oszczędność czasu.
-_HF_DEAD_TOKENS: set = set()
+_HF_DEAD_TOKENS: set = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
 
 
 def _get_hf_tokens() -> list:

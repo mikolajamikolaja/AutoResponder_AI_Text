@@ -28,6 +28,15 @@ HF_GUIDANCE       = 1
 HF_TIMEOUT        = 55
 TYLER_JPG_QUALITY = 95  # Kompresja JPG paneli tryptyku (95% = minimalna strata)
 
+# Globalna blacklist wyczerpanych HF tokenów (dodawać tokeny które zwróciły 402)
+HF_TOKEN_BLACKLIST = set([
+    "HF_TOKEN", "HF_TOKEN1", "HF_TOKEN2", "HF_TOKEN3", "HF_TOKEN4",
+    "HF_TOKEN5", "HF_TOKEN6", "HF_TOKEN7", "HF_TOKEN8", "HF_TOKEN9",
+    "HF_TOKEN10", "HF_TOKEN11", "HF_TOKEN12", "HF_TOKEN13", "HF_TOKEN14",
+    "HF_TOKEN15", "HF_TOKEN16", "HF_TOKEN17",
+    # Dodawać tutaj wyczerpane tokeny, np. "HF_TOKEN", "HF_TOKEN1" itp.
+])
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAPOWANIE EMOCJI → NAZWY PLIKÓW
 # ─────────────────────────────────────────────────────────────────────────────

@@ -40,8 +40,9 @@ from datetime import date, datetime
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
+from core.config import HF_TOKEN_BLACKLIST
 
-_HF_DEAD_TOKENS: set[str] = set()
+_HF_DEAD_TOKENS: set[str] = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")

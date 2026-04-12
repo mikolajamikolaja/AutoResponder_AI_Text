@@ -96,7 +96,46 @@ def _format_log_entry_data(data: object) -> list:
     return [f"  {data}"]
 
 
-def _build_log_txt_content(logger, response_data: dict) -> str:
+def _build_log_svg_content(logger) -> str:
+    """
+    Generuje SVG timeline na podstawie logger.entries.
+    Każdy entry to krok z czasem.
+    """
+    entries = logger.entries
+    if not entries:
+        return '''<svg width="500" height="100" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100">
+  <text x="10" y="50" font-size="16" font-family="Arial">No log entries</text>
+</svg>'''
+
+    start_time = entries[0]['timestamp']
+    total_time = entries[-1]['timestamp'] - start_time if len(entries) > 1 else 1.0
+    height = max(100, len(entries) * 20 + 40)
+    svg = f'''<svg width="600" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 {height}">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#000"/>
+    </marker>
+  </defs>
+'''
+
+    y = 30
+    prev_x = 10
+    for i, entry in enumerate(entries):
+        timestamp = entry['timestamp'] - start_time
+        x = 10 + (timestamp / total_time) * 500 if total_time > 0 else 10 + i * 50
+        x = min(x, 580)  # Nie wychodź poza viewBox
+        label = entry['type']
+        if 'data' in entry and 'api' in entry['data']:
+            label += f" ({entry['data']['api']})"
+        svg += f'  <circle cx="{x}" cy="{y}" r="5" fill="#007bff"/>\n'
+        svg += f'  <text x="{x+10}" y="{y+5}" font-size="12" font-family="Arial">{label} (+{timestamp:.2f}s)</text>\n'
+        if i > 0:
+            svg += f'  <line x1="{prev_x}" y1="{y-5}" x2="{x}" y2="{y-5}" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>\n'
+        prev_x = x
+        y += 20
+
+    svg += '</svg>'
+    return svg
     groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
     deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
     nouns_dict = response_data.get('zwykly', {}).get('nouns_dict', {})
@@ -249,18 +288,7 @@ def webhook():
         log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
         response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
 
-        svg_content = '''<svg width="500" height="100" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100">
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#000"/>
-    </marker>
-  </defs>
-  <text x="10" y="30" font-size="16" font-family="Arial">Email received</text>
-  <line x1="120" y1="25" x2="180" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="190" y="30" font-size="16" font-family="Arial">Processing</text>
-  <line x1="280" y1="25" x2="340" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="350" y="30" font-size="16" font-family="Arial">Response sent</text>
-</svg>'''
+        svg_content = _build_log_svg_content(logger)
         log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
         response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
 
@@ -397,18 +425,7 @@ def webhook():
             if isinstance(response_data[key], dict) and key not in ['log_txt', 'log_svg']:
                 response_data[key]['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
 
-        svg_content = '''<svg width="500" height="100" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100">
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#000"/>
-    </marker>
-  </defs>
-  <text x="10" y="30" font-size="16" font-family="Arial">Email received</text>
-  <line x1="120" y1="25" x2="180" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="190" y="30" font-size="16" font-family="Arial">Processing</text>
-  <line x1="280" y1="25" x2="340" y2="25" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="350" y="30" font-size="16" font-family="Arial">Response sent</text>
-</svg>'''
+        svg_content = _build_log_svg_content(logger)
         log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
         response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
 

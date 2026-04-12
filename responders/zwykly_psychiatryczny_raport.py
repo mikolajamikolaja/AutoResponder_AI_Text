@@ -41,10 +41,11 @@ from core.config import (
     HF_GUIDANCE,
     HF_TIMEOUT,
     MAX_DLUGOSC_EMAIL,
+    HF_TOKEN_BLACKLIST,
 )
 from core.logging_reporter import get_logger
 
-_HF_DEAD_TOKENS: set[str] = set()
+_HF_DEAD_TOKENS: set[str] = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ŚCIEŻKI
