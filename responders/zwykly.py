@@ -2493,11 +2493,26 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
 
 def _get_groq_keys() -> list:
     """
-    Zbiera wszystkie klucze Groq z env.
-    Obsługuje format: API_KEY_GROQ, API_KEY_GROQ_01..API_KEY_GROQ_09
-    (dokładnie taki jak w Render env).
+    Zbiera wszystkie klucze Groq.
+    Metodologia (taka sama jak w backup/cv/test groq.py):
+    1. Czytaj zmienną GROQ_KEYS (zawiera klucze oddzielone newline)
+    2. Fallback: czytaj zmienne API_KEY_GROQ, API_KEY_GROQ_01..API_KEY_GROQ_09
     """
     keys = []
+    
+    # Metoda 1: Czytaj zmienną GROQ_KEYS (zawiera wszystkie klucze oddzielone \n)
+    groq_keys_str = os.getenv("GROQ_KEYS", "").strip()
+    if groq_keys_str:
+        # Parsuj linia po linię (dokładnie jak w backup/cv)
+        for i, line in enumerate(groq_keys_str.split('\n'), 1):
+            key = line.strip()
+            if not key:
+                break  # pusta linia = koniec
+            keys.append((f"GROQ_KEYS[{i}]", key))
+        if keys:
+            return keys  # Jeśli znaleźliśmy klucze, zwróć je
+    
+    # Metoda 2: Fallback na zmienne API_KEY_GROQ_XX (dla backward compatibility)
     # Klucz bazowy
     k = os.getenv("API_KEY_GROQ", "").strip()
     if k:
@@ -2508,12 +2523,13 @@ def _get_groq_keys() -> list:
         k = os.getenv(name, "").strip()
         if k:
             keys.append((name, k))
-    # Klucze _10 do _20 na przyszłość (ten sam format z zerem)
+    # Klucze _10 do _20 na przyszłość
     for i in range(10, 21):
         name = f"API_KEY_GROQ_{i}"
         k = os.getenv(name, "").strip()
         if k:
             keys.append((name, k))
+    
     return keys
 
 

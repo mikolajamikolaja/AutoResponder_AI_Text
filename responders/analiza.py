@@ -44,7 +44,7 @@ MAX_KROKOW = 10
 # ── GROQ / DEEPSEEK ───────────────────────────────────────────────────────────
 
 def _groq_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str]:
-    for key in _GROQ_KEYS:
+    for key_idx, key in enumerate(_GROQ_KEYS, 1):
         try:
             resp = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -62,7 +62,7 @@ def _groq_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str
             )
             if resp.status_code == 200:
                 return resp.json()["choices"][0]["message"]["content"].strip()
-            logger.warning("[edek] Groq %s → HTTP %d", key[:8], resp.status_code)
+            logger.warning("[edek] Groq-key%d → HTTP %d", key_idx, resp.status_code)
         except Exception as e:
             logger.warning("[edek] Groq error: %s", e)
     return _deepseek_call(prompt, system, max_tokens)

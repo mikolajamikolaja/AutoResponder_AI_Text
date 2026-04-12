@@ -60,7 +60,27 @@ SUBSTITUTE_IMAGE_PATH = os.path.join(BASE_DIR, "images", "zastepczy.jpg")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get_groq_keys() -> list:
+    """
+    Zbiera wszystkie klucze Groq.
+    Metodologia (taka sama jak w backup/cv/test groq.py):
+    1. Czytaj zmienną GROQ_KEYS (zawiera klucze oddzielone newline)
+    2. Fallback: czytaj zmienne API_KEY_GROQ, API_KEY_GROQ_01..API_KEY_GROQ_09
+    """
     keys = []
+    
+    # Metoda 1: Czytaj zmienną GROQ_KEYS (zawiera wszystkie klucze oddzielone \n)
+    groq_keys_str = os.getenv("GROQ_KEYS", "").strip()
+    if groq_keys_str:
+        # Parsuj linia po linię (dokładnie jak w backup/cv)
+        for i, line in enumerate(groq_keys_str.split('\n'), 1):
+            key = line.strip()
+            if not key:
+                break  # pusta linia = koniec
+            keys.append((f"GROQ_KEYS[{i}]", key))
+        if keys:
+            return keys  # Jeśli znaleźliśmy klucze, zwróć je
+    
+    # Metoda 2: Fallback na zmienne API_KEY_GROQ_XX (dla backward compatibility)
     val = os.getenv("API_KEY_GROQ", "").strip()
     if val:
         keys.append(("API_KEY_GROQ", val))
