@@ -4372,7 +4372,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         image_block = (
             '<div style="margin: 24px 0; text-align: center;">'
             '<p style="margin: 0 0 12px 0; color: #444; font-size: 14px;">'
-            'Obrazek gry wygenerowany na podstawie pliku <strong>doprecyzuj.html</strong>.'</p>'
+            "Obrazek gry wygenerowany na podstawie pliku <strong>doprecyzuj.html</strong>.</p>"
             f'<img src="data:image/jpeg;base64,{image_b64}" alt="Mapa gry Edka" '
             'style="max-width:100%;height:auto;border-radius:14px;border:1px solid #ddd;" />'
             '</div>'
