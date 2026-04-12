@@ -894,18 +894,30 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
 function executeAnalizaMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych analizy dla " + recipient); return; }
   var attachments = [];
-  var docxList    = data.docx_list || [];
-  for (var i = 0; i < docxList.length; i++) {
-    var d = docxList[i];
-    if (!d || !d.base64) continue;
+  var attachedNames = {};
+
+  function addAttachment(d, defaultName) {
+    if (!d || !d.base64) return;
+    var filename = d.filename || defaultName;
+    if (attachedNames[filename]) return;
+    attachedNames[filename] = true;
     try {
       attachments.push(Utilities.newBlob(
         Utilities.base64Decode(d.base64),
         d.content_type || "text/html",
-        d.filename || ("analiza_" + (i + 1) + ".html")
+        filename
       ));
-    } catch (e) { console.error("Błąd HTML [" + i + "]: " + e.message); }
+    } catch (e) {
+      console.error("Błąd HTML: " + e.message);
+    }
   }
+
+  var docxList = data.docx_list || [];
+  for (var i = 0; i < docxList.length; i++) {
+    addAttachment(docxList[i], "analiza_" + (i + 1) + ".html");
+  }
+  addAttachment(data.gra_html, "analiza.html");
+
   var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
   try {
     msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Analiza Powtórzeń – Autoresponder" });

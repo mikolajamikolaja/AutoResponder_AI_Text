@@ -58,7 +58,7 @@ def _groq_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str
                     "max_tokens": max_tokens,
                     "temperature": 0.93,
                 },
-                timeout=60,
+                timeout=90,
             )
             if resp.status_code == 200:
                 return resp.json()["choices"][0]["message"]["content"].strip()
@@ -84,7 +84,7 @@ def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional
                 "max_tokens": max_tokens,
                 "temperature": 0.88,
             },
-            timeout=60,
+            timeout=90,
         )
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"].strip()
@@ -157,7 +157,7 @@ Odpowiedz WYŁĄCZNIE w JSON, zero komentarzy, zero backtick-ów:
   "wyrok": "Ostateczny absurdalny wyrok Edka po {MAX_KROKOW} rundach. Zakończ podpisem: Z pozdrowieniami, Edek."
 }}"""
 
-    raw = _groq_call(prompt, _SYSTEM_EDEK, max_tokens=3500)
+    raw = _groq_call(prompt, _SYSTEM_EDEK, max_tokens=3000)
     if not raw:
         return None
 
@@ -175,6 +175,13 @@ def _parse_json_safe(raw: Optional[str]) -> Optional[dict]:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
+        # Próba naprawienia uciętego JSON
+        repaired = _repair_json(raw)
+        if repaired:
+            try:
+                return json.loads(repaired)
+            except Exception:
+                pass
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
             try:
@@ -183,6 +190,22 @@ def _parse_json_safe(raw: Optional[str]) -> Optional[dict]:
                 pass
     logger.warning("[edek] JSON parse failed: %s", raw[:200])
     return None
+
+
+def _repair_json(raw: str) -> Optional[str]:
+    """Prosta naprawa uciętego JSON."""
+    raw = raw.strip()
+    if not raw.startswith("{"):
+        return None
+    # Policz { i }
+    open_count = raw.count("{")
+    close_count = raw.count("}")
+    if close_count >= open_count:
+        return raw
+    # Dodaj brakujące }
+    missing = open_count - close_count
+    repaired = raw + "}" * missing
+    return repaired
 
 
 # ── FALLBACK ──────────────────────────────────────────────────────────────────
@@ -487,6 +510,7 @@ def build_analiza_section(body: str,
     """
     Generuje Edek Responder:
       reply_html — treść maila (CSS :target, bez JS)
+      gra_html   — plik HTML do załączenia jako pojedynczy attachment
       docx_list  — [{"base64":..., "filename":"edek_gra.html", "content_type":"text/html"}]
 
     W app.py zaktualizuj wywołanie:
@@ -530,6 +554,11 @@ def build_analiza_section(body: str,
 
     return {
         "reply_html": reply_html,
+        "gra_html": {
+            "base64":       gra_html_b64,
+            "filename":     "edek_gra.html",
+            "content_type": "text/html",
+        },
         "docx_list": [
             {
                 "base64":       gra_html_b64,
