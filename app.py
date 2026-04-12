@@ -73,6 +73,49 @@ def _strip_html_to_text(html_value: str) -> str:
     return html.unescape(text).strip()
 
 
+def _upload_drive_item(item: dict, folder_id: str) -> bool:
+    if not isinstance(item, dict) or not item.get("base64") or not item.get("filename"):
+        return False
+    upload_result = upload_file_to_drive(
+        item["base64"],
+        item["filename"],
+        item.get("content_type", "application/octet-stream"),
+        folder_id
+    )
+    if not upload_result:
+        return False
+    item["drive_url"] = upload_result["url"]
+    item.pop("base64", None)
+    return True
+
+
+def _upload_drive_section_files(section_data: dict, folder_id: str) -> list:
+    uploads = []
+    if not isinstance(section_data, dict):
+        return uploads
+
+    single_fields = [
+        "pdf", "emoticon", "cv_pdf", "log_psych", "ankieta_html", "ankieta_pdf",
+        "horoskop_pdf", "karta_rpg_pdf", "raport_pdf", "debug_txt", "explanation_txt",
+        "plakat_svg", "gra_html", "image", "image2", "prompt1_txt", "prompt2_txt",
+    ]
+    list_fields = ["triptych", "images", "videos", "docs", "docx_list"]
+
+    for field in single_fields:
+        item = section_data.get(field)
+        if _upload_drive_item(item, folder_id):
+            uploads.append(f"{field}/{item.get('filename')}")
+
+    for field in list_fields:
+        arr = section_data.get(field)
+        if isinstance(arr, list):
+            for item in arr:
+                if _upload_drive_item(item, folder_id):
+                    uploads.append(f"{field}/{item.get('filename')}")
+
+    return uploads
+
+
 def _format_log_entry_data(data: object) -> list:
     if data is None:
         return ["  (brak danych)"]
@@ -588,45 +631,24 @@ def webhook():
     # ── Zapis do Google Drive jeśli włączone ──────────────────────────────────
     if save_to_drive and drive_folder_id:
         drive_uploads = []
+
+        # Top-level pliki wynikowe
+        for top_field in ("log_txt", "log_svg"):
+            file_obj = response_data.get(top_field)
+            if isinstance(file_obj, dict) and file_obj.get("base64") and file_obj.get("filename"):
+                if _upload_drive_item(file_obj, drive_folder_id):
+                    drive_uploads.append(f"{top_field}/{file_obj['filename']}")
+
+        # Sekcje responderów
         for key, value in response_data.items():
-            if isinstance(value, dict):
-                # Obrazy
-                if "images" in value and isinstance(value["images"], list):
-                    for img in value["images"]:
-                        if "base64" in img and "filename" in img:
-                            upload_result = upload_file_to_drive(
-                                img["base64"], img["filename"], img.get("content_type", "image/png"), drive_folder_id
-                            )
-                            if upload_result:
-                                img["drive_url"] = upload_result["url"]
-                                drive_uploads.append(f"{img['filename']}: {upload_result['url']}")
-                            else:
-                                app.logger.error(f"Błąd uploadu {img['filename']} do Drive")
-
-                # PDF
-                if "pdf" in value and isinstance(value["pdf"], dict) and "base64" in value["pdf"]:
-                    upload_result = upload_file_to_drive(
-                        value["pdf"]["base64"], value["pdf"]["filename"], "application/pdf", drive_folder_id
-                    )
-                    if upload_result:
-                        value["pdf"]["drive_url"] = upload_result["url"]
-                        drive_uploads.append(f"{value['pdf']['filename']}: {upload_result['url']}")
-                    else:
-                        app.logger.error(f"Błąd uploadu PDF {value['pdf']['filename']} do Drive")
-
-                # Debug txt dla smierc
-                if "debug_txt" in value and isinstance(value["debug_txt"], dict) and "base64" in value["debug_txt"]:
-                    upload_result = upload_file_to_drive(
-                        value["debug_txt"]["base64"], value["debug_txt"]["filename"], "text/plain", drive_folder_id
-                    )
-                    if upload_result:
-                        value["debug_txt"]["drive_url"] = upload_result["url"]
-                        drive_uploads.append(f"{value['debug_txt']['filename']}: {upload_result['url']}")
-                    else:
-                        app.logger.error(f"Błąd uploadu debug txt do Drive")
+            if not isinstance(value, dict):
+                continue
+            section_uploads = _upload_drive_section_files(value, drive_folder_id)
+            drive_uploads.extend([f"{key}/{name}" for name in section_uploads])
 
         if drive_uploads:
             app.logger.info(f"Zapisano do Drive: {', '.join(drive_uploads)}")
+        response_data["saved_to_drive"] = True
 
     # ── Aktualizacja arkusza śmierci jeśli potrzebne ──────────────────────────
     if smierc_sheet_id and "smierc" in response_data and response_data["smierc"]:

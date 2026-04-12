@@ -154,15 +154,16 @@ WYSYŁA: Email Z KEYWORDS (np. KEYWORDS2 dla Scrabble)
            KEYWORDS2-4 (scrabble, analiza, emocje) ZAWSZE zapisywane do historii!
 
     5. ✓ executeScrabbleMailSend(GAS) wysyła email
-    6. ✓ saveToHistory(GAS) → WEJŚCIE do historii (linia 1473)
+    6. ⚠️ Oczekiwane zachowanie: NIE zapisuj nowego użytkownika do arkusza historii wyłącznie z KEYWORDS2-4.
+       Tylko KEYWORDS/KEYWORDS_JOKER powinny tworzyć nowe wpisy w HISTORY_SHEET_ID / SMIERC_HISTORY_SHEET_ID.
 
   Render (Python):
     1. skip_save_to_history=false (bo KEYWORDS2 nie ustawia skip)
-    2. ✓ save_to_history_sheet() → ZAPISANA
+    2. ✗ save_to_history_sheet() → NIE POWINNO być zapisywane dla nowego użytkownika
 
   WYNIK:
     ✓ Email wysłany
-    ✓ HISTORIA ZAPISANA (nowy user, ale z keywords2 - zapisany)
+    ✨ HISTORIA NIEZAPISANA (nowy user pozostaje unknown)
     ✓ Arkusz śmierci - bez zmian
 
 
@@ -213,8 +214,8 @@ WYSYŁA: Email Z KEYWORDS (KEYWORDS1 - główne słowo kluczowe)
 │ Smierc     │ KEYWORDS_JOKER │ Zapisuje WEJŚCIE │ save_to_history=✓  │ ✓ HIS│
 │            │                │ _updateSmircData │ update_smierc=✓    │✓SMIR│
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ Unknown    │ KEYWORDS2-4    │ Zapisuje WEJŚCIE │ save_to_history=✓  │ ✓ HIS│
-│ (new user) │ (nie skip)     │                  │ NEW ENTRANT        │ (NEW)│
+│ Unknown    │ KEYWORDS2-4    │ Nie zapisuje hist │ save_to_history=✗* │ ✨NO │
+│ (new user) │ (nie skip)     │                  │ POWINNO pozostać unknown │ (NEW)│
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Unknown    │ KEYWORDS1      │ skip=true        │ skip=true, ✗ hist  │ ✨NO │
 │ (new user) │                │ Nie zapisuje hist│ Pozostaje unknown  │      │
@@ -236,9 +237,9 @@ Legend:
 ═══════════════════════════════════════════════════════════════════════════════
 
 1. TYLKO KEYWORDS/KEYWORDS1 blokują zapis do historii (skip_save_to_history=true)
-   - KEYWORDS2 (Scrabble) → ZAWSZE zapisywane do historii
-   - KEYWORDS3 (Analiza) → ZAWSZE zapisywane do historii  
-   - KEYWORDS4 (Emocje) → ZAWSZE zapisywane do historii
+   - KEYWORDS2 (Scrabble) → NIE powinien dodawać nowego użytkownika do historii
+   - KEYWORDS3 (Analiza) → NIE powinien dodawać nowego użytkownika do historii
+   - KEYWORDS4 (Emocje) → NIE powinien dodawać nowego użytkownika do historii
 
 2. JOKER zawsze aktywuje i zapisuje do smierc (i historii)
 
