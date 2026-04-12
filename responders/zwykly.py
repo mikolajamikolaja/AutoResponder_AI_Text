@@ -4268,7 +4268,6 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     from flask import current_app as flask_app
     import re
     from responders.analiza import build_analiza_section
-    from responders.analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive
 
     logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2 - oszczędny Groq)")
     app_obj = flask_app._get_current_object()
@@ -4366,18 +4365,43 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     except Exception:
         pass
 
+    def _build_html_reply_with_image(body_text: str, image_b64: str) -> str:
+        html = build_html_reply(body_text)
+        if not image_b64:
+            return html
+        image_block = (
+            '<div style="margin: 24px 0; text-align: center;">'
+            '<p style="margin: 0 0 12px 0; color: #444; font-size: 14px;">'
+            'Obrazek gry wygenerowany na podstawie pliku <strong>doprecyzuj.html</strong>.'</p>'
+            f'<img src="data:image/jpeg;base64,{image_b64}" alt="Mapa gry Edka" '
+            'style="max-width:100%;height:auto;border-radius:14px;border:1px solid #ddd;" />'
+            '</div>'
+        )
+        return html.replace('<div class="footer">', image_block + '<div class="footer">', 1)
+
+    reply_html = build_html_reply(res_text)
     analiza_docx_list = []
     try:
         analiza_res = build_analiza_section(body, attachments or [], sender=sender_email, sender_name=sender_name)
         if isinstance(analiza_res, dict):
+            diagram_jpg_b64 = None
+            interactive_html_b64 = None
             for doc in analiza_res.get("docx_list", []):
                 if not isinstance(doc, dict) or not doc.get("base64"):
                     continue
+                content_type = doc.get("content_type", "text/html")
+                if content_type == "image/jpeg" and not diagram_jpg_b64:
+                    diagram_jpg_b64 = doc["base64"]
+                elif content_type == "text/html" and not interactive_html_b64:
+                    interactive_html_b64 = doc["base64"]
+            if interactive_html_b64:
                 analiza_docx_list.append({
-                    "base64":       doc["base64"],
-                    "content_type": doc.get("content_type", "text/html"),
+                    "base64":       interactive_html_b64,
+                    "content_type": "text/html",
                     "filename":     "doprecyzuj.html"
                 })
+            if diagram_jpg_b64:
+                reply_html = _build_html_reply_with_image(res_text, diagram_jpg_b64)
     except Exception as e:
         logger.warning("[zwykly] analiza attachment failed: %s", e)
 
@@ -4402,7 +4426,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', sender_name)[:30] or "Pacjent"
 
     return {
-        "reply_html": build_html_reply(res_text),
+        "reply_html": reply_html,
         "raport_pdf": raport_pdf,
         "psych_photo_1": psych_photo_1,
         "psych_photo_2": psych_photo_2,

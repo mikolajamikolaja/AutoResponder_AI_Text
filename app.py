@@ -530,9 +530,17 @@ def webhook():
     # ── FALA 1: lekkie respondery ─────────────────────────────────────────────
     requested_sections = set(retry_responders) if is_retry else set()
     if not is_retry:
-        if wants_text_reply:
+        has_special_responder = wants_scrabble or wants_analiza or wants_emocje or wants_generator_pdf or wants_smierc
+        if wants_text_reply and not has_special_responder:
             requested_sections.update(["zwykly", "biznes"])
-        
+            logger.log_decision("text_reply_decision", "wants_text_reply=True and no special responder", "Dodaję zwykly/biznes")
+        elif has_special_responder:
+            logger.log_decision(
+                "text_reply_decision",
+                f"special responders active: scrabble={wants_scrabble}, analiza={wants_analiza}, emocje={wants_emocje}, generator_pdf={wants_generator_pdf}, smierc={wants_smierc}",
+                "Nie dodaję zwykly/biznes, specjalny responder obsłuży odpowiedź"
+            )
+
         if wants_scrabble:
             requested_sections.add("scrabble")
         if wants_analiza:
@@ -573,28 +581,6 @@ def webhook():
             previous_subject=previous_subject,
             sender=sender,
             sender_name=sender_name,
-        )
-    # Specjalne respondery (mogą być uruchamiane odrębnie)
-    if "analiza" in requested_sections:
-        wave1["analiza"] = lambda: run(
-            build_analiza_section,
-            body,
-            attachments,
-            sender=sender,
-            sender_name=sender_name,
-            # disable_flux / test_mode: jeśli KEYWORDS_TEST jest w mailu,
-            # analiza.py dostanie test_mode=True (jeśli implementuje Flux)
-            test_mode=disable_flux or test_mode,
-        )
-    if "emocje" in requested_sections:
-        # disable_flux: jeśli KEYWORDS_TEST, wyłącz Flux w emocje
-        wave1["emocje"] = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
-    if "generator_pdf" in requested_sections:
-        _sn   = sender_name
-        _body = body
-        # disable_flux: jeśli KEYWORDS_TEST, wyłącz Flux w generator_pdf
-        wave1["generator_pdf"] = lambda: run(
-            build_generator_pdf_section, _body, sender_name=_sn, test_mode=disable_flux or test_mode
         )
 
     response_data = _run_parallel(wave1, flask_app)

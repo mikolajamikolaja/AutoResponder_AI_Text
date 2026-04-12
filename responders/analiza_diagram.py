@@ -16,6 +16,7 @@ import json
 import subprocess
 import base64
 from io import BytesIO
+from html import escape
 from typing import Optional, Dict, Any
 
 logger_enabled = True
@@ -229,6 +230,37 @@ def _generate_jpg_fallback(gra: Dict[str, Any], width: int = 1024, height: int =
         return None
 
 
+def _wrap_svg_text(text: str, max_chars: int) -> list[str]:
+    """Dzieli tekst na wiersze o maksymalnej długości znaków."""
+    if not text:
+        return [""]
+    words = str(text).split()
+    lines = []
+    current = ""
+    for word in words:
+        if current and len(current) + len(word) + 1 > max_chars:
+            lines.append(current)
+            current = word
+        else:
+            current = f"{current} {word}".strip()
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _svg_text_block(lines: list[str], x: int, y: int, font_size: int = 12, anchor: str = "middle", fill: str = "#3C3489", font_weight: str = "bold") -> str:
+    if not lines:
+        return ""
+    svg = [
+        f'<text x="{x}" y="{y}" text-anchor="{anchor}" font-family="Arial" font-size="{font_size}" fill="{fill}" font-weight="{font_weight}">'
+    ]
+    for idx, line in enumerate(lines):
+        dy = 0 if idx == 0 else font_size + 4
+        svg.append(f'<tspan x="{x}" dy="{dy}">{escape(line)}</tspan>')
+    svg.append("</text>")
+    return "".join(svg)
+
+
 def generate_jpg_diagram(gra: Dict[str, Any]) -> Optional[bytes]:
     """
     Główna funkcja — generuje JPG diagramu.
@@ -313,67 +345,77 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") ->
     y_current = 90
     for i, krok in enumerate(kroki, 1):
         nr = krok.get("nr", i)
-        pytanie = krok.get("pytanie", f"P{i}")[:50]
-        intro = krok.get("intro", "")[:40]
+        pytanie = krok.get("pytanie", f"P{i}")
+        intro = krok.get("intro", "")
         opcje = krok.get("opcje", {})
+        
+        pytanie_lines = _wrap_svg_text(pytanie, 48)
+        intro_lines = _wrap_svg_text(intro, 52)
+        node_height = 40 + max(len(pytanie_lines), len(intro_lines)) * 16
+        node_height = max(node_height, 60)
         
         # Node pytania
         svg_lines.append(f'<g class="q-node">')
         svg_lines.append(
-            f'  <rect x="750" y="{y_current}" width="700" height="52" rx="8"/>'
+            f'  <rect x="750" y="{y_current}" width="700" height="{node_height}" rx="8"/>'
         )
-        svg_lines.append(
-            f'  <text x="1100" y="{y_current + 22}" text-anchor="middle" font-family="Arial">{pytanie}</text>'
-        )
-        svg_lines.append(
-            f'  <text x="1100" y="{y_current + 40}" text-anchor="middle" font-size="10" '
-            f'fill="#7F77DD" font-family="Arial">{intro}</text>'
-        )
+        svg_lines.append(_svg_text_block(pytanie_lines, 1100, y_current + 22, font_size=13, fill="#3C3489", font_weight="bold"))
+        if any(intro_lines):
+            svg_lines.append(_svg_text_block(intro_lines, 1100, y_current + 40, font_size=10, fill="#7F77DD", font_weight="normal"))
         svg_lines.append('</g>')
         
         # Połączenia do opcji
-        y_next = y_current + 118
+        y_next = y_current + node_height + 26
         
         # Opcja A
         if "A" in opcje:
-            tekst_a = opcje["A"].get("tekst", "A")[:20]
-            svg_lines.append(f'<path d="M900 {y_current + 52} L900 {y_current + 85} L640 {y_current + 85} L640 {y_next}" class="arr-a"/>')
+            tekst_a = opcje["A"].get("tekst", "A")
+            tekst_a_lines = _wrap_svg_text(tekst_a, 38)
+            leaf_height = 24 + len(tekst_a_lines) * 16
+            leaf_height = max(leaf_height, 52)
+            svg_lines.append(f'<path d="M900 {y_current + (node_height // 2)} L900 {y_current + node_height + 10} L640 {y_current + node_height + 10} L640 {y_next}" class="arr-a"/>')
             svg_lines.append(
-                f'<text x="760" y="{y_current + 80}" class="lbl lbl-a" text-anchor="middle" '
-                f'font-family="Arial">A: {tekst_a}</text>'
+                f'<text x="760" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-a" text-anchor="middle" '
+                f'font-family="Arial">A</text>'
             )
             svg_lines.append(
-                f'<g class="leaf-a"><rect x="480" y="{y_next}" width="320" height="52" rx="6"/>'
-                f'<text x="640" y="{y_next + 20}" text-anchor="middle" font-family="Arial">{tekst_a}</text>'
-                f'</g>'
+                f'<g class="leaf-a"><rect x="480" y="{y_next}" width="320" height="{leaf_height}" rx="6"/>'
             )
+            svg_lines.append(_svg_text_block(tekst_a_lines, 640, y_next + 18, font_size=10, fill="#0C447C", font_weight="normal"))
+            svg_lines.append('</g>')
         
         # Opcja B
         if "B" in opcje:
-            tekst_b = opcje["B"].get("tekst", "B")[:20]
-            svg_lines.append(f'<path d="M1100 {y_current + 52} L1100 {y_next}" class="arr-b"/>')
+            tekst_b = opcje["B"].get("tekst", "B")
+            tekst_b_lines = _wrap_svg_text(tekst_b, 38)
+            leaf_height = 24 + len(tekst_b_lines) * 16
+            leaf_height = max(leaf_height, 52)
+            svg_lines.append(f'<path d="M1100 {y_current + (node_height // 2)} L1100 {y_next}" class="arr-b"/>')
             svg_lines.append(
-                f'<text x="1145" y="{y_current + 78}" class="lbl lbl-b" font-family="Arial">B: {tekst_b}</text>'
+                f'<text x="1145" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-b" font-family="Arial">B</text>'
             )
             svg_lines.append(
-                f'<g class="leaf-b"><rect x="940" y="{y_next}" width="320" height="52" rx="6"/>'
-                f'<text x="1100" y="{y_next + 20}" text-anchor="middle" font-family="Arial">{tekst_b}</text>'
-                f'</g>'
+                f'<g class="leaf-b"><rect x="940" y="{y_next}" width="320" height="{leaf_height}" rx="6"/>'
             )
+            svg_lines.append(_svg_text_block(tekst_b_lines, 1100, y_next + 18, font_size=10, fill="#085041", font_weight="normal"))
+            svg_lines.append('</g>')
         
         # Opcja C
         if "C" in opcje:
-            tekst_c = opcje["C"].get("tekst", "C")[:20]
-            svg_lines.append(f'<path d="M1300 {y_current + 52} L1300 {y_current + 85} L1560 {y_current + 85} L1560 {y_next}" class="arr-c"/>')
+            tekst_c = opcje["C"].get("tekst", "C")
+            tekst_c_lines = _wrap_svg_text(tekst_c, 38)
+            leaf_height = 24 + len(tekst_c_lines) * 16
+            leaf_height = max(leaf_height, 52)
+            svg_lines.append(f'<path d="M1300 {y_current + (node_height // 2)} L1300 {y_current + node_height + 10} L1560 {y_current + node_height + 10} L1560 {y_next}" class="arr-c"/>')
             svg_lines.append(
-                f'<text x="1430" y="{y_current + 80}" class="lbl lbl-c" text-anchor="middle" '
-                f'font-family="Arial">C: {tekst_c}</text>'
+                f'<text x="1430" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-c" text-anchor="middle" '
+                f'font-family="Arial">C</text>'
             )
             svg_lines.append(
-                f'<g class="leaf-c"><rect x="1400" y="{y_next}" width="320" height="52" rx="6"/>'
-                f'<text x="1560" y="{y_next + 20}" text-anchor="middle" font-family="Arial">{tekst_c}</text>'
-                f'</g>'
+                f'<g class="leaf-c"><rect x="1400" y="{y_next}" width="320" height="{leaf_height}" rx="6"/>'
             )
+            svg_lines.append(_svg_text_block(tekst_c_lines, 1560, y_next + 18, font_size=10, fill="#633806", font_weight="normal"))
+            svg_lines.append('</g>')
         
         # Połączenie do następnego pytania
         y_connect = y_next + 52
@@ -390,13 +432,16 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") ->
         y_current = y_connect + 60
     
     # Wyrok końcowy
+    wyrok_lines = _wrap_svg_text(wyrok, 50)
+    wyrok_height = 30 + len(wyrok_lines) * 16
+    wyrok_height = max(wyrok_height, 60)
     svg_lines.append(
-        f'<g><rect x="850" y="{y_current}" width="500" height="60" rx="8" fill="#3C3489"/>'
+        f'<g><rect x="850" y="{y_current}" width="500" height="{wyrok_height}" rx="8" fill="#3C3489"/>'
         f'<text x="1100" y="{y_current + 22}" text-anchor="middle" font-size="12" fill="#F1EFE8" '
         f'font-weight="bold" font-family="Arial">⚖ WYROK KOŃCOWY</text>'
-        f'<text x="1100" y="{y_current + 40}" text-anchor="middle" font-size="10" fill="#E8D5B0" '
-        f'font-family="Arial">{wyrok[:100]}</text></g>'
     )
+    svg_lines.append(_svg_text_block(wyrok_lines, 1100, y_current + 40, font_size=10, fill="#E8D5B0", font_weight="normal"))
+    svg_lines.append('</g>')
     
     svg_lines.append('</svg>')
     
