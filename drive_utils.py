@@ -188,8 +188,9 @@ def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
 
         sheets_service.spreadsheets().values().append(
             spreadsheetId=sheet_id,
-            range='Sheet1!A1:E',
+            range='Historia',
             valueInputOption='RAW',
+            insertDataOption='INSERT_ROWS',
             body={'values': values}
         ).execute()
 

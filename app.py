@@ -26,6 +26,7 @@ Respondery:
 import os
 import base64
 import io
+import json
 import traceback
 from flask import Flask, request, jsonify
 import requests
@@ -61,6 +62,70 @@ def _run_parallel(tasks: dict, flask_app) -> dict:
             )
             results[key] = {}
     return results
+
+
+def _format_log_entry_data(data: object) -> list:
+    if data is None:
+        return ["  (brak danych)"]
+    if isinstance(data, dict):
+        lines = []
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                lines.append(f"  {key}: {json.dumps(value, ensure_ascii=False, indent=2)}")
+            else:
+                lines.append(f"  {key}: {value}")
+        return lines
+    if isinstance(data, list):
+        lines = []
+        for item in data:
+            if isinstance(item, (dict, list)):
+                lines.append(f"  - {json.dumps(item, ensure_ascii=False)}")
+            else:
+                lines.append(f"  - {item}")
+        return lines
+    return [f"  {data}"]
+
+
+def _build_log_txt_content(logger, response_data: dict) -> str:
+    groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
+    deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
+    nouns_dict = response_data.get('zwykly', {}).get('nouns_dict', {})
+    detected_nouns = []
+    if isinstance(nouns_dict, dict):
+        detected_nouns = [v for v in nouns_dict.values() if isinstance(v, str) and v.strip()]
+
+    lines = []
+    lines.append("=" * 88)
+    lines.append("PODSUMOWANIE WYKONANIA AUTORESPONDERA")
+    lines.append("=" * 88)
+    lines.append(f"Start: {logger.start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    lines.append("[1] ZBIORCZE INFORMACJE"]
+    lines.append(f"- Groq użyty: {groq_count} razy")
+    lines.append(f"- DeepSeek użyty: {deepseek_count} razy")
+    lines.append(f"- Rzeczowniki wykryte: {', '.join(detected_nouns) if detected_nouns else 'brak'}")
+    lines.append("")
+    lines.append("[2] SEKCJE I KANAŁY WYWOŁAŃ"]
+    section_keys = [k for k in response_data.keys() if k not in ("log_txt", "log_svg", "log")]
+    lines.append(f"- Sekcje odpowiedzi: {', '.join(sorted(section_keys)) if section_keys else '(brak)'}")
+    lines.append("")
+    lines.append("[3] WPISY LOGGERA — szczegóły wykonania")
+    for entry in logger.entries:
+        timestamp = entry.get('timestamp', 0.0)
+        lines.append(f"[{entry['type']}] +{timestamp:.2f}s")
+        lines.extend(_format_log_entry_data(entry.get('data')))
+        lines.append("")
+
+    if detected_nouns:
+        lines.append("[4] WYEKSTRAHOWANE RZECZOWNIKI"]
+        for noun in detected_nouns:
+            lines.append(f"- {noun}")
+        lines.append("")
+
+    lines.append("=" * 88)
+    lines.append("KONIEC PODSUMOWANIA")
+    lines.append("=" * 88)
+    return "\n".join(lines)
 
 
 @app.route("/webhook", methods=["POST"])
@@ -162,11 +227,7 @@ def webhook():
         if "log_txt" in response_data and "log_svg" in response_data:
             return
         logger = get_logger()
-        groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
-        deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
-        nouns = []  # Jeśli analiza wykrywa nouns, dodać tutaj
-
-        log_txt_content = f"Podsumowanie wykonania:\n- Groq użyty: {groq_count} razy\n- DeepSeek użyty: {deepseek_count} razy\n- Rzeczowniki wykryte: {', '.join(nouns) if nouns else 'brak'}\n"
+        log_txt_content = _build_log_txt_content(logger, response_data)
         log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
         response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
 
@@ -291,11 +352,7 @@ def webhook():
 
         # ── Generuj logi ──────────────────────────────────────────────────────
         logger = get_logger()
-        groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
-        deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
-        nouns = []  # Jeśli analiza wykrywa nouns, dodać tutaj
-
-        log_txt_content = f"Podsumowanie wykonania:\n- Groq użyty: {groq_count} razy\n- DeepSeek użyty: {deepseek_count} razy\n- Rzeczowniki wykryte: {', '.join(nouns) if nouns else 'brak'}\n"
+        log_txt_content = _build_log_txt_content(logger, response_data)
         log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
         response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
 

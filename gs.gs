@@ -84,12 +84,23 @@ function extractPlainTextFromHtml(htmlText) {
 }
 
 // ── Google Sheets: historia zwykłych wiadomości ───────────────────────────────
+function _getHistorySheet() {
+  var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
+  if (!sheetId) { console.warn("Brak HISTORY_SHEET_ID"); return null; }
+
+  var ss = SpreadsheetApp.openById(sheetId);
+  var sheet = ss.getSheetByName("Historia");
+  if (!sheet) {
+    console.warn("Brak zakładki 'Historia' w arkuszu historii, używam pierwszej zakładki.");
+    sheet = ss.getSheets()[0];
+  }
+  return sheet;
+}
+
 function saveToHistory(senderEmail, subject, body) {
   try {
-    var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
-    if (!sheetId) { console.warn("Brak HISTORY_SHEET_ID"); return; }
-    var ss      = SpreadsheetApp.openById(sheetId);
-    var sheet   = ss.getSheets()[0];
+    var sheet = _getHistorySheet();
+    if (!sheet) return;
     var rowData = [new Date(), senderEmail, "WEJ\u015aCIE", subject || "", (body || "").substring(0, 1000)];
     sheet.appendRow(rowData);
     console.log("Historia zapisana dla: " + senderEmail);
@@ -98,10 +109,8 @@ function saveToHistory(senderEmail, subject, body) {
 
 function saveResponseToHistory(senderEmail, subject, body) {
   try {
-    var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
-    if (!sheetId) { console.warn("Brak HISTORY_SHEET_ID"); return; }
-    var ss      = SpreadsheetApp.openById(sheetId);
-    var sheet   = ss.getSheets()[0];
+    var sheet = _getHistorySheet();
+    if (!sheet) return;
     var rowData = [new Date(), senderEmail, "ODPOWIED\u017a", subject || "", (body || "").substring(0, 1000)];
     sheet.appendRow(rowData);
     console.log("Odpowied\u017a zapisana dla: " + senderEmail);
@@ -514,6 +523,9 @@ function getAllAttachments(msg) {
 // ════════════════════════════════════════════════════════════════════════════
 // GOOGLE DRIVE — zapis wszystkich plików
 // ════════════════════════════════════════════════════════════════════════════
+// DRIVE_FOLDER_ID jest dostępny w GAS jako opcjonalna konfiguracja.
+// Funkcje zapisu do Drive istnieją, ale teraz nie są automatycznie wywoływane
+// podczas głównej ścieżki przetwarzania wiadomości.
 
 function _getDriveFolder() {
   var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
@@ -1236,10 +1248,11 @@ function __AAA_processEmails() {
             saveResponseToHistory(fromEmail, subject, responseReply.json.smierc.reply_html || "");
             _updateSmircData(fromEmail, newEtapReply, plainBody, responseReply.json.smierc.reply_html, msg.getId());
           }
-          if (shouldSendZwykly && responseReply.json.zwykly) {
-            executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-            saveResponseToHistory(fromEmail, subject, responseReply.json.zwykly.reply_html || "");
-          }
+          // Nie wysyłaj lokalnego maila z Tyler Durden - odpowiedź dostarczy backend.
+          // if (shouldSendZwykly && responseReply.json.zwykly) {
+          //   executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+          //   saveResponseToHistory(fromEmail, subject, responseReply.json.zwykly.reply_html || "");
+          // }
         }
         saveToHistory(fromEmail, subject, plainBody);
         break; // obsłużono — przerywamy, następny mail przy kolejnym triggerze
@@ -1289,7 +1302,7 @@ function __AAA_processEmails() {
       if (responseJoker && responseJoker.json) {
         var jj = responseJoker.json;
         if (jj.biznes)        { executeMailSend(jj.biznes, fromEmail, subject, msg, "Notariusz – Informacja"); saveResponseToHistory(fromEmail, subject, jj.biznes.reply_html || ""); }
-        if (jj.zwykly)        { executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
+        // if (jj.zwykly)        { executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
         if (jj.scrabble)      { executeScrabbleMailSend(jj.scrabble, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
         if (jj.analiza)       { executeAnalizaMailSend(jj.analiza, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.analiza.reply_html || ""); }
         if (jj.emocje)        { executeEmocjeMailSend(jj.emocje, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
@@ -1336,10 +1349,11 @@ function __AAA_processEmails() {
           _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
         }
         // shouldSendZwykly — niezależna flaga, działa równocześnie ze śmiercią
-        if (shouldSendZwykly && response2.json.zwykly) {
-          executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-          saveResponseToHistory(fromEmail, subject, response2.json.zwykly.reply_html || "");
-        }
+        // Lokalny mail Tyler Durden wyłączony; odpowiedź dostarczy backend.
+        // if (shouldSendZwykly && response2.json.zwykly) {
+        //   executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        //   saveResponseToHistory(fromEmail, subject, response2.json.zwykly.reply_html || "");
+        // }
       }
       saveToHistory(fromEmail, subject, plainBody);
       break; // SMIERC kontynuacja obsłużona — przerywamy
@@ -1419,7 +1433,8 @@ function __AAA_processEmails() {
         executeMailSend(json.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
       }
       if (json.zwykly && shouldSendZwykly) {
-        executeMailSend(json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        // Lokalny mail Tyler Durden wyłączony; odpowiedź dostarczy backend.
+        // executeMailSend(json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
       }
       if (containsKeyword2 && json.scrabble) {
         executeScrabbleMailSend(json.scrabble, fromEmail, subject, msg);

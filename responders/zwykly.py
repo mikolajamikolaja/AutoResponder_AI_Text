@@ -4239,6 +4239,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "karta_rpg_pdf": karta_rpg_pdf,
         "gra_html": gra_html,
         "explanation_txt": explanation_txt,
-        "provider": provider
+        "provider": provider,
+        "nouns_dict": nouns_dict,
     }
 
