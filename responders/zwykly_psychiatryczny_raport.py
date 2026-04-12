@@ -28,6 +28,7 @@ import base64
 import random
 import requests
 import time
+import concurrent.futures
 from datetime import datetime, timedelta
 from flask import current_app
 
@@ -42,6 +43,8 @@ from core.config import (
     MAX_DLUGOSC_EMAIL,
 )
 from core.logging_reporter import get_logger
+
+_HF_DEAD_TOKENS: set[str] = set()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ŚCIEŻKI
@@ -806,7 +809,18 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
 
 def _get_hf_tokens() -> list:
     names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(40)]
-    return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
+    return [
+        (n, v)
+        for n in names
+        if n not in _HF_DEAD_TOKENS and (v := os.getenv(n, "").strip())
+    ]
+
+
+def _hf_credit_exhausted(resp: requests.Response) -> bool:
+    if resp.status_code != 402:
+        return False
+    text = (resp.text or "").lower()
+    return "depleted your monthly included credits" in text or "purchase pre-paid credits" in text
 
 
 def _generate_flux(prompt: str, label: str,
@@ -864,6 +878,24 @@ def _generate_flux(prompt: str, label: str,
                 except Exception as e:
                     current_app.logger.warning("[psych-flux] PNG→JPG błąd: %s", e)
                     return base64.b64encode(resp.content).decode("ascii")
+            elif resp.status_code == 402:
+                _HF_DEAD_TOKENS.add(name)
+                current_app.logger.warning(
+                    "[psych-flux] %s 402 token=%s — wyczerpane kredyty, dodano do czarnej listy",
+                    label, name
+                )
+                if _hf_credit_exhausted(resp):
+                    current_app.logger.warning(
+                        "[psych-flux] %s 402 wskazuje na globalne wyczerpanie kredytów — kończę próby",
+                        label
+                    )
+                    break
+            elif resp.status_code in (401, 403):
+                _HF_DEAD_TOKENS.add(name)
+                current_app.logger.warning(
+                    "[psych-flux] %s HTTP %d token=%s — nieważny, dodano do czarnej listy",
+                    label, resp.status_code, name
+                )
             elif resp.status_code == 429:
                 current_app.logger.warning("[psych-flux] %s 429 token=%s → następny", label, name)
             else:
@@ -897,14 +929,17 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str, test_
     b64_przedmioty = None
 
     try:
-        try:
-            b64_pacjent = gen_pacjent()
-        except Exception as e:
-            current_app.logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
-        try:
-            b64_przedmioty = gen_przedmioty()
-        except Exception as e:
-            current_app.logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            fut_pacjent = executor.submit(gen_pacjent)
+            fut_przedmioty = executor.submit(gen_przedmioty)
+            try:
+                b64_pacjent = fut_pacjent.result()
+            except Exception as e:
+                current_app.logger.warning("[psych-flux] photo_pacjent błąd: %s", e)
+            try:
+                b64_przedmioty = fut_przedmioty.result()
+            except Exception as e:
+                current_app.logger.warning("[psych-flux] photo_przedmioty błąd: %s", e)
     except Exception as e:
         current_app.logger.error("[psych-flux] Błąd generowania zdjęć: %s", e)
 

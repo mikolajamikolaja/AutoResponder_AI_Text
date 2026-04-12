@@ -25,8 +25,10 @@ Respondery:
 """
 import os
 import base64
+import html
 import io
 import json
+import re
 import traceback
 from flask import Flask, request, jsonify
 import requests
@@ -62,6 +64,14 @@ def _run_parallel(tasks: dict, flask_app) -> dict:
             )
             results[key] = {}
     return results
+
+
+def _strip_html_to_text(html_value: str) -> str:
+    if not html_value:
+        return ""
+    text = re.sub(r"(?i)<br\s*/?>", "\n", html_value)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text).strip()
 
 
 def _format_log_entry_data(data: object) -> list:
@@ -206,7 +216,15 @@ def webhook():
         _prev   = previous_body
         _sender = sender
         _sname  = sender_name
-        wave1["zwykly"] = lambda: run(build_zwykly_section, body, _prev, _sender, _sname, test_mode=test_mode)
+        wave1["zwykly"] = lambda: run(
+            build_zwykly_section,
+            body,
+            _prev,
+            _sender,
+            _sname,
+            test_mode=test_mode,
+            attachments=attachments,
+        )
     if "biznes" in requested_sections:
         wave1["biznes"] = lambda: run(build_biznes_section, body)
     if "nawiazanie" in requested_sections:
@@ -275,7 +293,13 @@ def webhook():
             zalaczniki = zalaczniki_fala1,
         )
         if success and history_sheet_id:
-            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'}", html_fala1[:1000], is_response=True)
+            save_to_history_sheet(
+                history_sheet_id,
+                sender,
+                f"Re: {previous_subject or 'Twoja wiadomość'}",
+                _strip_html_to_text(html_fala1)[:1000],
+                is_response=True,
+            )
     elif zalaczniki_fala1:
         # Wysyłka tylko załączników, jeśli nie ma tekstu
         success = wyslij_odpowiedz(
@@ -296,7 +320,13 @@ def webhook():
         if "emocje" in requested_sections:
             wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
         if "analiza" in requested_sections:
-            wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
+            wave2["analiza"] = lambda: run(
+                build_analiza_section,
+                body,
+                attachments,
+                sender=sender,
+                sender_name=sender_name,
+            )
         if "generator_pdf" in requested_sections:
             _sn   = sender_name
             _body = body
@@ -324,7 +354,13 @@ def webhook():
         if wants_emocje:
             wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
         if wants_analiza:
-            wave2["analiza"] = lambda: run(build_analiza_section, body, attachments)
+            wave2["analiza"] = lambda: run(
+                build_analiza_section,
+                body,
+                attachments,
+                sender=sender,
+                sender_name=sender_name,
+            )
         if wants_generator_pdf:
             _sn   = sender_name
             _body = body
@@ -355,6 +391,11 @@ def webhook():
         log_txt_content = _build_log_txt_content(logger, response_data)
         log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
         response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
+
+        # Dodaj log_txt do każdej sekcji, żeby był dołączony do każdego respondera
+        for key in list(response_data.keys()):
+            if isinstance(response_data[key], dict) and key not in ['log_txt', 'log_svg']:
+                response_data[key]['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
 
         svg_content = '''<svg width="500" height="100" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100">
   <defs>
@@ -391,7 +432,13 @@ def webhook():
             ),
         )
         if success_fala2 and history_sheet_id:
-            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'} (część 2)", (html_fala2 or "Załączniki")[:1000], is_response=True)
+            save_to_history_sheet(
+                history_sheet_id,
+                sender,
+                f"Re: {previous_subject or 'Twoja wiadomość'} (część 2)",
+                _strip_html_to_text(html_fala2 or "Załączniki")[:1000],
+                is_response=True,
+            )
 
     # Zabezpieczenie — nawiazanie zawsze ma has_history
     if "nawiazanie" not in response_data:

@@ -41,6 +41,8 @@ from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
 
+_HF_DEAD_TOKENS: set[str] = set()
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 MEDIA_DIR = os.path.join(BASE_DIR, "media")
@@ -431,7 +433,18 @@ def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> t
 def _get_hf_tokens() -> list:
     """Pobiera listę dostępnych tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKEN20)."""
     names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(21)]
-    return [(n, v) for n in names if (v := os.getenv(n, "").strip())]
+    return [
+        (n, v)
+        for n in names
+        if n not in _HF_DEAD_TOKENS and (v := os.getenv(n, "").strip())
+    ]
+
+
+def _hf_credit_exhausted(resp: requests.Response) -> bool:
+    if resp.status_code != 402:
+        return False
+    text = (resp.text or "").lower()
+    return "depleted your monthly included credits" in text or "purchase pre-paid credits" in text
 
 
 def _load_substitute_image() -> dict | None:
@@ -545,12 +558,28 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
                 return result
 
             elif resp.status_code in (401, 403):
+                _HF_DEAD_TOKENS.add(name)
                 attempt["status"] = "INVALID_TOKEN"
                 attempt["error"] = f"Nieautoryzowany ({resp.status_code})"
                 current_app.logger.warning(
-                    "[flux] ✗ Token %s: invalid/expired (HTTP %d)",
+                    "[flux] ✗ Token %s: invalid/expired (HTTP %d) — dodano do czarnej listy",
                     name, resp.status_code
                 )
+
+            elif resp.status_code == 402:
+                _HF_DEAD_TOKENS.add(name)
+                attempt["status"] = "CREDITS_EXHAUSTED"
+                attempt["error"] = resp.text[:100]
+                current_app.logger.warning(
+                    "[flux] ✗ Token %s: 402 wyczerpane kredyty — dodano do czarnej listy",
+                    name
+                )
+                if _hf_credit_exhausted(resp):
+                    current_app.logger.warning(
+                        "[flux] ✗ Token %s: globalne wyczerpanie kredytów HF — kończę próby",
+                        name
+                    )
+                    break
 
             elif resp.status_code in (503, 529):
                 attempt["status"] = "OVERLOADED"
@@ -894,6 +923,7 @@ def build_smierc_section(
                                 etap, bool(image), bool(token_info))
         return {
             "reply_html": reply_html,
+            "reply_text": reply_text,
             "subject": _build_subject(etap, "", max_etap),
             "nowy_etap": etap,
             "images": [image] if image else [],

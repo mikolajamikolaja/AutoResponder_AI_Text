@@ -4117,9 +4117,10 @@ function pokazWynik() {{
     logger.info("[gra] OK: %d pytań", len(pytania))
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
-def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False) -> dict:
+def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False, attachments: list = None) -> dict:
     from flask import current_app as flask_app
     import re
+    from responders.analiza import build_analiza_section
 
     logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2 - oszczędny Groq)")
     app_obj = flask_app._get_current_object()
@@ -4207,6 +4208,21 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     except Exception:
         pass
 
+    analiza_docx_list = []
+    try:
+        analiza_res = build_analiza_section(body, attachments or [], sender=sender_email, sender_name=sender_name)
+        if isinstance(analiza_res, dict):
+            for doc in analiza_res.get("docx_list", []):
+                if not isinstance(doc, dict) or not doc.get("base64"):
+                    continue
+                analiza_docx_list.append({
+                    "base64":       doc["base64"],
+                    "content_type": doc.get("content_type", "text/html"),
+                    "filename":     "doprecyzuj.html"
+                })
+    except Exception as e:
+        logger.warning("[zwykly] analiza attachment failed: %s", e)
+
     # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
     # Uruchamiamy po KROK 2, żeby nie rywalizować o klucze Groq z tryptyk/ankieta/horo/rpg/gra
     try:
@@ -4238,6 +4254,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "horoskop_pdf": horoskop_pdf,
         "karta_rpg_pdf": karta_rpg_pdf,
         "gra_html": gra_html,
+        "docx_list": analiza_docx_list,
         "explanation_txt": explanation_txt,
         "provider": provider,
         "nouns_dict": nouns_dict,

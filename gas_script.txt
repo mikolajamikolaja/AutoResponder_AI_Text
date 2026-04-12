@@ -900,10 +900,10 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
     try {
       attachments.push(Utilities.newBlob(
         Utilities.base64Decode(d.base64),
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        d.filename || ("analiza_" + (i + 1) + ".docx")
+        d.content_type || "text/html",
+        d.filename || ("analiza_" + (i + 1) + ".html")
       ));
-    } catch (e) { console.error("Błąd DOCX [" + i + "]: " + e.message); }
+    } catch (e) { console.error("Błąd HTML [" + i + "]: " + e.message); }
   }
   var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
   try {
