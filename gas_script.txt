@@ -664,6 +664,7 @@ function __AAA_driveFlush() {
 function executeMailSend(data, recipient, subject, msg, senderName) {
   var inlineImages = {};
   var attachments  = [];
+  var attachedNames = {};
 
   if (data.emoticon && data.emoticon.base64) {
     try {
@@ -780,6 +781,8 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     } catch (e) { console.error("[zwykly] Błąd gra HTML: " + e.message); }
   }
 
+  attachLogFiles(data, attachments, attachedNames);
+
   var htmlBody = (data.reply_html || "<p>(Brak treści)</p>") + triptychHtml;
   try {
     msg.reply("", { htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: senderName });
@@ -792,9 +795,38 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
   }
 }
 
+function addBase64Attachment(attachments, attachedNames, d, defaultName, defaultContentType) {
+  if (!d || !d.base64) return;
+  var filename = d.filename || defaultName;
+  if (attachedNames[filename]) return;
+  attachedNames[filename] = true;
+  try {
+    attachments.push(Utilities.newBlob(
+      Utilities.base64Decode(d.base64),
+      d.content_type || defaultContentType,
+      filename
+    ));
+  } catch (e) {
+    console.error("Błąd attachment " + filename + ": " + e.message);
+  }
+}
+
+function attachLogFiles(data, attachments, attachedNames) {
+  addBase64Attachment(attachments, attachedNames, data.log_txt, "log.txt", "text/plain");
+  addBase64Attachment(attachments, attachedNames, data.log_svg, "log.svg", "image/svg+xml");
+}
+
+function sectionWithLogs(sectionData, rootJson) {
+  if (!sectionData || !rootJson) return sectionData;
+  if (!sectionData.log_txt && rootJson.log_txt) sectionData.log_txt = rootJson.log_txt;
+  if (!sectionData.log_svg && rootJson.log_svg) sectionData.log_svg = rootJson.log_svg;
+  return sectionData;
+}
+
 function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych generator_pdf dla " + recipient); return; }
   var attachments = [];
+  var attachedNames = {};
   if (data.pdf && data.pdf.base64) {
     try {
       attachments.push(Utilities.newBlob(
@@ -803,6 +835,7 @@ function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
       ));
     } catch (e) { console.error("Błąd PDF egzaminu: " + e.message); }
   }
+  attachLogFiles(data, attachments, attachedNames);
   var htmlBody = data.reply_html || "<p>Oto PDF aktywny.</p>";
   try {
     msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Generator Egzaminów – Autoresponder" });
@@ -816,6 +849,7 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
   var attachments  = [];
   var inlineImages = {};
   var imagesHtml   = "";
+  var attachedNames = {};
 
   if (data.images && Array.isArray(data.images)) {
     data.images.forEach(function(imgObj, index) {
@@ -857,6 +891,8 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
     } catch(e) { console.error("Blad debug TXT: " + e.message); }
   }
 
+  attachLogFiles(data, attachments, attachedNames);
+
   var htmlBody = "<div>" + (data.reply_html || "<p>(Brak tresci)</p>") + imagesHtml + "</div>";
   try {
     msg.reply("", { htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Autoresponder zza swiatowy" });
@@ -871,6 +907,7 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
 function executeScrabbleMailSend(data, recipient, subject, msg) {
   var inlineImages = {};
   var attachments  = [];
+  var attachedNames = {};
   if (data.image && data.image.base64) {
     try {
       var imgBlob = Utilities.newBlob(
@@ -882,6 +919,7 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
       attachments.push(imgBlob);
     } catch (e) { console.error("Błąd obrazka scrabble: " + e.message); }
   }
+  attachLogFiles(data, attachments, attachedNames);
   var htmlBody = (data.reply_html || "") +
     (inlineImages["scrabble_cid"] ? '<p><img src="cid:scrabble_cid" alt="Scrabble" style="max-width:100%;"></p>' : "");
   try {
@@ -918,6 +956,7 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
   }
   addAttachment(data.gra_html, "analiza.html");
 
+  attachLogFiles(data, attachments, attachedNames);
   var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
   try {
     msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Analiza Powtórzeń – Autoresponder" });
@@ -929,6 +968,7 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
 function executeEmocjeMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych emocji dla " + recipient); return; }
   var attachments = [];
+  var attachedNames = {};
   (data.images || []).forEach(function(img, i) {
     if (!img || !img.base64) return;
     try {
@@ -947,6 +987,7 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
       ));
     } catch (e) { console.error("Błąd raportu TXT [" + j + "]: " + e.message); }
   });
+  attachLogFiles(data, attachments, attachedNames);
   var htmlBody = data.reply_html || "<p>Analiza emocjonalna w załącznikach.</p>";
   try {
     msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Analiza Emocjonalna – Autoresponder" });
@@ -975,6 +1016,7 @@ function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
 function executeObrazekMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych obrazka dla " + recipient); return; }
   var webhookUrl = PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
+  var attachedNames = {};
 
   if (data.image && data.image.base64) {
     try {
@@ -994,6 +1036,7 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           data.prompt1_txt.filename     || "2222.txt"
         ));
       }
+      attachLogFiles(data, attachments1, attachedNames);
       var htmlBody1 = (data.reply_html || "<p>Obrazek AI.</p>") +
         '<p><img src="cid:obrazek_cid" alt="Komiks AI" style="max-width:100%;border-radius:8px;"></p>';
       try {
@@ -1022,6 +1065,7 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
           data.prompt2_txt.filename     || "3333.txt"
         ));
       }
+      attachLogFiles(data, attachments2, attachedNames);
       var htmlBody2 = "<p>Ta sama historia, styl retro-pop lata 60.:</p>" +
         '<p><img src="cid:obrazek2_cid" alt="Komiks Retro" style="max-width:100%;border-radius:8px;"></p>';
       try {
@@ -1063,11 +1107,14 @@ function executeObrazekMailSend(data, recipient, subject, msg) {
 
 function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
   if (!data || !data.has_history || !data.reply_html) return;
+  var attachments = [];
+  var attachedNames = {};
+  attachLogFiles(data, attachments, attachedNames);
   try {
-    msg.reply("", { htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder" });
+    msg.reply("", { htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder", attachments: attachments });
     console.log("Wysłano nawiązanie -> " + recipient);
   } catch (e) {
-    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [nawiązanie]", htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder" });
+    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [nawiązanie]", htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder", attachments: attachments });
   }
 }
 
@@ -1258,7 +1305,7 @@ function __AAA_processEmails() {
         if (responseReply && responseReply.json) {
           if (shouldSendSmierc && responseReply.json.smierc) {
             var newEtapReply = responseReply.json.smierc.nowy_etap || smircData.etap;
-            executeSmircMailSend(responseReply.json.smierc, fromEmail, subject, msg, newEtapReply);
+            executeSmircMailSend(sectionWithLogs(responseReply.json.smierc, responseReply.json), fromEmail, subject, msg, newEtapReply);
             saveResponseToHistory(fromEmail, subject, responseReply.json.smierc.reply_html || "");
             _updateSmircData(fromEmail, newEtapReply, plainBody, responseReply.json.smierc.reply_html, msg.getId());
           }
@@ -1315,18 +1362,18 @@ function __AAA_processEmails() {
 
       if (responseJoker && responseJoker.json) {
         var jj = responseJoker.json;
-        if (jj.biznes)        { executeMailSend(jj.biznes, fromEmail, subject, msg, "Notariusz – Informacja"); saveResponseToHistory(fromEmail, subject, jj.biznes.reply_html || ""); }
-        // if (jj.zwykly)        { executeMailSend(jj.zwykly, fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
-        if (jj.scrabble)      { executeScrabbleMailSend(jj.scrabble, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
-        if (jj.analiza)       { executeAnalizaMailSend(jj.analiza, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.analiza.reply_html || ""); }
-        if (jj.emocje)        { executeEmocjeMailSend(jj.emocje, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
-        if (jj.obrazek)       { executeObrazekMailSend(jj.obrazek, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.obrazek.reply_html || ""); }
+        if (jj.biznes)        { executeMailSend(sectionWithLogs(jj.biznes, jj), fromEmail, subject, msg, "Notariusz – Informacja"); saveResponseToHistory(fromEmail, subject, jj.biznes.reply_html || ""); }
+        // if (jj.zwykly)        { executeMailSend(sectionWithLogs(jj.zwykly, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
+        if (jj.scrabble)      { executeScrabbleMailSend(sectionWithLogs(jj.scrabble, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
+        if (jj.analiza)       { executeAnalizaMailSend(sectionWithLogs(jj.analiza, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.analiza.reply_html || ""); }
+        if (jj.emocje)        { executeEmocjeMailSend(sectionWithLogs(jj.emocje, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
+        if (jj.obrazek)       { executeObrazekMailSend(sectionWithLogs(jj.obrazek, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.obrazek.reply_html || ""); }
         // Wysyłaj nawiazanie z nazwą Bot Tylera (zawiera pełną historię + zdania AI)
-        if (jj.nawiazanie)    { executeNawiazanieMailSend(jj.nawiazanie, fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.nawiazanie.reply_html || ""); }
-        if (jj.generator_pdf) { executeGeneratorPdfMailSend(jj.generator_pdf, fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.generator_pdf.reply_html || ""); }
+        if (jj.nawiazanie)    { executeNawiazanieMailSend(sectionWithLogs(jj.nawiazanie, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.nawiazanie.reply_html || ""); }
+        if (jj.generator_pdf) { executeGeneratorPdfMailSend(sectionWithLogs(jj.generator_pdf, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.generator_pdf.reply_html || ""); }
         if (shouldSendSmierc && jj.smierc) {
           var newEtapJoker = jj.smierc.nowy_etap || smircData.etap;
-          executeSmircMailSend(jj.smierc, fromEmail, subject, msg, newEtapJoker);
+          executeSmircMailSend(sectionWithLogs(jj.smierc, jj), fromEmail, subject, msg, newEtapJoker);
           saveResponseToHistory(fromEmail, subject, jj.smierc.reply_html || "");
           _updateSmircData(fromEmail, newEtapJoker, plainBody, jj.smierc.reply_html, msg.getId());
         }
@@ -1358,7 +1405,7 @@ function __AAA_processEmails() {
       if (response2 && response2.json) {
         if (response2.json.smierc) {
           var newEtap2 = response2.json.smierc.nowy_etap || smircData.etap;
-          executeSmircMailSend(response2.json.smierc, fromEmail, subject, msg, newEtap2);
+          executeSmircMailSend(sectionWithLogs(response2.json.smierc, response2.json), fromEmail, subject, msg, newEtap2);
           saveResponseToHistory(fromEmail, subject, response2.json.smierc.reply_html || "");
           _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
         }
@@ -1448,33 +1495,33 @@ function __AAA_processEmails() {
       var json = response.json;
 
       if (json.biznes && (isBiz || (!isAllowed && containsKeyword))) {
-        executeMailSend(json.biznes, fromEmail, subject, msg, "Notariusz – Informacja");
+        executeMailSend(sectionWithLogs(json.biznes, json), fromEmail, subject, msg, "Notariusz – Informacja");
       }
       if (json.zwykly && shouldSendZwykly) {
         // Lokalny mail Tyler Durden wyłączony; odpowiedź dostarczy backend.
-        // executeMailSend(json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        // executeMailSend(sectionWithLogs(json.zwykly, json), fromEmail, subject, msg, "Tyler Durden – Autoresponder");
       }
       if (containsKeyword2 && json.scrabble) {
-        executeScrabbleMailSend(json.scrabble, fromEmail, subject, msg);
+        executeScrabbleMailSend(sectionWithLogs(json.scrabble, json), fromEmail, subject, msg);
       }
       if (containsKeyword3 && json.analiza) {
-        executeAnalizaMailSend(json.analiza, fromEmail, subject, msg);
+        executeAnalizaMailSend(sectionWithLogs(json.analiza, json), fromEmail, subject, msg);
       }
       if (containsKeyword4 && json.emocje) {
-        executeEmocjeMailSend(json.emocje, fromEmail, subject, msg);
+        executeEmocjeMailSend(sectionWithLogs(json.emocje, json), fromEmail, subject, msg);
       }
       if (containsKeywordObrazek && json.obrazek) {
-        executeObrazekMailSend(json.obrazek, fromEmail, subject, msg);
+        executeObrazekMailSend(sectionWithLogs(json.obrazek, json), fromEmail, subject, msg);
       }
       if (json.nawiazanie) {
-        executeNawiazanieMailSend(json.nawiazanie, fromEmail, subject, msg);
+        executeNawiazanieMailSend(sectionWithLogs(json.nawiazanie, json), fromEmail, subject, msg);
       }
       if (wantsGeneratorPdf && json.generator_pdf) {
-        executeGeneratorPdfMailSend(json.generator_pdf, fromEmail, subject, msg);
+        executeGeneratorPdfMailSend(sectionWithLogs(json.generator_pdf, json), fromEmail, subject, msg);
       }
       if (shouldSendSmierc && json.smierc) {
         var newEtap = json.smierc.nowy_etap || smircData.etap;
-        executeSmircMailSend(json.smierc, fromEmail, subject, msg, newEtap);
+        executeSmircMailSend(sectionWithLogs(json.smierc, json), fromEmail, subject, msg, newEtap);
         _updateSmircData(fromEmail, newEtap, sanitizedBody, json.smierc.reply_html, msg.getId());
       }
       saveToHistory(fromEmail, subject, sanitizedBody);
