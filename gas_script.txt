@@ -1041,7 +1041,7 @@ function _callBackend(sender, senderName, subject, body, url, msgId,
                       attachments, previousBody, previousSubject,
                       isBiz, isAllowed, isKnownSender, containsKeyword,
                       containsJoker, shouldSendSmierc,
-                      testMode, threadId, retryResponders, attemptCount) {
+                      disableFlux, threadId, retryResponders, attemptCount) {
   var secret  = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
   var payload = {
     msg_id:              msgId            || "",
@@ -1062,7 +1062,7 @@ function _callBackend(sender, senderName, subject, body, url, msgId,
     previous_body:       previousBody       || null,
     previous_subject:    previousSubject    || null,
     save_to_drive:       true,
-    test_mode:           testMode          ? true : false,
+    disable_flux:        disableFlux       ? true : false,
     thread_id:           threadId         || null,
     retry_responders:    retryResponders  || [],
     attempt_count:       attemptCount     || 1,
@@ -1398,13 +1398,16 @@ function __AAA_processEmails() {
     if (webhookCalled) { continue; }
     webhookCalled = true;
 
+    // KEYWORDS_TEST to parametr do wyłączenia FLUX, ale TYLKO jeśli wysyłamy odpowiedź
+    var disableFlux = containsKeywordTest && (isBiz || isAllowed || isKnownSender || containsKeyword || containsKeyword2 || containsKeyword3 || containsKeyword4 || shouldSendSmierc);
+    
     var response = _callBackend(
       fromEmail, senderName, subject, sanitizedBody, webhookUrl, msgId,
       containsKeyword2, containsKeyword3, containsKeyword4,
       wantsGeneratorPdf, shouldSendSmierc, smircData, allAttachments,
       previousBody, previousSubject,
       isBiz, isAllowed, isKnownSender, containsKeyword, containsJoker, shouldSendSmierc,
-      containsKeywordTest
+      disableFlux
     );
 
     if (response && response.json) {

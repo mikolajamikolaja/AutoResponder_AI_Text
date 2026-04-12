@@ -334,18 +334,19 @@ def webhook():
     attachments      = data.get("attachments")      or []
     save_to_drive    = bool(data.get("save_to_drive"))
     test_mode        = bool(data.get("test_mode"))
+    disable_flux     = bool(data.get("disable_flux"))  # KEYWORDS_TEST parameter — wyłącza FLUX, ale NIE wpływa na historię/drive
     retry_responders = data.get("retry_responders") or []
     attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
     skip_save_to_history = bool(data.get("skip_save_to_history"))
     
-    # ── Obsługa KEYWORDS_TEST: nie dodawaj do historii ─────────────────────────
+    # ── Obsługa KEYWORDS_TEST (disable_flux) ──────────────────────────────────
+    # KEYWORDS_TEST to parametr do wyłączenia FLUX w konkretnym requestzie.
+    # NIE wpływa na zapis do historii ani Drive — tylko na generowanie obrazków.
     keywords_used = False
-    if test_mode:
-        skip_save_to_history = True
-        save_to_drive = False  # Wyłącz zapis do Drive dla testów
+    if disable_flux:
         keywords_used = True
         logger.set_metadata("keywords_used", True)
-        logger.log_decision("keywords_test", "test_mode=True", "skip_save_to_history=True, save_to_drive=False")
+        logger.log_decision("disable_flux", "disable_flux=True", "FLUX wyłączony dla tego requestu")
 
     # Loguj zmienne
     logger.log_variables_detected({
@@ -356,6 +357,7 @@ def webhook():
         "num_attachments": len(attachments),
         "save_to_drive": save_to_drive,
         "test_mode": test_mode,
+        "disable_flux": disable_flux,
         "is_retry": bool(retry_responders),
         "attempt_count": attempt_count,
         "skip_save_to_history": skip_save_to_history,
@@ -415,7 +417,7 @@ def webhook():
             _prev,
             _sender,
             _sname,
-            test_mode=test_mode,
+            test_mode=disable_flux or test_mode,  # KEYWORDS_TEST (disable_flux) → test_mode dla FLUX
             attachments=attachments,
         )
     if "biznes" in requested_sections:
@@ -520,7 +522,7 @@ def webhook():
                 etap=_etap,
                 data_smierci_str=_data_smierci,
                 historia=_historia,
-                test_mode=test_mode,
+                test_mode=disable_flux or test_mode,  # KEYWORDS_TEST (disable_flux) → test_mode dla FLUX
             )
     else:
         if wants_emocje:
@@ -552,7 +554,7 @@ def webhook():
                 etap=_etap,
                 data_smierci_str=_data_smierci,
                 historia=_historia,
-                test_mode=test_mode,
+                test_mode=disable_flux or test_mode,  # KEYWORDS_TEST (disable_flux) → test_mode dla FLUX
             )
 
     if wave2:
