@@ -14,17 +14,20 @@ from typing import Any, Dict, List, Optional
 class ExecutionLogger:
     """Rejestruje szczegółowy przebieg wykonania programu."""
     
-    def __init__(self, output_dir: str = "logs"):
+    def __init__(self, output_dir: str = "logs", session_id: str = ""):
         self.output_dir = output_dir
         self.entries: List[Dict[str, Any]] = []
         self.start_time = time.time()
         self.start_datetime = datetime.now()
+        self.session_id = session_id or self.start_datetime.strftime('%Y%m%d_%H%M%S')
+        self.metadata: Dict[str, Any] = {}  # Metadane sesji
         
         # Utwórz katalog jeśli nie istnieje
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
         
-        self.log_file = os.path.join(output_dir, f"log_{self.start_datetime.strftime('%Y%m%d_%H%M%S')}.txt")
+        # Typ nazwy pliku: log_{session_id}.txt
+        self.log_file = os.path.join(output_dir, f"log_{self.session_id}.txt")
         self._write_header()
     
     def _write_header(self):
@@ -48,6 +51,11 @@ class ExecutionLogger:
     def log_variables_detected(self, variables: Dict[str, Any]):
         """Zarejestruj wykryte zmienne."""
         self._append_log("VARIABLES_DETECTED", variables)
+    
+    def set_metadata(self, key: str, value: Any):
+        """Ustaw metadaną sesji."""
+        self.metadata[key] = value
+
     
     def log_step(self, step_name: str, details: Dict[str, Any] = None, status: str = "running"):
         """Zarejestruj krok procesu."""
@@ -183,8 +191,8 @@ def get_logger() -> ExecutionLogger:
     return _global_logger
 
 
-def init_logger(output_dir: str = "logs") -> ExecutionLogger:
+def init_logger(output_dir: str = "logs", session_id: str = "") -> ExecutionLogger:
     """Inicjalizuj nowy logger."""
     global _global_logger
-    _global_logger = ExecutionLogger(output_dir)
+    _global_logger = ExecutionLogger(output_dir, session_id)
     return _global_logger

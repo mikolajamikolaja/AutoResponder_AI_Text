@@ -1,9 +1,0 @@
-Style: High-contrast black and white ink drawing, thick bold outlines, flat 2D vector style, absolutely no 3D rendering or shadows.
-1. Structure: Create a clear 2x2 grid or a vertical sequence of 4 distinct panels separated by white gutters.
-2. Color and style: Black and white only; thick uniform linework; no shading, gradients, or perspective.
-3. Text language: ALL speech bubbles and ALL visible text inside the image must be written in correct Polish (no English words).
-4. Typography: Use a simple, clean, sans-serif font for all text. Ensure all letters are UPPERCASE as provided in the quotes.
-
-
-Paul: "Middle-aged man, very thin, minimalist glasses, stubble, bored expression.
-Characters: "Oversized noses, huge eyes (3x normal size), tiny hands and feet. 

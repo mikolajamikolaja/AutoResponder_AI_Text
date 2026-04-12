@@ -3915,6 +3915,121 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# DIAGRAM PRZEPŁYWU SVG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_flow_diagram_svg(logger) -> dict | None:
+    """Generuje diagram przepływu pokazujący INPUT → API CALLS → SECTIONS."""
+    try:
+        # Pobierz dane z logger metadata
+        api_calls = logger.metadata.get('api_calls', [])
+        sections_completed = logger.metadata.get('sections_completed', [])
+        in_history = logger.metadata.get('in_history', 'nieznany')
+        in_requiem = logger.metadata.get('in_requiem', 'nieznany')
+
+        # Przygotuj dane do wizualizacji
+        groq_count = sum(1 for call in api_calls if call.get('provider') == 'groq')
+        deepseek_count = sum(1 for call in api_calls if call.get('provider') == 'deepseek')
+        total_tokens = sum(call.get('tokens', 0) for call in api_calls)
+
+        sections_list = ', '.join(sections_completed) if sections_completed else 'brak'
+
+        svg = f'''<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <!-- Tło -->
+  <rect width="800" height="600" fill="#1a1a1a"/>
+
+  <!-- Tytuł -->
+  <text x="400" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">DIAGRAM PRZEPŁYWU</text>
+
+  <!-- INPUT -->
+  <rect x="50" y="100" width="120" height="60" fill="#4CAF50" rx="10"/>
+  <text x="110" y="135" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">INPUT</text>
+
+  <!-- Strzałka 1 -->
+  <polygon points="180,130 200,125 200,135" fill="#ffffff"/>
+  <line x1="170" y1="130" x2="200" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- API CALLS -->
+  <rect x="220" y="80" width="140" height="100" fill="#2196F3" rx="10"/>
+  <text x="290" y="110" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">API CALLS</text>
+  <text x="290" y="130" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Groq: {groq_count}</text>
+  <text x="290" y="145" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">DeepSeek: {deepseek_count}</text>
+  <text x="290" y="160" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Tokens: {total_tokens}</text>
+
+  <!-- Strzałka 2 -->
+  <polygon points="370,130 390,125 390,135" fill="#ffffff"/>
+  <line x1="360" y1="130" x2="390" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- SECTIONS -->
+  <rect x="410" y="100" width="140" height="60" fill="#FF9800" rx="10"/>
+  <text x="480" y="125" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">SECTIONS</text>
+  <text x="480" y="140" font-family="Arial, sans-serif" font-size="10"
+        fill="#ffffff" text-anchor="middle">{sections_list[:20]}</text>
+
+  <!-- Status użytkownika -->
+  <rect x="580" y="80" width="160" height="100" fill="#9C27B0" rx="10"/>
+  <text x="660" y="105" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">STATUS</text>
+  <text x="660" y="125" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Historia: {in_history}</text>
+  <text x="660" y="140" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Requiem: {in_requiem}</text>
+
+  <!-- Szczegóły API calls -->
+  <text x="50" y="220" font-family="Arial, sans-serif" font-size="16" font-weight="bold"
+        fill="#ffffff">SZCZEGÓŁY API CALLS:</text>
+
+  <text x="50" y="250" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Łącznie wywołań: {len(api_calls)}</text>
+  <text x="50" y="270" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Sekcje wykonane: {len(sections_completed)}</text>
+  <text x="50" y="290" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Czas przetwarzania: ~{len(api_calls) * 2}s</text>
+
+  <!-- Legenda -->
+  <text x="50" y="340" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff">LEGENDA:</text>
+
+  <rect x="50" y="360" width="15" height="15" fill="#4CAF50"/>
+  <text x="75" y="372" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wejście email</text>
+
+  <rect x="50" y="385" width="15" height="15" fill="#2196F3"/>
+  <text x="75" y="397" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wywołania AI</text>
+
+  <rect x="50" y="410" width="15" height="15" fill="#FF9800"/>
+  <text x="75" y="422" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Generowane sekcje</text>
+
+  <rect x="50" y="435" width="15" height="15" fill="#9C27B0"/>
+  <text x="75" y="447" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Status użytkownika</text>
+
+  <!-- Stopka -->
+  <text x="400" y="580" font-family="Arial, sans-serif" font-size="10"
+        fill="#666666" text-anchor="middle">Wygenerowano: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</text>
+</svg>'''
+
+        svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info("[flow_diagram] OK")
+        return {"base64": svg_b64, "content_type": "image/svg+xml", "filename": f"flow_diagram_{ts}.svg"}
+
+    except Exception as e:
+        logger.warning("[flow_diagram] Błąd: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # GRA HTML
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -4205,6 +4320,16 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         pass
 
     try:
+        plakat_svg = _build_plakat_svg(res_text, body)
+    except Exception:
+        pass
+
+    try:
+        flow_diagram_svg = _build_flow_diagram_svg(logger)
+    except Exception:
+        pass
+
+    try:
         explanation_txt = _build_explanation_txt(res_text, body)
     except Exception:
         pass
@@ -4254,6 +4379,8 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "ankieta_html": ankieta_html,
         "horoskop_pdf": horoskop_pdf,
         "karta_rpg_pdf": karta_rpg_pdf,
+        "plakat_svg": plakat_svg,
+        "flow_diagram_svg": flow_diagram_svg,
         "gra_html": gra_html,
         "docx_list": analiza_docx_list,
         "explanation_txt": explanation_txt,

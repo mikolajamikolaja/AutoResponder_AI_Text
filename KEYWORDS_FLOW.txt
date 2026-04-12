@@ -6,10 +6,10 @@
   - KEYWORDS / KEYWORDS1 → containsKeyword=true → BLOKUJE zapis do historii
   - KEYWORDS2 → containsKeyword2=true → Scrabble
   - KEYWORDS3 → containsKeyword3=true → Analiza
-  - KEYWORDS4 → containsKeyword4=true → Emocje  
+  - KEYWORDS4 → containsKeyword4=true → Emocje
   - KEYWORDS_JOKER → Triggeruje pełną Fala JOKER (wszystkie respondery)
   - KEYWORDS_SMIERC → Triggeruje gałąź śmierci
-  - KEYWORDS_OBRAZEK → Triggeruje generator obrazków
+  - KEYWORDS_GENERATOR_PDF → Triggeruje generator PDF
 
 
 

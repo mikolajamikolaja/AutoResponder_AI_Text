@@ -343,7 +343,6 @@ function _processPendingRetries(webhookUrl) {
       entry.retry_responders.indexOf("scrabble") !== -1,
       entry.retry_responders.indexOf("analiza") !== -1,
       entry.retry_responders.indexOf("emocje") !== -1,
-      entry.retry_responders.indexOf("obrazek") !== -1,
       entry.retry_responders.indexOf("generator_pdf") !== -1,
       entry.retry_responders.indexOf("smierc") !== -1,
       entry.smircData || null,
@@ -1013,99 +1012,18 @@ function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
   } catch(e) { console.error("webhook_gif wyjątek: " + e.message); return null; }
 }
 
-function executeObrazekMailSend(data, recipient, subject, msg) {
-  if (!data) { console.warn("Brak danych obrazka dla " + recipient); return; }
-  var webhookUrl = PropertiesService.getScriptProperties().getProperty("WEBHOOK_URL");
+function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
+  if (!data || !data.has_history || !data.reply_html) return;
+  var attachments = [];
   var attachedNames = {};
-
-  if (data.image && data.image.base64) {
-    try {
-      var inlineImages1 = {};
-      var attachments1  = [];
-      var imgBlob1 = Utilities.newBlob(
-        Utilities.base64Decode(data.image.base64),
-        data.image.content_type || "image/png",
-        data.image.filename     || "komiks_ai.png"
-      );
-      inlineImages1["obrazek_cid"] = imgBlob1;
-      attachments1.push(imgBlob1);
-      if (data.prompt1_txt && data.prompt1_txt.base64) {
-        attachments1.push(Utilities.newBlob(
-          Utilities.base64Decode(data.prompt1_txt.base64),
-          data.prompt1_txt.content_type || "text/plain",
-          data.prompt1_txt.filename     || "2222.txt"
-        ));
-      }
-      attachLogFiles(data, attachments1, attachedNames);
-      var htmlBody1 = (data.reply_html || "<p>Obrazek AI.</p>") +
-        '<p><img src="cid:obrazek_cid" alt="Komiks AI" style="max-width:100%;border-radius:8px;"></p>';
-      try {
-        msg.reply("", { htmlBody: htmlBody1, inlineImages: inlineImages1, attachments: attachments1, name: "Komiks AI – Autoresponder" });
-      } catch(e) {
-        MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [komiks]", htmlBody: htmlBody1, inlineImages: inlineImages1, attachments: attachments1, name: "Komiks AI – Autoresponder" });
-      }
-    } catch(e) { console.error("Błąd obrazka 1: " + e.message); }
-  }
-
-  if (data.image2 && data.image2.base64) {
-    try {
-      var inlineImages2 = {};
-      var attachments2  = [];
-      var imgBlob2 = Utilities.newBlob(
-        Utilities.base64Decode(data.image2.base64),
-        data.image2.content_type || "image/png",
-        data.image2.filename     || "komiks_ai_retro.png"
-      );
-      inlineImages2["obrazek2_cid"] = imgBlob2;
-      attachments2.push(imgBlob2);
-      if (data.prompt2_txt && data.prompt2_txt.base64) {
-        attachments2.push(Utilities.newBlob(
-          Utilities.base64Decode(data.prompt2_txt.base64),
-          data.prompt2_txt.content_type || "text/plain",
-          data.prompt2_txt.filename     || "3333.txt"
-        ));
-      }
-      attachLogFiles(data, attachments2, attachedNames);
-      var htmlBody2 = "<p>Ta sama historia, styl retro-pop lata 60.:</p>" +
-        '<p><img src="cid:obrazek2_cid" alt="Komiks Retro" style="max-width:100%;border-radius:8px;"></p>';
-      try {
-        msg.reply("", { htmlBody: htmlBody2, inlineImages: inlineImages2, attachments: attachments2, name: "Komiks Retro – Autoresponder" });
-      } catch(e) {
-        MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [retro]", htmlBody: htmlBody2, inlineImages: inlineImages2, attachments: attachments2, name: "Komiks Retro – Autoresponder" });
-      }
-    } catch(e) { console.error("Błąd obrazka 2: " + e.message); }
-  }
-
-  var png1b64 = (data.image  && data.image.base64)  ? data.image.base64  : null;
-  var png2b64 = (data.image2 && data.image2.base64) ? data.image2.base64 : null;
-  if ((png1b64 || png2b64) && webhookUrl) {
-    var gifData = _callWebhookGif(png1b64, png2b64, webhookUrl);
-    if (gifData && gifData.gif1 && gifData.gif1.base64) {
-      try {
-        var gifBlob1     = Utilities.newBlob(Utilities.base64Decode(gifData.gif1.base64), gifData.gif1.content_type || "image/gif", gifData.gif1.filename || "komiks_ai.gif");
-        var htmlBodyGif1 = "<p>Komiks AI – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
-        try {
-          msg.reply("", { htmlBody: htmlBodyGif1, attachments: [gifBlob1], name: "Komiks AI GIF – Autoresponder" });
-        } catch(e) {
-          MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [komiks GIF]", htmlBody: htmlBodyGif1, attachments: [gifBlob1], name: "Komiks AI GIF – Autoresponder" });
-        }
-      } catch(e) { console.error("Błąd GIF 1: " + e.message); }
-    }
-    if (gifData && gifData.gif2 && gifData.gif2.base64) {
-      try {
-        var gifBlob2     = Utilities.newBlob(Utilities.base64Decode(gifData.gif2.base64), gifData.gif2.content_type || "image/gif", gifData.gif2.filename || "komiks_ai_retro.gif");
-        var htmlBodyGif2 = "<p>Komiks Retro – animacja:</p><p><i>Animowany GIF w załączniku.</i></p>";
-        try {
-          msg.reply("", { htmlBody: htmlBodyGif2, attachments: [gifBlob2], name: "Komiks Retro GIF – Autoresponder" });
-        } catch(e) {
-          MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [retro GIF]", htmlBody: htmlBodyGif2, attachments: [gifBlob2], name: "Komiks Retro GIF – Autoresponder" });
-        }
-      } catch(e) { console.error("Błąd GIF 2: " + e.message); }
-    }
+  attachLogFiles(data, attachments, attachedNames);
+  try {
+    msg.reply("", { htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder", attachments: attachments });
+    console.log("Wysłano nawiązanie -> " + recipient);
+  } catch (e) {
+    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [nawiązanie]", htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder", attachments: attachments });
   }
 }
-
-function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
   if (!data || !data.has_history || !data.reply_html) return;
   var attachments = [];
   var attachedNames = {};
@@ -1120,7 +1038,7 @@ function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
 function _callBackend(sender, senderName, subject, body, url, msgId,
-                      wantsScrabble, wantsAnaliza, wantsEmocje, wantsObrazek,
+                      wantsScrabble, wantsAnaliza, wantsEmocje,
                       wantsGeneratorPdf, wantsSmierc, smircData,
                       attachments, previousBody, previousSubject,
                       isBiz, isAllowed, isKnownSender, containsKeyword,
@@ -1135,7 +1053,6 @@ function _callBackend(sender, senderName, subject, body, url, msgId,
     wants_scrabble:      wantsScrabble      ? true : false,
     wants_analiza:       wantsAnaliza       ? true : false,
     wants_emocje:        wantsEmocje        ? true : false,
-    wants_obrazek:       wantsObrazek       ? true : false,
     wants_generator_pdf: wantsGeneratorPdf  ? true : false,
     wants_smierc:        wantsSmierc        ? true : false,
     etap:                smircData ? smircData.etap         : 1,
@@ -1226,7 +1143,6 @@ function __AAA_processEmails() {
   var KEYWORDS3                  = _getListFromProps("KEYWORDS3");
   var KEYWORDS4                  = _getListFromProps("KEYWORDS4");
   var KEYWORDS_JOKER             = _getListFromProps("KEYWORDS_JOKER");
-  var KEYWORDS_OBRAZEK           = _getListFromProps("KEYWORDS_OBRAZEK");
   var KEYWORDS_GENERATOR_PDF     = _getListFromProps("KEYWORDS_GENERATOR_PDF");
   var KEYWORDS_SMIERC            = _getListFromProps("KEYWORDS_SMIERC");
   var KEYWORDS_TEST              = _getListFromProps("KEYWORDS_TEST");
@@ -1367,7 +1283,6 @@ function __AAA_processEmails() {
         if (jj.scrabble)      { executeScrabbleMailSend(sectionWithLogs(jj.scrabble, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
         if (jj.analiza)       { executeAnalizaMailSend(sectionWithLogs(jj.analiza, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.analiza.reply_html || ""); }
         if (jj.emocje)        { executeEmocjeMailSend(sectionWithLogs(jj.emocje, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
-        if (jj.obrazek)       { executeObrazekMailSend(sectionWithLogs(jj.obrazek, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.obrazek.reply_html || ""); }
         // Wysyłaj nawiazanie z nazwą Bot Tylera (zawiera pełną historię + zdania AI)
         if (jj.nawiazanie)    { executeNawiazanieMailSend(sectionWithLogs(jj.nawiazanie, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.nawiazanie.reply_html || ""); }
         if (jj.generator_pdf) { executeGeneratorPdfMailSend(sectionWithLogs(jj.generator_pdf, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.generator_pdf.reply_html || ""); }
@@ -1435,18 +1350,17 @@ function __AAA_processEmails() {
     var containsKeyword2       = _containsAny(searchText, KEYWORDS2);
     var containsKeyword3       = _containsAny(searchText, KEYWORDS3);
     var containsKeyword4       = _containsAny(searchText, KEYWORDS4);
-    var containsKeywordObrazek = _containsAny(searchText, KEYWORDS_OBRAZEK);
     var containsKeywordTest    = _containsAny(searchText, KEYWORDS_TEST);
     
     // Flaga: jeśli zawiera JAKIKOLWIEK keyword, nie zapisuj do historii
     var hasAnyKeyword = containsKeyword || containsKeyword2 || containsKeyword3 || 
-                        containsKeyword4 || containsKeywordObrazek || shouldSendSmierc;
+                        containsKeyword4 || shouldSendSmierc;
 
     // Aktualizuj shouldSendZwykly jeśli zawiera słowo kluczowe
     if (containsKeyword) shouldSendZwykly = true;
 
     if (!isBiz && !shouldSendZwykly && !containsKeyword2 && !containsKeyword3 &&
-        !containsKeyword4 && !containsKeywordObrazek && !wantsGeneratorPdf && !shouldSendSmierc) {
+        !containsKeyword4 && !wantsGeneratorPdf && !shouldSendSmierc) {
       var labelSkip = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
       thread.addLabel(labelSkip);
       thread.markRead();
@@ -1454,7 +1368,7 @@ function __AAA_processEmails() {
     }
 
     var combinedKeywords = KEYWORDS.concat(KEYWORDS1).concat(KEYWORDS2).concat(KEYWORDS3)
-      .concat(KEYWORDS4).concat(KEYWORDS_JOKER).concat(KEYWORDS_OBRAZEK).concat(KEYWORDS_SMIERC).filter(Boolean);
+      .concat(KEYWORDS4).concat(KEYWORDS_JOKER).concat(KEYWORDS_SMIERC).filter(Boolean);
     var sanitizedBody = removeKeywordsFromText(plainBody, combinedKeywords, maskMode);
 
     if (containsKeywordGeneratorPdf) {
@@ -1484,7 +1398,7 @@ function __AAA_processEmails() {
 
     var response = _callBackend(
       fromEmail, senderName, subject, sanitizedBody, webhookUrl, msgId,
-      containsKeyword2, containsKeyword3, containsKeyword4, containsKeywordObrazek,
+      containsKeyword2, containsKeyword3, containsKeyword4,
       wantsGeneratorPdf, shouldSendSmierc, smircData, allAttachments,
       previousBody, previousSubject,
       isBiz, isAllowed, isKnownSender, containsKeyword,
@@ -1509,9 +1423,6 @@ function __AAA_processEmails() {
       }
       if (containsKeyword4 && json.emocje) {
         executeEmocjeMailSend(sectionWithLogs(json.emocje, json), fromEmail, subject, msg);
-      }
-      if (containsKeywordObrazek && json.obrazek) {
-        executeObrazekMailSend(sectionWithLogs(json.obrazek, json), fromEmail, subject, msg);
       }
       if (json.nawiazanie) {
         executeNawiazanieMailSend(sectionWithLogs(json.nawiazanie, json), fromEmail, subject, msg);

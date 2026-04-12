@@ -222,3 +222,43 @@ def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
     except Exception as e:
         print(f"Błąd zapisu historii: {e}")
         return False
+
+
+def check_user_in_sheet(sheet_id, email, sheet_name='Historia'):
+    """
+    Sprawdza czy użytkownik (email) znajduje się w arkuszu.
+
+    Args:
+        sheet_id: str (ID arkusza)
+        email: str (email użytkownika)
+        sheet_name: str (nazwa arkusza, domyślnie 'Historia')
+
+    Returns:
+        bool: True jeśli użytkownik jest w arkuszu
+    """
+    if not sheet_id or not email:
+        return False
+
+    try:
+        credentials = _get_credentials()
+        sheets_service = build('sheets', 'v4', credentials=credentials)
+
+        # Pobierz wszystkie dane z arkusza (zakładamy że email jest w kolumnie B - indeks 1)
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=f'{sheet_name}!B:B'  # Kolumna B zawiera email
+        ).execute()
+
+        values = result.get('values', [])
+        if not values:
+            return False
+
+        # Sprawdź czy email występuje w kolumnie
+        for row in values:
+            if row and row[0].strip().lower() == email.strip().lower():
+                return True
+
+        return False
+    except Exception as e:
+        print(f"Błąd sprawdzania użytkownika w arkuszu: {e}")
+        return False

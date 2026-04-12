@@ -42,7 +42,6 @@ from responders.biznes        import build_biznes_section
 from responders.scrabble      import build_scrabble_section
 from responders.analiza       import build_analiza_section
 from responders.emocje        import build_emocje_section
-from responders.obrazek       import build_obrazek_section
 from responders.nawiazanie    import build_nawiazanie_section
 from responders.gif_maker     import make_gif
 from responders.generator_pdf import build_generator_pdf_section
@@ -98,43 +97,100 @@ def _format_log_entry_data(data: object) -> list:
 
 def _build_log_svg_content(logger) -> str:
     """
-    Generuje SVG timeline na podstawie logger.entries.
-    Każdy entry to krok z czasem.
+    Generuje SVG diagram przepływu (flowchart) na podstawie logger.entries.
+    Pokazuje: INPUT → DECISIONS → API CALLS → SECTIONS → OUTPUT
     """
     entries = logger.entries
     if not entries:
-        return '''<svg width="500" height="100" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 100">
-  <text x="10" y="50" font-size="16" font-family="Arial">No log entries</text>
+        return '''<svg width="800" height="200" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200">
+  <text x="10" y="50" font-size="16" font-family="Arial">Brak danych logowania</text>
 </svg>'''
 
-    start_time = entries[0]['timestamp']
-    total_time = entries[-1]['timestamp'] - start_time if len(entries) > 1 else 1.0
-    height = max(100, len(entries) * 20 + 40)
-    svg = f'''<svg width="600" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 {height}">
+    # Zbierz informacje z logów
+    input_data = next((e for e in entries if e['type'] == 'INPUT'), None)
+    api_calls = [e for e in entries if e['type'] == 'API_CALL']
+    section_results = [e for e in entries if e['type'] == 'SECTION_RESULT']
+    
+    # Zlicz API calls
+    groq_success = sum(1 for e in api_calls if e['data'].get('api') == 'groq' and e['data'].get('success'))
+    groq_fail = sum(1 for e in api_calls if e['data'].get('api') == 'groq' and not e['data'].get('success'))
+    deepseek_success = sum(1 for e in api_calls if e['data'].get('api') == 'deepseek' and e['data'].get('success'))
+    deepseek_fail = sum(1 for e in api_calls if e['data'].get('api') == 'deepseek' and not e['data'].get('success'))
+    
+    sections_ok = [e['data'].get('section') for e in section_results if e['data'].get('success')]
+    sections_fail = [e['data'].get('section') for e in section_results if not e['data'].get('success')]
+    
+    # Buduj SVG z diagramem pionowym (góra do dołu)
+    width, height = 900, max(500, 100 + len(section_results) * 30)
+    svg = f'''<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">
   <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#000"/>
+    <style>
+      .box {{ fill: #e8f4f8; stroke: #0066cc; stroke-width: 2; }}
+      .success {{ fill: #d4edda; stroke: #28a745; }}
+      .error {{ fill: #f8d7da; stroke: #dc3545; }}
+      .text {{ font-family: Arial; font-size: 13px; }}
+      .title {{ font-weight: bold; font-size: 15px; }}
+    </style>
+  </defs>
+  
+  <!-- BACKGROUND -->
+  <rect width="{width}" height="{height}" fill="#f9f9f9" stroke="#ccc" stroke-width="1"/>
+  
+  <!-- Title -->
+  <text x="20" y="30" class="text title">Diagram Przebiegu AutoRespondera</text>
+'''
+    
+    y_pos = 70
+    
+    # INPUT
+    sender = input_data['data'].get('sender', '?') if input_data else "?"
+    body_preview = (input_data['data'].get('body_preview', '')[:50] + "...") if input_data else ""
+    svg += f'''  <!-- INPUT SECTION -->
+  <rect x="20" y="{y_pos}" width="300" height="80" class="box"/>
+  <text x="30" y="{y_pos+20}" class="text title">📧 WEJŚCIE</text>
+  <text x="30" y="{y_pos+40}" class="text">Nadawca: {sender}</text>
+  <text x="30" y="{y_pos+55}" class="text">Treść: {body_preview}</text>
+  <line x1="170" y1="{y_pos+80}" x2="170" y2="{y_pos+110}" stroke="#0066cc" stroke-width="2" marker-end="url(#arrowhead)"/>
+'''
+    
+    y_pos += 140
+    
+    # API CALLS STATUS
+    svg += f'''  <!-- API CALLS SECTION -->
+  <rect x="20" y="{y_pos}" width="300" height="90" class="{'success' if groq_success > 0 else 'error'}"/>
+  <text x="30" y="{y_pos+20}" class="text title">⚙️ API CALLS</text>
+  <text x="30" y="{y_pos+40}" class="text">Groq: ✓{groq_success} ✗{groq_fail}</text>
+  <text x="30" y="{y_pos+55}" class="text">DeepSeek: ✓{deepseek_success} ✗{deepseek_fail}</text>
+  <text x="30" y="{y_pos+70}" class="text">Razem API: {len(api_calls)}</text>
+  <line x1="170" y1="{y_pos+90}" x2="170" y2="{y_pos+120}" stroke="#0066cc" stroke-width="2" marker-end="url(#arrowhead)"/>
+'''
+    
+    y_pos += 150
+    
+    # SECTIONS
+    svg += f'''  <!-- SECTIONS SECTION -->
+  <rect x="20" y="{y_pos}" width="860" height="{max(60, len(section_results) * 25 + 20)}" class="box"/>
+  <text x="30" y="{y_pos+20}" class="text title">📋 SEKCJE RESPONDENTÓW</text>
+'''
+    
+    y_offset = y_pos + 40
+    for i, section_name in enumerate(sections_ok):
+        svg += f'  <rect x="40" y="{y_offset + i*25}" width="200" height="20" class="success"/>\n'
+        svg += f'  <text x="50" y="{y_offset + i*25 + 15}" class="text">✓ {section_name}</text>\n'
+    
+    for i, section_name in enumerate(sections_fail):
+        svg += f'  <rect x="280" y="{y_offset + i*25}" width="200" height="20" class="error"/>\n'
+        svg += f'  <text x="290" y="{y_offset + i*25 + 15}" class="text">✗ {section_name}</text>\n'
+    
+    svg += '''
+  <!-- Arrow marker definition -->
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
+      <polygon points="0,0 10,5 0,10" fill="#0066cc"/>
     </marker>
   </defs>
-'''
-
-    y = 30
-    prev_x = 10
-    for i, entry in enumerate(entries):
-        timestamp = entry['timestamp'] - start_time
-        x = 10 + (timestamp / total_time) * 500 if total_time > 0 else 10 + i * 50
-        x = min(x, 580)  # Nie wychodź poza viewBox
-        label = entry['type']
-        if 'data' in entry and 'api' in entry['data']:
-            label += f" ({entry['data']['api']})"
-        svg += f'  <circle cx="{x}" cy="{y}" r="5" fill="#007bff"/>\n'
-        svg += f'  <text x="{x+10}" y="{y+5}" font-size="12" font-family="Arial">{label} (+{timestamp:.2f}s)</text>\n'
-        if i > 0:
-            svg += f'  <line x1="{prev_x}" y1="{y-5}" x2="{x}" y2="{y-5}" stroke="#000" stroke-width="2" marker-end="url(#arrow)"/>\n'
-        prev_x = x
-        y += 20
-
-    svg += '</svg>'
+</svg>'''
+    
     return svg
 
 
@@ -154,7 +210,20 @@ def _build_log_txt_content(logger, response_data) -> str:
     lines.append("PODSUMOWANIE WYKONANIA AUTORESPONDERA")
     lines.append("=" * 88)
     lines.append(f"Start: {logger.start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Sesja: {logger.session_id}")
     lines.append("")
+    
+    # Metadane sesji
+    lines.append("0. METADANE UŻYTKOWNIKA I SESJI")
+    in_history = logger.metadata.get('in_history', 'nieznany')
+    in_requiem = logger.metadata.get('in_requiem', 'nieznany')
+    keywords_used = logger.metadata.get('keywords_used', False)
+    
+    lines.append(f"- Status historia: {in_history}")
+    lines.append(f"- Status requiem: {in_requiem}")
+    lines.append(f"- Słowa kluczowe: {'TAK (keywords użyte)' if keywords_used else 'NIE'}")
+    lines.append("")
+    
     lines.append("1. ZBIORCZE INFORMACJE")
     lines.append(f"- Groq użyty: {groq_count} razy")
     lines.append(f"- DeepSeek użyty: {deepseek_count} razy")
@@ -186,8 +255,12 @@ def _build_log_txt_content(logger, response_data) -> str:
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # Inicjalizuj logger dla tego żądania
-    logger = init_logger()
+    # ── Pobranie session ID z RENDER_INSTANCE_ID lub generowanie nowego ──────
+    render_instance_id = os.getenv("RENDER_INSTANCE_ID", "")
+    session_id = render_instance_id if render_instance_id else None
+    
+    # Inicjalizuj logger dla tego żądania z session ID
+    logger = init_logger(session_id=session_id)
     
     data = request.json or {}
     body = data.get("body", "")
@@ -211,6 +284,15 @@ def webhook():
     retry_responders = data.get("retry_responders") or []
     attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
     skip_save_to_history = bool(data.get("skip_save_to_history"))
+    
+    # ── Obsługa KEYWORDS_TEST: nie dodawaj do historii ─────────────────────────
+    keywords_used = False
+    if "KEYWORDS_TEST" in body.upper():
+        skip_save_to_history = True
+        test_mode = True  # Włącz tryb testowy dla KEYWORDS_TEST
+        keywords_used = True
+        logger.set_metadata("keywords_used", True)
+        logger.log_decision("keywords_test", "KEYWORDS_TEST found", "skip_save_to_history=True, test_mode=True")
 
     # Loguj zmienne
     logger.log_variables_detected({
@@ -223,18 +305,25 @@ def webhook():
         "test_mode": test_mode,
         "is_retry": bool(retry_responders),
         "attempt_count": attempt_count,
+        "skip_save_to_history": skip_save_to_history,
     })
 
     # ── Konfiguracja Drive ───────────────────────────────────────────────────
     drive_folder_id = os.getenv("DRIVE_FOLDER_ID")
     smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
     history_sheet_id = os.getenv("HISTORY_SHEET_ID")
+    
+    # ── Sprawdzenie statusu użytkownika ───────────────────────────────────────
+    from drive_utils import check_user_in_sheet
+    in_history_status = "tak" if check_user_in_sheet(history_sheet_id, sender) else "nie"
+    in_requiem_status = "tak" if check_user_in_sheet(smierc_sheet_id, sender) else "nie"
+    logger.set_metadata("in_history", in_history_status)
+    logger.set_metadata("in_requiem", in_requiem_status)
 
     # ── Flagi żądania ─────────────────────────────────────────────────────────
     wants_scrabble      = bool(data.get("wants_scrabble"))
     wants_analiza       = bool(data.get("wants_analiza"))
     wants_emocje        = bool(data.get("wants_emocje"))
-    wants_obrazek       = bool(data.get("wants_obrazek"))
     wants_generator_pdf = bool(data.get("wants_generator_pdf"))
     wants_smierc        = bool(data.get("wants_smierc"))
     wants_text_reply    = bool(data.get("wants_text_reply", True))
@@ -292,7 +381,7 @@ def webhook():
     if is_retry:
         has_wave2 = bool({"obrazek", "emocje", "analiza", "generator_pdf", "smierc"} & requested_sections)
     else:
-        has_wave2 = bool(wants_obrazek or wants_emocje or wants_analiza or wants_generator_pdf or wants_smierc)
+        has_wave2 = bool(wants_emocje or wants_analiza or wants_generator_pdf or wants_smierc)
 
     # ── ZAWSZE generuj logi po Fali 1 ───────────────────────────────────────
     log_txt_content = _build_log_txt_content(logger, response_data)
@@ -345,8 +434,6 @@ def webhook():
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
     wave2 = {}
     if is_retry:
-        if "obrazek" in requested_sections:
-            wave2["obrazek"] = lambda: run(build_obrazek_section, body)
         if "emocje" in requested_sections:
             wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
         if "analiza" in requested_sections:
@@ -379,8 +466,6 @@ def webhook():
                 test_mode=test_mode,
             )
     else:
-        if wants_obrazek:
-            wave2["obrazek"] = lambda: run(build_obrazek_section, body)
         if wants_emocje:
             wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments)
         if wants_analiza:
@@ -477,8 +562,6 @@ def webhook():
             requested_sections.add("analiza")
         if wants_emocje:
             requested_sections.add("emocje")
-        if wants_obrazek:
-            requested_sections.add("obrazek")
         if wants_generator_pdf:
             requested_sections.add("generator_pdf")
         if wants_smierc:
