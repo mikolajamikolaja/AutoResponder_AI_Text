@@ -136,6 +136,12 @@ def _build_log_svg_content(logger) -> str:
 
     svg += '</svg>'
     return svg
+
+
+def _build_log_txt_content(logger, response_data) -> str:
+    """
+    Generuje tekst loggera z podsumowaniem wykonania.
+    """
     groq_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'groq')
     deepseek_count = sum(1 for e in logger.entries if e['type'] == 'API_CALL' and e['data'].get('api') == 'deepseek')
     nouns_dict = response_data.get('zwykly', {}).get('nouns_dict', {})
@@ -177,6 +183,7 @@ def _build_log_svg_content(logger) -> str:
     return "\n".join(lines)
 
 
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     # Inicjalizuj logger dla tego żądania
@@ -203,6 +210,7 @@ def webhook():
     test_mode        = bool(data.get("test_mode"))
     retry_responders = data.get("retry_responders") or []
     attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
+    skip_save_to_history = bool(data.get("skip_save_to_history"))
 
     # Loguj zmienne
     logger.log_variables_detected({
@@ -280,26 +288,20 @@ def webhook():
 
     response_data = _run_parallel(wave1, flask_app)
 
-    def _ensure_top_level_logs():
-        if "log_txt" in response_data and "log_svg" in response_data:
-            return
-        logger = get_logger()
-        log_txt_content = _build_log_txt_content(logger, response_data)
-        log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
-        response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
-
-        svg_content = _build_log_svg_content(logger)
-        log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
-        response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
-
     has_wave2 = False
     if is_retry:
         has_wave2 = bool({"obrazek", "emocje", "analiza", "generator_pdf", "smierc"} & requested_sections)
     else:
         has_wave2 = bool(wants_obrazek or wants_emocje or wants_analiza or wants_generator_pdf or wants_smierc)
 
-    if not has_wave2:
-        _ensure_top_level_logs()
+    # ── ZAWSZE generuj logi po Fali 1 ───────────────────────────────────────
+    log_txt_content = _build_log_txt_content(logger, response_data)
+    log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
+    response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
+    
+    svg_content = _build_log_svg_content(logger)
+    log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
+    response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
 
     # ── WYSYŁKA PO FALI 1 ─────────────────────────────────────────────────────
     html_fala1 = "".join(filter(None, [
@@ -320,7 +322,7 @@ def webhook():
             html_body  = html_fala1,
             zalaczniki = zalaczniki_fala1,
         )
-        if success and history_sheet_id:
+        if success and history_sheet_id and not skip_save_to_history:
             save_to_history_sheet(
                 history_sheet_id,
                 sender,
@@ -337,7 +339,7 @@ def webhook():
             html_body  = "<p>Załączniki z pierwszej fali.</p>",
             zalaczniki = zalaczniki_fala1,
         )
-        if success and history_sheet_id:
+        if success and history_sheet_id and not skip_save_to_history:
             save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)", "Załączniki z pierwszej fali", is_response=True)
 
     # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
@@ -415,15 +417,9 @@ def webhook():
         response_data.update(_run_parallel(wave2, flask_app))
 
         # ── Generuj logi ──────────────────────────────────────────────────────
-        logger = get_logger()
         log_txt_content = _build_log_txt_content(logger, response_data)
         log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
         response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
-
-        # Dodaj log_txt do każdej sekcji, żeby był dołączony do każdego respondera
-        for key in list(response_data.keys()):
-            if isinstance(response_data[key], dict) and key not in ['log_txt', 'log_svg']:
-                response_data[key]['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
 
         svg_content = _build_log_svg_content(logger)
         log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
@@ -448,7 +444,7 @@ def webhook():
                  if k in response_data}
             ),
         )
-        if success_fala2 and history_sheet_id:
+        if success_fala2 and history_sheet_id and not skip_save_to_history:
             save_to_history_sheet(
                 history_sheet_id,
                 sender,
@@ -559,7 +555,7 @@ def webhook():
             try:
                 # Przykładowa aktualizacja — dostosuj do potrzeb
                 range_name = f"{sender.replace('@', '_').replace('.', '_')}!A{smierc_data['nowy_etap'] + 1}"
-                values = [[smierc_data["nowy_etap"], "", body[:2000], smierc_data.get("reply_html", "")[:2000], ""]]
+                values = [[smierc_data["nowy_etap"], "", body[:2000], _strip_html_to_text(smierc_data.get("reply_html", ""))[:2000], ""]]
                 update_sheet_with_data(smierc_sheet_id, range_name, values)
                 app.logger.info(f"Zaktualizowano arkusz śmierci dla {sender}, etap {smierc_data['nowy_etap']}")
             except Exception as e:

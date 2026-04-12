@@ -111,7 +111,8 @@ function saveResponseToHistory(senderEmail, subject, body) {
   try {
     var sheet = _getHistorySheet();
     if (!sheet) return;
-    var rowData = [new Date(), senderEmail, "ODPOWIED\u017a", subject || "", (body || "").substring(0, 1000)];
+    var plainText = extractPlainTextFromHtml(body || "");
+    var rowData = [new Date(), senderEmail, "ODPOWIED\u017a", subject || "", plainText.substring(0, 1000)];
     sheet.appendRow(rowData);
     console.log("Odpowied\u017a zapisana dla: " + senderEmail);
   } catch (e) { console.error("Błąd zapisu odpowiedzi: " + e.message); }
@@ -1089,7 +1090,8 @@ function _callBackend(sender, senderName, subject, body, url, msgId,
     test_mode:           testMode          ? true : false,
     thread_id:           threadId         || null,
     retry_responders:    retryResponders  || [],
-    attempt_count:       attemptCount     || 1
+    attempt_count:       attemptCount     || 1,
+    skip_save_to_history: containsKeyword ? true : false
   };
 
   console.log("Webhook — sender: " + payload.sender +
@@ -1376,6 +1378,10 @@ function __AAA_processEmails() {
     var containsKeyword4       = _containsAny(searchText, KEYWORDS4);
     var containsKeywordObrazek = _containsAny(searchText, KEYWORDS_OBRAZEK);
     var containsKeywordTest    = _containsAny(searchText, KEYWORDS_TEST);
+    
+    // Flaga: jeśli zawiera JAKIKOLWIEK keyword, nie zapisuj do historii
+    var hasAnyKeyword = containsKeyword || containsKeyword2 || containsKeyword3 || 
+                        containsKeyword4 || containsKeywordObrazek || shouldSendSmierc;
 
     // Aktualizuj shouldSendZwykly jeśli zawiera słowo kluczowe
     if (containsKeyword) shouldSendZwykly = true;

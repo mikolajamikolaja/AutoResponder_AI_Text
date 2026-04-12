@@ -1,0 +1,257 @@
+═══════════════════════════════════════════════════════════════════════════════
+  PRZEPŁYW SŁÓW KLUCZOWYCH - ZESTAWIENIE
+═══════════════════════════════════════════════════════════════════════════════
+
+📌 SŁOWA KLUCZOWE ZDEFINIOWANE:
+  - KEYWORDS / KEYWORDS1 → containsKeyword=true → BLOKUJE zapis do historii
+  - KEYWORDS2 → containsKeyword2=true → Scrabble
+  - KEYWORDS3 → containsKeyword3=true → Analiza
+  - KEYWORDS4 → containsKeyword4=true → Emocje  
+  - KEYWORDS_JOKER → Triggeruje pełną Fala JOKER (wszystkie respondery)
+  - KEYWORDS_SMIERC → Triggeruje gałąź śmierci
+  - KEYWORDS_OBRAZEK → Triggeruje generator obrazków
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+SCENARIUSZ 1: Użytkownik TYLKO w HISTORII (knownSender, nie w smierc)
+═══════════════════════════════════════════════════════════════════════════════
+
+WYSYŁA: Email BEZ słów kluczowych
+────────────────────────────────────
+  GAS Script:
+    1. ✓ Detektuje knownSender=true (jest w historii)
+    2. ✓ containsKeyword=false
+    3. ✓ Jeśli RE/FWD → wysyła odpowiedź
+    4. ✓ Jeśli nowa → wysyła respondery (zwykly, biznes, etc.)
+    5. ✓ saveResponseToHistory(GAS) → wpisuje do historii
+
+  Render (Python):
+    1. ✓ Otrzymuje skip_save_to_history=false
+    2. ✓ save_to_history_sheet() → wpisuje do historii
+
+  WYNIK: 
+    ✓ Email wysłany
+    ✓ Historia ZAPISANA (plain text - naszą nową funkcją _strip_html_to_text)
+    ✓ Arkusz śmierci - bez zmian (bo user nie ma smierc)
+
+
+WYSYŁA: Email Z słowami kluczowymi (np. KEYWORDS1)
+────────────────────────────────────
+  GAS Script:
+    1. ✓ Detektuje knownSender=true
+    2. ✓ containsKeyword=true (KEYWORDS1 znaleziony)
+    3. ✓ Jeśli nowa wiadomość:
+         - shouldSendZwykly=true (bo containsKeyword=true, linia 1385)
+         - Wysyła odpowiedź normálnie
+         - Wpisuje do historii WEJŚCIA (saveToHistory, linia 1473)
+         - KHÔNG wpisuje responses (brak ich w tym bloku)
+    4. ✓ Wysyła payload z: skip_save_to_history: true
+
+  Render (Python):
+    1. ✓ Otrzymuje skip_save_to_history=true
+    2. ✗ save_to_history_sheet() POMINIĘTA (bo flag=true)
+    3. ✓ Odpowiedź wysłana
+
+  WYNIK:
+    ✓ Email wysłany
+    ✨ Historia NIEZAPISANA (dzięki skip_save_to_history=true)
+    ✓ Arkusz śmierci - bez zmian
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+SCENARIUSZ 2: Użytkownik TYLKO w SMIERC (arkusz śmierci, nie w historii)
+═══════════════════════════════════════════════════════════════════════════════
+
+WYSYŁA: Email BEZ słów kluczowych (RE/FWD do poprzedniej)
+────────────────────────────────────
+  GAS Script:
+    1. ✓ Detektuje isSmierc=true (ma arkusz śmierci)
+    2. ✓ shouldSendSmierc=true
+    3. ✓ !isNewMsg=true (RE/FWD)
+    4. ✓ Wysyła odpowiedź SMIERC
+    5. ✓ saveResponseToHistory(GAS) → do historii (plain text)
+    6. ✓ _updateSmircData(GAS) → do arkusza śmierci
+
+  Render (Python):
+    1. ✓ skip_save_to_history=false
+    2. ✓ save_to_history_sheet() → do historii  
+    3. ✓ update_sheet_with_data() → aktualizuje arkusz śmierci (plain text)
+
+  WYNIK:
+    ✓ Email wysłany
+    ✓ HISTORIA ZAPISANA (bo brak keywords)
+    ✓ ARKUSZ SMIERC ZAKTUALIZOWANY
+
+
+WYSYŁA: Email Z KEYWORDS (ale nie JOKER)
+────────────────────────────────────
+  GAS Script:
+    1. ✓ Detektuje isSmierc=true
+    2. ✓ containsKeyword=true
+    3. ✓ shouldSendZwykly=true (bo containsKeyword, linia 1385)
+    4. ✓ hasAnyKeyword=true (linia 1383)
+    5. ✓ Wysyła payload z: skip_save_to_history: true
+    6. ✓ Wysyła do respondentów (scrabble / analiza / etc. jeśli inne keywords)
+
+  Render (Python):
+    1. ✓ skip_save_to_history=true
+    2. ✗ save_to_history_sheet() POMINIĘTA
+
+  WYNIK:
+    ✓ Email wysłany
+    ✨ HISTORIA NIEZAPISANA (skip_save_to_history=true)
+    ⚠️  ARKUSZ SMIERC - aktualizacja ZALEŻY od tego czy RE/FWD czy JOKER
+        - Jeśli RE/FWD → w GAS nie ma logiki śmierci dla nowych keywords
+        - Jeśli JOKER → AKTUALIZOWANY (bo JOKER zawsze aktualizuje smierc)
+
+
+WYSYŁA: Email Z KEYWORDS_JOKER
+────────────────────────────────────
+  GAS Script:
+    1. ✓ Detektuje containsJoker=true (linia 1276)
+    2. ✓ JOKER flow (linie 1277-1320)
+    3. ✓ Wysyła WSZYSTKIE respondery (biznes, zwykly, scrabble, analiza, etc.)
+    4. ✓ executeSmircMailSend() → do email
+    5. ✓ _updateSmircData(GAS) → do arkusza śmierci
+    6. ✓ saveResponseToHistory(GAS) → do historii (plain text)
+    7. ✓ saveToHistory(GAS) → WEJŚCIE do historii
+
+  Render (Python):
+    1. ? Czy skip_save_to_history dla JOKER? Sprawdzam... nie, JOKER nie ustawia containsKeyword=true
+       (linia 1301 to containsKeywordTest, nie containsKeyword)
+    2. ✓ save_to_history_sheet() ZAPISANA (bo skip=false)
+
+  WYNIK:
+    ✓ Email wysłany
+    ✓ HISTORIA ZAPISANA (zwykła wiadomość)
+    ✓ ARKUSZ SMIERC ZAKTUALIZOWANY (etap postępu)
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+SCENARIUSZ 3: Użytkownik NIE MA NA ŻADNEJ LIŚCIE, ale użył KEYWORDS
+═══════════════════════════════════════════════════════════════════════════════
+
+WYSYŁA: Email Z KEYWORDS (np. KEYWORDS2 dla Scrabble)
+────────────────────────────────────
+  GAS Script:
+    1. Detektuje:
+       - isBiz=false
+       - isKnownSender=false (nie w historii)
+       - isSmierc=false (nie ma arkusza śmierci)
+       - containsKeyword2=true (KEYWORDS2)
+    2. ✓ !isBiz && !shouldSendZwykly && containsKeyword2 → warunek linia 1389 PRZECHODZI
+    3. ✓ Wysyła backend dla scrabble
+    4. ✓ Wysyła payload z: skip_save_to_history: true (bo hasAnyKeyword zawiera containsKeyword2? SPRAWDZAM!)
+
+       Linia 1383: hasAnyKeyword = containsKeyword || containsKeyword2 || ...
+       Ale Skip ustawiany tylko na containsKeyword!
+       Linia 1094: skip_save_to_history: containsKeyword ? true : false
+
+       ⚠️  AHA! Skip aktywuje się TYLKO na containsKeyword (KEYWORDS/KEYWORDS1)
+           KEYWORDS2-4 (scrabble, analiza, emocje) ZAWSZE zapisywane do historii!
+
+    5. ✓ executeScrabbleMailSend(GAS) wysyła email
+    6. ✓ saveToHistory(GAS) → WEJŚCIE do historii (linia 1473)
+
+  Render (Python):
+    1. skip_save_to_history=false (bo KEYWORDS2 nie ustawia skip)
+    2. ✓ save_to_history_sheet() → ZAPISANA
+
+  WYNIK:
+    ✓ Email wysłany
+    ✓ HISTORIA ZAPISANA (nowy user, ale z keywords2 - zapisany)
+    ✓ Arkusz śmierci - bez zmian
+
+
+
+WYSYŁA: Email Z KEYWORDS (KEYWORDS1 - główne słowo kluczowe)
+────────────────────────────────────
+  GAS Script:
+    1. Detektuje:
+       - isBiz=false
+       - isKnownSender=false
+       - isSmierc=false
+       - containsKeyword=true (KEYWORDS1)
+    2. ✓ shouldSendZwykly=true (bo containsKeyword, linia 1385)
+    3. ✓ hasAnyKeyword=true
+    4. ✓ skip_save_to_history: true (bo containsKeyword=true, linia 1094)
+    5. ✓ Wysyła payload do Renderu z flaginą skip=true
+
+  Render (Python):
+    1. skip_save_to_history=true
+    2. ✗ save_to_history_sheet() POMINIĘTA
+
+  WYNIK:
+    ✓ Email wysłany
+    ✨ HISTORIA NIEZAPISANA (user pozostaje unknown)
+    ✓ Arkusz śmierci - bez zmian
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+📊 PODSUMOWANIE - TABELA
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ User Status│ Słowo Kluczowe │ GAS Script       │ Render             │Wynik  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ W historii │ Bez keywords   │ Zapisuje do hist │ save_to_history=✓  │ ✓ HIS│
+│            │                │ (plain text)     │                    │      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ W historii │ KEYWORDS1      │ Zapisuje WEJŚCIE │ skip=true, ✗ hist  │ ✨NO │
+│            │                │ (plain text)     │                    │      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Smierc     │ Bez keywords   │ Zapisuje hist    │ save_to_history=✓  │ ✓ HIS│
+│            │ (RE/FWD)       │ _updateSmircData │ update_smierc=✓    │✓SMIR│
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Smierc     │ KEYWORDS1      │ skip=true        │ skip=true, ✗ hist  │ ✨NO │
+│            │                │ Brak updateSmierc│                    │      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Smierc     │ KEYWORDS_JOKER │ Zapisuje WEJŚCIE │ save_to_history=✓  │ ✓ HIS│
+│            │                │ _updateSmircData │ update_smierc=✓    │✓SMIR│
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Unknown    │ KEYWORDS2-4    │ Zapisuje WEJŚCIE │ save_to_history=✓  │ ✓ HIS│
+│ (new user) │ (nie skip)     │                  │ NEW ENTRANT        │ (NEW)│
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Unknown    │ KEYWORDS1      │ skip=true        │ skip=true, ✗ hist  │ ✨NO │
+│ (new user) │                │ Nie zapisuje hist│ Pozostaje unknown  │      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Unknown    │ KEYWORDS_JOKER │ Tworzy arkusz    │ save_to_history=✓  │ ✓ NEW│
+│ (new user) │                │ smierc, zapisuje │ NEW JOKER USER     │✓SMIR│
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Legend:
+  ✓ HIS = Zapisane do historii
+  ✨ NO = NIEZAPISANE (keywords block)
+  ✓ SMIR = Arkusz śmierci zaktualizowany
+  NEW = Nowy user pojawił się w historii
+
+
+
+═══════════════════════════════════════════════════════════════════════════════
+🔑 KLUCZOWE RÓŻNICE:
+═══════════════════════════════════════════════════════════════════════════════
+
+1. TYLKO KEYWORDS/KEYWORDS1 blokują zapis do historii (skip_save_to_history=true)
+   - KEYWORDS2 (Scrabble) → ZAWSZE zapisywane do historii
+   - KEYWORDS3 (Analiza) → ZAWSZE zapisywane do historii  
+   - KEYWORDS4 (Emocje) → ZAWSZE zapisywane do historii
+
+2. JOKER zawsze aktywuje i zapisuje do smierc (i historii)
+
+3. Stripowanie HTML:
+   - GAS: saveResponseToHistory() teraz używa extractPlainTextFromHtml()
+   - Render: save_to_history_sheet() teraz używa _strip_html_to_text_sheets()
+   - Render: update_sheet_with_data (smierc) teraz dla reply_html używa _strip_html_to_text()
+
+4. Historia WEJŚCIA zawsze zapisywana (saveToHistory w GAS), chyba że mail jest spam/duplicate
+
+5. Historia ODPOWIEDZI:
+   - Zapisywana przez GAS: JOKER, RE/FWD do znanych osób
+   - Zapisywana przez Render: głównie Fala 1 i Fala 2 (jeśli not skip_save_to_history)
+
+
+═══════════════════════════════════════════════════════════════════════════════

@@ -155,6 +155,27 @@ def update_sheet_with_data(sheet_id, range_name, values):
         return False
 
 
+def _strip_html_to_text_sheets(html_text: str) -> str:
+    """
+    Konwertuje HTML na zwykły tekst, usuwając tagi i CSS.
+    """
+    import re
+    if not html_text:
+        return ""
+    # Usuń tagi style
+    text = re.sub(r'<style[^>]*>.*?</style>', '', html_text, flags=re.DOTALL | re.IGNORECASE)
+    # Usuń tagi script
+    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    # Usuń pozostałe tagi HTML
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # Usuń HTML entity
+    text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<')
+    text = text.replace('&gt;', '>').replace('&quot;', '"').replace('&#39;', "'")
+    # Zmniejsz wielokrotne białe znaki
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
     """
     Zapisuje wiadomość do arkusza historii.
@@ -184,7 +205,9 @@ def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
         
         # Użyj append() aby uniknąć problemów z parsowaniem zakresu
         msg_type = "ODPOWIEDŹ" if is_response else "WEJŚCIE"
-        values = [[timestamp, sender, msg_type, subject or "", (body or "")[:1000]]]
+        # Stripuj HTML ze wspisu
+        clean_body = _strip_html_to_text_sheets(body or "")[:1000]
+        values = [[timestamp, sender, msg_type, subject or "", clean_body]]
 
         sheets_service.spreadsheets().values().append(
             spreadsheetId=sheet_id,
