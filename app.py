@@ -685,159 +685,39 @@ def webhook():
     log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
     response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
 
-    # ── WYSYŁKA PO FALI 1 ─────────────────────────────────────────────────────
-    # Wyślij wszystkie respondery które zostały wygenerowane
-    # UWAGA: biznes, scrabble, emocje, generator_pdf, smierc wysyłamy w Fali 2
-    html_fala1 = "".join(filter(None, [
-        response_data.get("zwykly",     {}).get("reply_html", ""),
-        response_data.get("analiza",    {}).get("reply_html", ""),
-        response_data.get("nawiazanie", {}).get("reply_html", ""),
-    ]))
-    zalaczniki_fala1 = zbierz_zalaczniki_z_response(
-        {k: response_data[k] for k in ("zwykly", "analiza", "nawiazanie", "log", "log_txt", "log_svg")
-         if k in response_data}
-    )
-    if html_fala1.strip() and ("zwykly" in requested_sections or "analiza" in requested_sections or "nawiazanie" in requested_sections):
-        success = wyslij_odpowiedz(
-            to_email   = sender,
-            to_name    = sender_name,
-            subject    = f"Re: {previous_subject or 'Twoja wiadomość'}",
-            html_body  = html_fala1,
-            zalaczniki = zalaczniki_fala1,
+    # ── WYSYŁKA INDYWIDUALNA DLA KAŻDEGO RESPONDERA ─────────────────────
+    # Kolejność: zwykly, smierc, analiza, emocje, scrabble
+    individual_responders = ["zwykly", "smierc", "analiza", "emocje", "scrabble"]
+    any_sent = False
+    for responder in individual_responders:
+        if responder in response_data and response_data[responder]:
+            html = response_data[responder].get("reply_html", "")
+            attachments = zbierz_zalaczniki_z_response({responder: response_data[responder]})
+            if html.strip() or attachments:
+                subject = f"Re: {previous_subject or 'Twoja wiadomość'} - {responder}"
+                success = wyslij_odpowiedz(
+                    to_email   = sender,
+                    to_name    = sender_name,
+                    subject    = subject,
+                    html_body  = html or "<p>Załączniki.</p>",
+                    zalaczniki = attachments,
+                )
+                if success:
+                    any_sent = True
+                    logger.log_decision("email_sent", f"Sent {responder}", True)
+                else:
+                    logger.log_decision("email_failed", f"Failed to send {responder}", False)
+
+    # ── ZAPIS DO HISTORII (tylko raz, jeśli jakieś e-maile zostały wysłane) ──
+    if any_sent and history_sheet_id and not skip_save_to_history:
+        # Zapisz ogólny wpis do historii
+        save_to_history_sheet(
+            history_sheet_id,
+            sender,
+            f"Re: {previous_subject or 'Twoja wiadomość'}",
+            "Odpowiedzi wysłane indywidualnie",
+            is_response=True,
         )
-        if success and history_sheet_id and not skip_save_to_history:
-            save_to_history_sheet(
-                history_sheet_id,
-                sender,
-                f"Re: {previous_subject or 'Twoja wiadomość'}",
-                _strip_html_to_text(html_fala1)[:1000],
-                is_response=True,
-            )
-    elif zalaczniki_fala1:
-        # Wysyłka tylko załączników Fali 1, jeśli brak tekstu i są załączniki sekcji
-        success = wyslij_odpowiedz(
-            to_email   = sender,
-            to_name    = sender_name,
-            subject    = f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)",
-            html_body  = "<p>Załączniki.</p>",
-            zalaczniki = zalaczniki_fala1,
-        )
-        if success and history_sheet_id and not skip_save_to_history:
-            save_to_history_sheet(history_sheet_id, sender, f"Re: {previous_subject or 'Twoja wiadomość'} (załączniki)", "Załączniki", is_response=True)
-
-    # ── FALA 2: ciężkie respondery ────────────────────────────────────────────
-    wave2 = {}
-    if is_retry:
-        # ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────
-        # Przesyłam test_mode=disable_flux do wave2 respondentów także w retry,
-        # aby respondenci wiedzieli że mają wy generowanie FLUX
-        if "biznes" in requested_sections:
-            wave2["biznes"] = lambda: run(build_biznes_section, body)
-        if "scrabble" in requested_sections:
-            wave2["scrabble"] = lambda: run(build_scrabble_section, body)
-        if "emocje" in requested_sections:
-            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
-        if "analiza" in requested_sections:
-            wave2["analiza"] = lambda: run(
-                build_analiza_section,
-                body,
-                attachments,
-                sender=sender,
-                sender_name=sender_name,
-                test_mode=disable_flux or test_mode,
-            )
-        if "generator_pdf" in requested_sections:
-            _sn   = sender_name
-            _body = body
-            wave2["generator_pdf"] = lambda: run(
-                build_generator_pdf_section, _body, sender_name=_sn, test_mode=disable_flux or test_mode
-            )
-        if "smierc" in requested_sections:
-            _sender       = sender
-            _body_smierc  = body
-            _etap         = data.get("etap", 1)
-            _data_smierci = data.get("data_smierci", "nieznanego dnia")
-            _historia     = data.get("historia", [])
-            wave2["smierc"] = lambda: run(
-                build_smierc_section,
-                sender_email=_sender,
-                body=_body_smierc,
-                etap=_etap,
-                data_smierci_str=_data_smierci,
-                historia=_historia,
-                test_mode=disable_flux or test_mode,  # KEYWORDS_TEST (disable_flux) → test_mode dla FLUX
-            )
-    else:
-        if wants_biznes:
-            wave2["biznes"] = lambda: run(build_biznes_section, body)
-        if wants_scrabble:
-            wave2["scrabble"] = lambda: run(build_scrabble_section, body)
-        if wants_emocje:
-            # disable_flux ze FLAGA_TEST blokuje FLUX w responderycie
-            wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
-        if wants_generator_pdf:
-            _sn   = sender_name
-            _body = body
-            # disable_flux: jeśli KEYWORDS_TEST, wyłącz Flux w generator_pdf
-            wave2["generator_pdf"] = lambda: run(
-                build_generator_pdf_section, _body, sender_name=_sn, test_mode=disable_flux or test_mode
-            )
-        if wants_smierc:
-            _sender       = sender
-            _body_smierc  = body
-            _etap         = data.get("etap", 1)
-            _data_smierci = data.get("data_smierci", "nieznanego dnia")
-            _historia     = data.get("historia", [])
-            wave2["smierc"] = lambda: run(
-                build_smierc_section,
-                sender_email=_sender,
-                body=_body_smierc,
-                etap=_etap,
-                data_smierci_str=_data_smierci,
-                historia=_historia,
-                test_mode=disable_flux or test_mode,  # KEYWORDS_TEST (disable_flux) → test_mode dla FLUX
-            )
-
-    if wave2:
-        response_data.update(_run_parallel(wave2, flask_app))
-
-        # ── Generuj logi ──────────────────────────────────────────────────────
-        log_txt_content = _build_log_txt_content(logger, response_data)
-        log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
-        response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
-
-        svg_content = _build_log_svg_content(logger)
-        log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
-        response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
-
-        # ── WYSYŁKA PO FALI 2 ─────────────────────────────────────────────────
-        html_fala2 = "".join(filter(None, [
-            response_data.get("biznes",        {}).get("reply_html", ""),
-            response_data.get("scrabble",      {}).get("reply_html", ""),
-            response_data.get("obrazek",       {}).get("reply_html", ""),
-            response_data.get("emocje",        {}).get("reply_html", ""),
-            response_data.get("generator_pdf", {}).get("reply_html", ""),
-            response_data.get("smierc",        {}).get("reply_html", ""),
-        ]))
-        success_fala2 = wyslij_odpowiedz(
-            to_email   = sender,
-            to_name    = sender_name,
-            subject    = f"Re: {previous_subject or 'Twoja wiadomość'} (część 2)",
-            html_body  = html_fala2 or "<p>Załączniki z drugiej fali.</p>",
-            zalaczniki = zbierz_zalaczniki_z_response(
-                {k: response_data[k] for k in
-                 ("biznes", "scrabble", "obrazek", "emocje", "generator_pdf", "smierc", "log", "log_txt", "log_svg")
-                 if k in response_data}
-            ),
-        )
-        if success_fala2 and history_sheet_id and not skip_save_to_history:
-            save_to_history_sheet(
-                history_sheet_id,
-                sender,
-                f"Re: {previous_subject or 'Twoja wiadomość'} (część 2)",
-                _strip_html_to_text(html_fala2 or "Załączniki")[:1000],
-                is_response=True,
-            )
 
     # Zabezpieczenie — nawiazanie zawsze ma has_history
     if "nawiazanie" not in response_data:
