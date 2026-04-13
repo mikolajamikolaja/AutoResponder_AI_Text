@@ -713,7 +713,7 @@ def webhook():
                 _strip_html_to_text(html_fala1)[:1000],
                 is_response=True,
             )
-    elif zalaczniki_fala1_sections:
+    elif zalaczniki_fala1:
         # Wysyłka tylko załączników Fali 1, jeśli brak tekstu i są załączniki sekcji
         success = wyslij_odpowiedz(
             to_email   = sender,
