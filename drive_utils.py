@@ -243,11 +243,20 @@ def check_user_in_sheet(sheet_id, email, sheet_name='Historia'):
         credentials = _get_credentials()
         sheets_service = build('sheets', 'v4', credentials=credentials)
 
-        # Pobierz wszystkie dane z arkusza (zakładamy że email jest w kolumnie B - indeks 1)
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=sheet_id,
-            range=f'{sheet_name}!B1:B10000'  # Kolumna B zawiera email, zakres od B1 do B10000
-        ).execute()
+        # Najpierw spróbuj z podaną nazwą arkusza
+        try:
+            result = sheets_service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=f'{sheet_name}!B1:B10000'
+            ).execute()
+        except Exception:
+            # Jeśli nie uda się, spróbuj z pierwszym arkuszem
+            spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+            first_sheet = spreadsheet['sheets'][0]['properties']['title']
+            result = sheets_service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=f'{first_sheet}!B1:B10000'
+            ).execute()
 
         values = result.get('values', [])
         if not values:

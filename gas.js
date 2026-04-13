@@ -33,26 +33,39 @@ function _normalize(text) {
   return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+function _wordRegex(word) {
+  if (!word) return null;
+  var normalizedWord = _normalize(word);
+  if (!normalizedWord) return null;
+  // Szuka podciągu (substring match), nie whole word
+  return new RegExp(escapeRegExp(normalizedWord), "i");
+}
+
 function _containsAny(haystack, keywords) {
   if (!haystack || !keywords || !keywords.length) return false;
   var normalizedHaystack = _normalize(haystack);
   return keywords.some(function(k) {
     if (!k) return false;
-    return normalizedHaystack.indexOf(_normalize(k)) !== -1;
+    var re = _wordRegex(k);
+    return re ? re.test(normalizedHaystack) : false;
   });
+}
+
+function _findMatchingKeywords(haystack, keywords) {
+  if (!haystack || !keywords || !keywords.length) return [];
+  var normalizedHaystack = _normalize(haystack);
+  return keywords
+    .filter(Boolean)
+    .filter(function(k) {
+      var re = _wordRegex(k);
+      return re ? re.test(normalizedHaystack) : false;
+    });
 }
 
 function _getListFromProps(name) {
   var props = PropertiesService.getScriptProperties();
   var raw   = props.getProperty(name) || "";
   return raw.split(",").map(function(s){ return s.trim().toLowerCase(); }).filter(Boolean);
-}
-
-function extractEmail(fromHeader) {
-  if (!fromHeader) return "";
-  var m = fromHeader.match(/<([^>]+)>/);
-  if (m) return m[1];
-  return fromHeader.split(" ")[0];
 }
 
 function escapeRegExp(str) {
@@ -299,7 +312,16 @@ function _enqueuePendingRetry(payload, processedStatus) {
     isAllowed: payload.isAllowed || false,
     isKnownSender: payload.isKnownSender || false,
     containsKeyword: payload.containsKeyword || false,
-    containsKeywordTest: payload.test_mode || false,
+    containsKeyword1: payload.containsKeyword1 || false,
+    containsKeyword2: payload.containsKeyword2 || false,
+    containsKeyword3: payload.containsKeyword3 || false,
+    containsKeyword4: payload.containsKeyword4 || false,
+    containsFlagaTest: payload.contains_flaga_test || false,
+    containsKeywordGeneratorPdf: payload.contains_keyword_generator_pdf || false,
+    containsKeywordSmierc: payload.contains_keyword_smierc || false,
+    containsJoker: payload.contains_keyword_joker || false,
+    isSmierc: payload.isSmierc || false,
+    disableFlux: payload.disable_flux || false,
     smircData: payload.smircData || null,
     retry_responders: [],
     attempt_count: 1,
@@ -307,13 +329,20 @@ function _enqueuePendingRetry(payload, processedStatus) {
     last_attempt_at: null,
   };
 
-  entry.retry_responders = processedStatus.failed || entry.retry_responders;
-  entry.attempt_count = processedStatus.attempt_count || entry.attempt_count;
-  entry.details = processedStatus.details || entry.details;
-  entry.last_attempt_at = new Date().toISOString();
+  if (existing) {
+    entry.attempt_count     = (existing.attempt_count || 1) + 1;
+    entry.retry_responders  = processedStatus.failed  || existing.retry_responders || [];
+    entry.details           = processedStatus.details || existing.details || null;
+    entry.last_attempt_at   = new Date().toISOString();
+    list = list.map(function(item) { return item.id === entry.id ? entry : item; });
+  } else {
+    entry.retry_responders  = processedStatus.failed  || [];
+    entry.details           = processedStatus.details || null;
+    list.push(entry);
+  }
 
-  if (!existing) { list.push(entry); }
   _savePendingRetries(list);
+  console.log("Kolejka retry: " + entry.sender + " | próba=" + entry.attempt_count + " | respondery=" + entry.retry_responders.join(","));
 }
 
 function _getRetryAttachments(threadId) {
@@ -346,7 +375,7 @@ function _processPendingRetries(webhookUrl) {
 
     var attachments = _getRetryAttachments(entry.thread_id);
     var response = _callBackend(
-      entry.sender, entry.sender_name, entry.subject, entry.body, webhookUrl, entry.msg_id || "",
+      entry.sender, entry.sender_name, entry.subject, entry.body, entry.body, webhookUrl, entry.msg_id || "",
       entry.retry_responders.indexOf("scrabble") !== -1,
       entry.retry_responders.indexOf("analiza") !== -1,
       entry.retry_responders.indexOf("emocje") !== -1,
@@ -359,10 +388,17 @@ function _processPendingRetries(webhookUrl) {
       entry.isBiz,
       entry.isAllowed,
       entry.isKnownSender,
-      entry.containsKeyword,
-      false,
+      entry.containsKeyword || false,
+      entry.containsKeyword1 || false,
+      entry.containsKeyword2 || false,
+      entry.containsKeyword3 || false,
+      entry.containsKeyword4 || false,
+      entry.containsFlagaTest || false,
+      entry.containsKeywordGeneratorPdf || false,
+      entry.containsKeywordSmierc || false,
+      entry.containsJoker || false,
       entry.isSmierc || false,
-      entry.containsKeywordTest,
+      entry.disableFlux || false,
       entry.thread_id,
       entry.retry_responders,
       entry.attempt_count + 1
@@ -1035,13 +1071,24 @@ function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
 }
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
-function _callBackend(sender, senderName, subject, body, url, msgId,
+function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
                       wantsScrabble, wantsAnaliza, wantsEmocje,
                       wantsGeneratorPdf, wantsSmierc, smircData,
                       attachments, previousBody, previousSubject,
                       isBiz, isAllowed, isKnownSender, containsKeyword,
+                      containsKeyword1, containsKeyword2, containsKeyword3, containsKeyword4,
+                      containsFlagaTest, containsKeywordGeneratorPdf, containsKeywordSmierc,
                       containsJoker, shouldSendSmierc,
-                      testMode, threadId, retryResponders, attemptCount) {
+                      disableFlux, threadId, retryResponders, attemptCount) {
+  var KEYWORDS = _getListFromProps("KEYWORDS");
+  var KEYWORDS1 = _getListFromProps("KEYWORDS1");
+  var KEYWORDS2 = _getListFromProps("KEYWORDS2");
+  var KEYWORDS3 = _getListFromProps("KEYWORDS3");
+  var KEYWORDS4 = _getListFromProps("KEYWORDS4");
+  var KEYWORDS_JOKER = _getListFromProps("KEYWORDS_JOKER");
+  var KEYWORDS_GENERATOR_PDF = _getListFromProps("KEYWORDS_GENERATOR_PDF");
+  var KEYWORDS_SMIERC = _getListFromProps("KEYWORDS_SMIERC");
+  var FLAGA_TEST = _getListFromProps("FLAGA_TEST");
   var secret  = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
   var payload = {
     msg_id:              msgId            || "",
@@ -1054,26 +1101,37 @@ function _callBackend(sender, senderName, subject, body, url, msgId,
     wants_emocje:        wantsEmocje        ? true : false,
     wants_generator_pdf: wantsGeneratorPdf  ? true : false,
     wants_smierc:        wantsSmierc        ? true : false,
-    etap:                smircData ? smircData.etap         : 1,
-    data_smierci:        smircData ? smircData.data_smierci : "nieznanego dnia",
-    historia:            smircData ? smircData.historia     : [],
+    contains_keyword:    containsKeyword    ? true : false,
+    contains_keyword1:   containsKeyword1   ? true : false,
+    contains_keyword2:   containsKeyword2   ? true : false,
+    contains_keyword3:   containsKeyword3   ? true : false,
+    contains_keyword4:   containsKeyword4   ? true : false,
+    contains_flaga_test: containsFlagaTest   ? true : false,
+    contains_keyword_generator_pdf: containsKeywordGeneratorPdf ? true : false,
+    contains_keyword_smierc: containsKeywordSmierc ? true : false,
+    contains_keyword_joker: containsJoker ? true : false,
     wants_text_reply:    (isBiz || isAllowed || isKnownSender || containsKeyword || wantsScrabble || wantsAnaliza || wantsEmocje || wantsGeneratorPdf) ? true : false,
     attachments:         attachments        || [],
     previous_body:       previousBody       || null,
     previous_subject:    previousSubject    || null,
     save_to_drive:       true,
-    test_mode:           testMode          ? true : false,
+    disable_flux:        disableFlux       ? true : false,
+    matched_keywords: {
+      keywords:      _findMatchingKeywords(searchText, KEYWORDS),
+      keywords1:     _findMatchingKeywords(searchText, KEYWORDS1),
+      keywords2:     _findMatchingKeywords(searchText, KEYWORDS2),
+      keywords3:     _findMatchingKeywords(searchText, KEYWORDS3),
+      keywords4:     _findMatchingKeywords(searchText, KEYWORDS4),
+      keywords_flaga: _findMatchingKeywords(searchText, FLAGA_TEST),
+      keywords_joker:_findMatchingKeywords(searchText, KEYWORDS_JOKER),
+      keywords_smierc:_findMatchingKeywords(searchText, KEYWORDS_SMIERC),
+    },
     thread_id:           threadId         || null,
     retry_responders:    retryResponders  || [],
     attempt_count:       attemptCount     || 1,
-    skip_save_to_history: (!isAllowed && !isKnownSender && !containsKeyword && !containsJoker && !shouldSendSmierc) ? true : false
+    skip_save_to_history: (!isAllowed && !isKnownSender && !containsKeyword && !containsKeyword1 && !containsKeyword2 && !containsKeyword3 && !containsKeyword4 && !containsKeywordGeneratorPdf && !containsJoker && !containsKeywordSmierc && !shouldSendSmierc) ? true : false,
+    headers:            secret ? { "X-Webhook-Secret": secret } : {}
   };
-
-  console.log("Webhook — sender: " + payload.sender +
-              " | smierc=" + payload.wants_smierc +
-              " | etap=" + payload.etap + " | data=" + payload.data_smierci +
-              " | text_reply=" + payload.wants_text_reply);
-
   var options = {
     method:             "post",
     contentType:        "application/json",
@@ -1116,7 +1174,7 @@ function _stripQuotedText(body) {
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim();
     if (line.startsWith(">") ||
-        line.match(/^(wt|śr|czw|pt|sob|niedz|pon)\.,?\s+\d/i) ||
+        line.match(/^(wt|sr|czw|pt|sob|niedz|pon)\.,?\s+\d/i) ||
         line.match(/^(On|W dniu|Am)\s+.+wrote:/i) ||
         line.match(/^Dnia\s+\d/i) ||
         line.match(/napisał\(a\):/i)) break;
@@ -1144,7 +1202,14 @@ function __AAA_processEmails() {
   var KEYWORDS_JOKER             = _getListFromProps("KEYWORDS_JOKER");
   var KEYWORDS_GENERATOR_PDF     = _getListFromProps("KEYWORDS_GENERATOR_PDF");
   var KEYWORDS_SMIERC            = _getListFromProps("KEYWORDS_SMIERC");
-  var KEYWORDS_TEST              = _getListFromProps("KEYWORDS_TEST");
+  // ── FLAGA_TEST ──────────────────────────────────────────────────────────
+  // FLAGA_TEST - lista słów kluczowych aby wyłączyć FLUX w respondericach
+  // Gdy wiadomość zawiera słowo z FLAGA_TEST, zostaje wysłany disable_flux=true
+  // do backend. Respondenci którzy generują obrazki (zwykly, emocje, itp) sprawdzą
+  // ten parametr i wyłączą generowanie FLUX, ale ODRAŻĄ!
+  // FLAGA_TEST NIE wpływa na rzeczy które respondenci będą uruchomieni, tylko
+  // że w nich czegoś można wyłączyć.
+  var FLAGA_TEST                 = _getListFromProps("FLAGA_TEST");
   var DATA_SMIERCI               = props.getProperty("DATA_SMIERCI") || "nieznanego dnia";
 
   var maskMode      = false;
@@ -1192,6 +1257,7 @@ function __AAA_processEmails() {
     // shouldSendSmierc: osoba ma arkusz śmierci
     var shouldSendZwykly = isAllowed || isKnownSender;
     var shouldSendSmierc = isSmierc;
+    var containsFlagaTest = _containsAny(searchText, FLAGA_TEST);
 
     var isNewMsg = _isNewMessage(subject);
     console.log("DEBUG: isNewMsg=" + isNewMsg + " from=" + fromEmail +
@@ -1208,13 +1274,20 @@ function __AAA_processEmails() {
         webhookCalled = true;
 
         var responseReply = _callBackend(
-          fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
-          false, false, false, false, false,
-          shouldSendSmierc, smircData, [],
+          fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
+          false, false, false, false, shouldSendSmierc,
+          smircData, [],
           previousDataReply ? previousDataReply.body    : null,
           previousDataReply ? previousDataReply.subject : null,
-          isBiz, isAllowed, isKnownSender, false, false, shouldSendSmierc,
-          containsKeywordTest
+          isBiz, isAllowed, isKnownSender,
+          shouldSendZwykly, false, false, false, false,
+          containsFlagaTest, false, false,
+          false,
+          shouldSendSmierc,
+          false,
+          null,
+          [],
+          1
         );
 
         if (responseReply && responseReply.json) {
@@ -1225,10 +1298,10 @@ function __AAA_processEmails() {
             _updateSmircData(fromEmail, newEtapReply, plainBody, responseReply.json.smierc.reply_html, msg.getId());
           }
           // Nie wysyłaj lokalnego maila z Tyler Durden - odpowiedź dostarczy backend.
-          // if (shouldSendZwykly && responseReply.json.zwykly) {
-          //   executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-          //   saveResponseToHistory(fromEmail, subject, responseReply.json.zwykly.reply_html || "");
-          // }
+          if (shouldSendZwykly && responseReply.json.zwykly) {
+            executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+            saveResponseToHistory(fromEmail, subject, responseReply.json.zwykly.reply_html || "");
+          }
         }
         saveToHistory(fromEmail, subject, plainBody);
         break; // obsłużono — przerywamy, następny mail przy kolejnym triggerze
@@ -1266,19 +1339,26 @@ function __AAA_processEmails() {
       webhookCalled = true;
 
       var responseJoker = _callBackend(
-        fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
-        true, true, true, true, true,
-        shouldSendSmierc, smircData, getAllAttachments(msg),
+        fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
+        true, true, true, true, shouldSendSmierc,
+        smircData, getAllAttachments(msg),
         findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).body    : null,
         findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).subject : null,
-        isBiz, isAllowed, isKnownSender, true, true, shouldSendSmierc,
-        containsKeywordTest
+        isBiz, isAllowed, isKnownSender,
+        false, false, false, false, false,
+        containsFlagaTest, false, false,
+        true,
+        shouldSendSmierc,
+        false,
+        null,
+        [],
+        1
       );
 
       if (responseJoker && responseJoker.json) {
         var jj = responseJoker.json;
         if (jj.biznes)        { executeMailSend(sectionWithLogs(jj.biznes, jj), fromEmail, subject, msg, "Notariusz – Informacja"); saveResponseToHistory(fromEmail, subject, jj.biznes.reply_html || ""); }
-        // if (jj.zwykly)        { executeMailSend(sectionWithLogs(jj.zwykly, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
+        if (jj.zwykly)        { executeMailSend(sectionWithLogs(jj.zwykly, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
         if (jj.scrabble)      { executeScrabbleMailSend(sectionWithLogs(jj.scrabble, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
         if (jj.analiza)       { executeAnalizaMailSend(sectionWithLogs(jj.analiza, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.analiza.reply_html || ""); }
         if (jj.emocje)        { executeEmocjeMailSend(sectionWithLogs(jj.emocje, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
@@ -1307,13 +1387,20 @@ function __AAA_processEmails() {
       webhookCalled = true;
 
       var response2 = _callBackend(
-        fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
-        false, false, false, false, false,
-        true, smircData, [],
+        fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
+        false, false, false, false, true,
+        smircData, [],
         previousData2 ? previousData2.body    : null,
         previousData2 ? previousData2.subject : null,
-        isBiz, isAllowed, isKnownSender, false, false, true,
-        containsKeywordTest
+        isBiz, isAllowed, isKnownSender,
+        false, false, false, false, false,
+        containsFlagaTest, false, false,
+        false,
+        true,
+        false,
+        null,
+        [],
+        1
       );
 
       if (response2 && response2.json) {
@@ -1325,10 +1412,10 @@ function __AAA_processEmails() {
         }
         // shouldSendZwykly — niezależna flaga, działa równocześnie ze śmiercią
         // Lokalny mail Tyler Durden wyłączony; odpowiedź dostarczy backend.
-        // if (shouldSendZwykly && response2.json.zwykly) {
-        //   executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-        //   saveResponseToHistory(fromEmail, subject, response2.json.zwykly.reply_html || "");
-        // }
+        if (shouldSendZwykly && response2.json.zwykly) {
+          executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+          saveResponseToHistory(fromEmail, subject, response2.json.zwykly.reply_html || "");
+        }
       }
       saveToHistory(fromEmail, subject, plainBody);
       break; // SMIERC kontynuacja obsłużona — przerywamy
@@ -1345,24 +1432,26 @@ function __AAA_processEmails() {
       }
     }
 
-    var containsKeyword        = _containsAny(searchText, KEYWORDS)  || _containsAny(searchText, KEYWORDS1);
+    var containsKeyword        = _containsAny(searchText, KEYWORDS);
+    var containsKeyword1       = _containsAny(searchText, KEYWORDS1);
     var containsKeyword2       = _containsAny(searchText, KEYWORDS2);
     var containsKeyword3       = _containsAny(searchText, KEYWORDS3);
     var containsKeyword4       = _containsAny(searchText, KEYWORDS4);
-    var containsKeywordTest    = _containsAny(searchText, KEYWORDS_TEST);
+    var containsFlagaTest      = _containsAny(searchText, FLAGA_TEST);
+    var containsKeywordGeneratorPdf = _containsAny(searchText, KEYWORDS_GENERATOR_PDF);
 
     // Flaga: komunikacja z dotychczas znanym użytkownikiem lub specjalnym JOKER-em
-    var shouldSaveHistory      = isKnownSender || isAllowed || containsKeyword || containsJoker || shouldSendSmierc;
+    var shouldSaveHistory      = isKnownSender || isAllowed || containsKeyword || containsKeyword1 || containsKeyword2 || containsKeyword3 || containsKeyword4 || containsKeywordGeneratorPdf || containsJoker || containsKeywordSmierc || shouldSendSmierc;
 
     // Flaga pomocnicza: czy wiadomość zawiera dowolny keyword lub smierć
-    var hasAnyKeyword = containsKeyword || containsKeyword2 || containsKeyword3 || 
-                        containsKeyword4 || shouldSendSmierc;
+    var hasAnyKeyword = containsKeyword || containsKeyword1 || containsKeyword2 || containsKeyword3 || 
+                        containsKeyword4 || containsKeywordGeneratorPdf || containsKeywordSmierc || containsJoker || shouldSendSmierc;
 
     // Aktualizuj shouldSendZwykly jeśli zawiera słowo kluczowe
     if (containsKeyword) shouldSendZwykly = true;
 
-    if (!isBiz && !shouldSendZwykly && !containsKeyword2 && !containsKeyword3 &&
-        !containsKeyword4 && !wantsGeneratorPdf && !shouldSendSmierc) {
+    if (!isBiz && !shouldSendZwykly && !containsKeyword1 && !containsKeyword2 && !containsKeyword3 &&
+        !containsKeyword4 && !containsKeywordGeneratorPdf && !containsJoker && !containsKeywordSmierc && !shouldSendSmierc) {
       var labelSkip = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
       thread.addLabel(labelSkip);
       thread.markRead();
@@ -1398,24 +1487,39 @@ function __AAA_processEmails() {
     if (webhookCalled) { continue; }
     webhookCalled = true;
 
+    // ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
+    // KEYWORDS_TEST - jeśli jest to słowo w mailu, to wyślij disable_flux=true
+    // (ale TYLKO jeśli robimy odpowiedź). Respondenci sprawdzą ten parametr i
+    // wy generowanie Flux (obrazków), ale odrażąje uruchomić, aby nie marnować
+    // tokenów HF_TOKEN.
+    var disableFlux = containsFlagaTest && (isBiz || isAllowed || isKnownSender || containsKeyword || containsKeyword2 || containsKeyword3 || containsKeyword4 || shouldSendSmierc);
+    
     var response = _callBackend(
-      fromEmail, senderName, subject, sanitizedBody, webhookUrl, msgId,
+      fromEmail, senderName, subject, sanitizedBody, plainBody, webhookUrl, msgId,
       containsKeyword2, containsKeyword3, containsKeyword4,
       wantsGeneratorPdf, shouldSendSmierc, smircData, allAttachments,
       previousBody, previousSubject,
-      isBiz, isAllowed, isKnownSender, containsKeyword, containsJoker, shouldSendSmierc,
-      containsKeywordTest
+      isBiz, isAllowed, isKnownSender,
+      containsKeyword, containsKeyword1, containsKeyword2, containsKeyword3, containsKeyword4,
+      containsFlagaTest, containsKeywordGeneratorPdf, containsKeywordSmierc,
+      containsJoker,
+      shouldSendSmierc,
+      disableFlux,
+      null,
+      [],
+      1
     );
 
     if (response && response.json) {
       var json = response.json;
 
-      if (json.biznes && (isBiz || (!isAllowed && containsKeyword))) {
+      if (json.biznes && (isBiz || containsKeyword1 || containsJoker)) {
         executeMailSend(sectionWithLogs(json.biznes, json), fromEmail, subject, msg, "Notariusz – Informacja");
       }
       if (json.zwykly && shouldSendZwykly) {
         // Lokalny mail Tyler Durden wyłączony; odpowiedź dostarczy backend.
-        // executeMailSend(sectionWithLogs(json.zwykly, json), fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        executeMailSend(sectionWithLogs(json.zwykly, json), fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        saveResponseToHistory(fromEmail, subject, json.zwykly.reply_html || "");
       }
       if (containsKeyword2 && json.scrabble) {
         executeScrabbleMailSend(sectionWithLogs(json.scrabble, json), fromEmail, subject, msg);
