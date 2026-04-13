@@ -33,13 +33,32 @@ function _normalize(text) {
   return text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+function _wordRegex(word) {
+  if (!word) return null;
+  var normalizedWord = _normalize(word);
+  if (!normalizedWord) return null;
+  return new RegExp("(^|[^a-z0-9])" + escapeRegExp(normalizedWord) + "([^a-z0-9]|$)", "i");
+}
+
 function _containsAny(haystack, keywords) {
   if (!haystack || !keywords || !keywords.length) return false;
   var normalizedHaystack = _normalize(haystack);
   return keywords.some(function(k) {
     if (!k) return false;
-    return normalizedHaystack.indexOf(_normalize(k)) !== -1;
+    var re = _wordRegex(k);
+    return re ? re.test(normalizedHaystack) : false;
   });
+}
+
+function _findMatchingKeywords(haystack, keywords) {
+  if (!haystack || !keywords || !keywords.length) return [];
+  var normalizedHaystack = _normalize(haystack);
+  return keywords
+    .filter(Boolean)
+    .filter(function(k) {
+      var re = _wordRegex(k);
+      return re ? re.test(normalizedHaystack) : false;
+    });
 }
 
 function _getListFromProps(name) {
@@ -346,7 +365,7 @@ function _processPendingRetries(webhookUrl) {
 
     var attachments = _getRetryAttachments(entry.thread_id);
     var response = _callBackend(
-      entry.sender, entry.sender_name, entry.subject, entry.body, webhookUrl, entry.msg_id || "",
+      entry.sender, entry.sender_name, entry.subject, entry.body, entry.body, webhookUrl, entry.msg_id || "",
       entry.retry_responders.indexOf("scrabble") !== -1,
       entry.retry_responders.indexOf("analiza") !== -1,
       entry.retry_responders.indexOf("emocje") !== -1,
@@ -359,10 +378,14 @@ function _processPendingRetries(webhookUrl) {
       entry.isBiz,
       entry.isAllowed,
       entry.isKnownSender,
-      entry.containsKeyword,
-      false,
+      entry.containsKeyword || false,
+      entry.containsKeyword2 || false,
+      entry.containsKeyword3 || false,
+      entry.containsKeyword4 || false,
+      entry.containsKeywordTest || false,
+      entry.containsJoker || false,
       entry.isSmierc || false,
-      entry.containsKeywordTest,
+      entry.disableFlux || false,
       entry.thread_id,
       entry.retry_responders,
       entry.attempt_count + 1
@@ -1035,11 +1058,12 @@ function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
 }
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
-function _callBackend(sender, senderName, subject, body, url, msgId,
+function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
                       wantsScrabble, wantsAnaliza, wantsEmocje,
                       wantsGeneratorPdf, wantsSmierc, smircData,
                       attachments, previousBody, previousSubject,
                       isBiz, isAllowed, isKnownSender, containsKeyword,
+                      containsKeyword2, containsKeyword3, containsKeyword4, containsKeywordTest,
                       containsJoker, shouldSendSmierc,
                       disableFlux, threadId, retryResponders, attemptCount) {
   var secret  = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
@@ -1054,15 +1078,27 @@ function _callBackend(sender, senderName, subject, body, url, msgId,
     wants_emocje:        wantsEmocje        ? true : false,
     wants_generator_pdf: wantsGeneratorPdf  ? true : false,
     wants_smierc:        wantsSmierc        ? true : false,
-    etap:                smircData ? smircData.etap         : 1,
-    data_smierci:        smircData ? smircData.data_smierci : "nieznanego dnia",
-    historia:            smircData ? smircData.historia     : [],
+    contains_keyword:    containsKeyword    ? true : false,
+    contains_keyword2:   containsKeyword2   ? true : false,
+    contains_keyword3:   containsKeyword3   ? true : false,
+    contains_keyword4:   containsKeyword4   ? true : false,
+    contains_keyword_test: containsKeywordTest ? true : false,
+    contains_keyword_joker: containsJoker ? true : false,
     wants_text_reply:    (isBiz || isAllowed || isKnownSender || containsKeyword || wantsScrabble || wantsAnaliza || wantsEmocje || wantsGeneratorPdf) ? true : false,
     attachments:         attachments        || [],
     previous_body:       previousBody       || null,
     previous_subject:    previousSubject    || null,
     save_to_drive:       true,
     disable_flux:        disableFlux       ? true : false,
+    matched_keywords: {
+      keywords:      _findMatchingKeywords(searchText, KEYWORDS.concat(KEYWORDS1)),
+      keywords2:     _findMatchingKeywords(searchText, KEYWORDS2),
+      keywords3:     _findMatchingKeywords(searchText, KEYWORDS3),
+      keywords4:     _findMatchingKeywords(searchText, KEYWORDS4),
+      keywords_test: _findMatchingKeywords(searchText, KEYWORDS_TEST),
+      keywords_joker:_findMatchingKeywords(searchText, KEYWORDS_JOKER),
+      keywords_smierc:_findMatchingKeywords(searchText, KEYWORDS_SMIERC),
+    },
     thread_id:           threadId         || null,
     retry_responders:    retryResponders  || [],
     attempt_count:       attemptCount     || 1,
@@ -1215,13 +1251,19 @@ function __AAA_processEmails() {
         webhookCalled = true;
 
         var responseReply = _callBackend(
-          fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
+          fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
           false, false, false, false, false,
           shouldSendSmierc, smircData, [],
           previousDataReply ? previousDataReply.body    : null,
           previousDataReply ? previousDataReply.subject : null,
-          isBiz, isAllowed, isKnownSender, false, false, shouldSendSmierc,
-          containsKeywordTest
+          isBiz, isAllowed, isKnownSender,
+          false, false, false, false, false,
+          false, false,
+          shouldSendSmierc,
+          containsKeywordTest,
+          null,
+          [],
+          1
         );
 
         if (responseReply && responseReply.json) {
@@ -1273,13 +1315,19 @@ function __AAA_processEmails() {
       webhookCalled = true;
 
       var responseJoker = _callBackend(
-        fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
+        fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
         true, true, true, true, true,
         shouldSendSmierc, smircData, getAllAttachments(msg),
         findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).body    : null,
         findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).subject : null,
-        isBiz, isAllowed, isKnownSender, true, true, shouldSendSmierc,
-        containsKeywordTest
+        isBiz, isAllowed, isKnownSender,
+        true, false, false, false, false,
+        true,
+        shouldSendSmierc,
+        containsKeywordTest,
+        null,
+        [],
+        1
       );
 
       if (responseJoker && responseJoker.json) {
@@ -1314,13 +1362,19 @@ function __AAA_processEmails() {
       webhookCalled = true;
 
       var response2 = _callBackend(
-        fromEmail, senderName, subject, plainBody, webhookUrl, msgId,
+        fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
         false, false, false, false, false,
         true, smircData, [],
         previousData2 ? previousData2.body    : null,
         previousData2 ? previousData2.subject : null,
-        isBiz, isAllowed, isKnownSender, false, false, true,
-        containsKeywordTest
+        isBiz, isAllowed, isKnownSender,
+        false, false, false, false, false,
+        false,
+        true,
+        containsKeywordTest,
+        null,
+        [],
+        1
       );
 
       if (response2 && response2.json) {
@@ -1413,12 +1467,18 @@ function __AAA_processEmails() {
     var disableFlux = containsKeywordTest && (isBiz || isAllowed || isKnownSender || containsKeyword || containsKeyword2 || containsKeyword3 || containsKeyword4 || shouldSendSmierc);
     
     var response = _callBackend(
-      fromEmail, senderName, subject, sanitizedBody, webhookUrl, msgId,
+      fromEmail, senderName, subject, sanitizedBody, plainBody, webhookUrl, msgId,
       containsKeyword2, containsKeyword3, containsKeyword4,
       wantsGeneratorPdf, shouldSendSmierc, smircData, allAttachments,
       previousBody, previousSubject,
-      isBiz, isAllowed, isKnownSender, containsKeyword, containsJoker, shouldSendSmierc,
-      disableFlux
+      isBiz, isAllowed, isKnownSender,
+      containsKeyword, containsKeyword2, containsKeyword3, containsKeyword4, containsKeywordTest,
+      containsJoker,
+      shouldSendSmierc,
+      disableFlux,
+      null,
+      [],
+      1
     );
 
     if (response && response.json) {

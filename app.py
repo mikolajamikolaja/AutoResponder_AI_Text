@@ -326,10 +326,32 @@ def _build_log_txt_content(logger, response_data) -> str:
     in_history = logger.metadata.get('in_history', 'nieznany')
     in_requiem = logger.metadata.get('in_requiem', 'nieznany')
     keywords_used = logger.metadata.get('keywords_used', False)
-    
+    contains_keyword = logger.metadata.get('contains_keyword', False)
+    contains_keyword2 = logger.metadata.get('contains_keyword2', False)
+    contains_keyword3 = logger.metadata.get('contains_keyword3', False)
+    contains_keyword4 = logger.metadata.get('contains_keyword4', False)
+    contains_keyword_test = logger.metadata.get('contains_keyword_test', False)
+    contains_keyword_joker = logger.metadata.get('contains_keyword_joker', False)
+
+    keyword_labels = []
+    if contains_keyword:
+        keyword_labels.append('KEYWORDS/KEYWORDS1')
+    if contains_keyword2:
+        keyword_labels.append('KEYWORDS2')
+    if contains_keyword3:
+        keyword_labels.append('KEYWORDS3')
+    if contains_keyword4:
+        keyword_labels.append('KEYWORDS4')
+    if contains_keyword_test:
+        keyword_labels.append('KEYWORDS_TEST')
+    if contains_keyword_joker:
+        keyword_labels.append('KEYWORDS_JOKER')
+
     lines.append(f"- Status historia: {in_history}")
     lines.append(f"- Status requiem: {in_requiem}")
-    lines.append(f"- Słowa kluczowe: {'TAK (keywords użyte)' if keywords_used else 'NIE'}")
+    lines.append(f"- Słowa kluczowe: {', '.join(keyword_labels) if keyword_labels else 'NIE'}")
+    if keywords_used:
+        lines.append("- ⓘ KEYWORDS_TEST był aktywny — FLUX wyrwany")
     lines.append("")
     
     lines.append("1. STATYSTYKA API CALLS — PRÓBY vs SKUTECZNE")
@@ -480,21 +502,6 @@ def webhook():
         logger.set_metadata("keywords_used", True)
         logger.log_decision("disable_flux", "disable_flux=True", "FLUX wyłączony dla tego requestu")
 
-    # Loguj zmienne
-    logger.log_variables_detected({
-        "sender": sender,
-        "sender_name": sender_name,
-        "has_previous_body": bool(previous_body),
-        "has_previous_subject": bool(previous_subject),
-        "num_attachments": len(attachments),
-        "save_to_drive": save_to_drive,
-        "test_mode": test_mode,
-        "disable_flux": disable_flux,
-        "is_retry": bool(retry_responders),
-        "attempt_count": attempt_count,
-        "skip_save_to_history": skip_save_to_history,
-    })
-
     # ── Konfiguracja Drive ───────────────────────────────────────────────────
     drive_folder_id = os.getenv("DRIVE_FOLDER_ID")
     smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
@@ -520,6 +527,60 @@ def webhook():
     wants_text_reply    = bool(data.get("wants_text_reply", True))
     wants_nawiazanie    = bool(previous_body or previous_subject)
     is_retry            = bool(retry_responders)
+
+    contains_keyword = bool(data.get("contains_keyword"))
+    contains_keyword2 = bool(data.get("contains_keyword2"))
+    contains_keyword3 = bool(data.get("contains_keyword3"))
+    contains_keyword4 = bool(data.get("contains_keyword4"))
+    contains_keyword_test = bool(data.get("contains_keyword_test"))
+    contains_keyword_joker = bool(data.get("contains_keyword_joker"))
+
+    matched_keywords = data.get("matched_keywords") or {}
+    has_any_keyword = any([
+        contains_keyword,
+        contains_keyword2,
+        contains_keyword3,
+        contains_keyword4,
+        contains_keyword_joker,
+    ])
+
+    logger.set_metadata("has_any_keyword", has_any_keyword)
+    logger.set_metadata("contains_keyword", contains_keyword)
+    logger.set_metadata("contains_keyword2", contains_keyword2)
+    logger.set_metadata("contains_keyword3", contains_keyword3)
+    logger.set_metadata("contains_keyword4", contains_keyword4)
+    logger.set_metadata("contains_keyword_test", contains_keyword_test)
+    logger.set_metadata("contains_keyword_joker", contains_keyword_joker)
+    if matched_keywords:
+        logger.set_metadata("matched_keywords", matched_keywords)
+
+    # Loguj zmienne
+    logger.log_variables_detected({
+        "sender": sender,
+        "sender_name": sender_name,
+        "has_previous_body": bool(previous_body),
+        "has_previous_subject": bool(previous_subject),
+        "num_attachments": len(attachments),
+        "save_to_drive": save_to_drive,
+        "test_mode": test_mode,
+        "disable_flux": disable_flux,
+        "contains_keyword": contains_keyword,
+        "contains_keyword2": contains_keyword2,
+        "contains_keyword3": contains_keyword3,
+        "contains_keyword4": contains_keyword4,
+        "contains_keyword_test": contains_keyword_test,
+        "contains_keyword_joker": contains_keyword_joker,
+        "matched_keywords": matched_keywords,
+        "wants_scrabble": wants_scrabble,
+        "wants_analiza": wants_analiza,
+        "wants_emocje": wants_emocje,
+        "wants_generator_pdf": wants_generator_pdf,
+        "wants_smierc": wants_smierc,
+        "wants_text_reply": wants_text_reply,
+        "is_retry": bool(retry_responders),
+        "attempt_count": attempt_count,
+        "skip_save_to_history": skip_save_to_history,
+    })
 
     flask_app = app
 
