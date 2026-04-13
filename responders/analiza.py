@@ -1,12 +1,12 @@
 """
 responders/analiza.py
-Responder KEYWORDS3 — Edek Responder (Mistrz Pasywno-Agresywnego Doprecyzowywania).
+Responder KEYWORDS3 — Eryk Responder (Mistrz Pasywno-Agresywnego Doprecyzowywania).
 
-Render generuje JEDEN RAZ wszystkie 10 kroków (pytania + opcje + reakcje Edka).
+Render generuje JEDEN RAZ wszystkie 10 kroków (pytania + opcje + reakcje Eryka).
 Dostarcza dwie rzeczy jednocześnie:
 
   1. reply_html  — treść maila z CSS :target "grą" (bez JS, działa w klientach pocztowych)
-  2. docx_list   — [{base64, filename, content_type}] z edek_gra.html (pełny JS, załącznik)
+  2. docx_list   — [{base64, filename, content_type}] z eryk_gra.html (pełny JS, załącznik)
 
 Zależności z app.py / smtp_wysylka.py — BEZ ZMIAN:
   from responders.analiza import build_analiza_section
@@ -64,9 +64,9 @@ def _groq_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str
             )
             if resp.status_code == 200:
                 return resp.json()["choices"][0]["message"]["content"].strip()
-            logger.warning("[edek] Groq-key%d → HTTP %d", key_idx, resp.status_code)
+            logger.warning("[eryk] Groq-key%d → HTTP %d", key_idx, resp.status_code)
         except Exception as e:
-            logger.warning("[edek] Groq error: %s", e)
+            logger.warning("[eryk] Groq error: %s", e)
     return _deepseek_call(prompt, system, max_tokens)
 
 
@@ -90,9 +90,9 @@ def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional
         )
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"].strip()
-        logger.error("[edek] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200])
+        logger.error("[eryk] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200])
     except Exception as e:
-        logger.error("[edek] DeepSeek error: %s", e)
+        logger.error("[eryk] DeepSeek error: %s", e)
     return None
 
 
@@ -112,11 +112,11 @@ def _deepseek_korekta(raw: str) -> str:
 
 # ── GENEROWANIE CAŁEJ GRY ─────────────────────────────────────────────────────
 
-_SYSTEM_EDEK = (
-    "Jesteś Edkiem — mistrzem pasywno-agresywnego uniku i pseudofilozoficznego doprecyzowywania. "
+_SYSTEM_ERYK = (
+    "Jesteś Erykiem — mistrzem pasywno-agresywnego uniku i pseudofilozoficznego doprecyzowywania. "
     "Twój cel: NIE odpowiadać na pytanie rozmówcy. Wciągasz go w nieskończoną króliczą norę pytań. "
     "Styl: absurdalny, biurokratyczny, ironiczny, lekko paranoidalny. Piszesz PO POLSKU. "
-    "Logika Edka: wyciągasz BŁĘDNE wnioski z poprawnych odpowiedzi. Każdy wybór rozmówcy jest dowodem na coś absurdalnego. "
+    "Logika Eryka: wyciągasz BŁĘDNE wnioski z poprawnych odpowiedzi. Każdy wybór rozmówcy jest dowodem na coś absurdalnego. "
     "ZAKAZ używania słów: przepraszam, oczywiście, chętnie, rozumiem. "
     "Każde pytanie pochodzi z INNEJ dziedziny: filozofia, biologia, prawo, kosmologia, kulinaria, "
     "heraldyka, stomatologia, meteorologia, filologia, ekonomia, ogrodnictwo itd."
@@ -156,10 +156,10 @@ Odpowiedz WYŁĄCZNIE w JSON, zero komentarzy, zero backtick-ów:
     }}
     // ... łącznie {MAX_KROKOW} obiektów
   ],
-  "wyrok": "Ostateczny absurdalny wyrok Edka po {MAX_KROKOW} rundach. Zakończ podpisem: Z pozdrowieniami, Edek."
+  "wyrok": "Ostateczny absurdalny wyrok Eryka po {MAX_KROKOW} rundach. Zakończ podpisem: Z pozdrowieniami, Eryk."
 }}"""
 
-    raw = _groq_call(prompt, _SYSTEM_EDEK, max_tokens=3000)
+    raw = _groq_call(prompt, _SYSTEM_ERYK, max_tokens=3000)
     if not raw:
         return None
 
@@ -190,7 +190,7 @@ def _parse_json_safe(raw: Optional[str]) -> Optional[dict]:
                 return json.loads(m.group())
             except Exception:
                 pass
-    logger.warning("[edek] JSON parse failed: %s", raw[:200])
+    logger.warning("[eryk] JSON parse failed: %s", raw[:200])
     return None
 
 
@@ -233,7 +233,7 @@ def _fallback_gra() -> dict:
             "pytanie": f"Jak rozumiesz tę kwestię w kontekście {dz}? ({hint})",
             "opcje": {
                 "A": {"tekst": "Pierwsza opcja", "reakcja": "Opcja A demaskuje Cię jako optymistę. To niepokojące."},
-                "B": {"tekst": "Druga opcja",    "reakcja": "Opcja B wskazuje na pesymizm. Edek to szanuje, ale nie rozumie."},
+                "B": {"tekst": "Druga opcja",    "reakcja": "Opcja B wskazuje na pesymizm. Eryk to szanuje, ale nie rozumie."},
                 "C": {"tekst": "Trzecia opcja",  "reakcja": "Opcja C jest odpowiedzią osoby, która nie przeczytała pytania."},
             }
         })
@@ -243,7 +243,7 @@ def _fallback_gra() -> dict:
             "Po analizie Twoich 10 odpowiedzi stwierdzam, że Twoja pierwotna wiadomość "
             "była testem Turinga przeprowadzonym na mnie bez mojej zgody. "
             "Niestety, to Ty oblałeś test — jako człowiek. "
-            "Z pozdrowieniami, Edek."
+            "Z pozdrowieniami, Eryk."
         )
     }
 
@@ -293,14 +293,14 @@ def _buduj_html_email_pierwsza_gra(gra: dict, sender_name: str, diagram_jpg_b64:
     if diagram_jpg_b64:
         diagram_html = f"""<div class="diagram-wrap">
 <p><strong>Mapa całej gry:</strong> {len(kroki)} pytań × 3 opcje = {len(kroki)*3} ścieżek decyzyjnych. 
-Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>edek_diagram_interaktywny.html</strong></p>
+Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_interaktywny.html</strong></p>
 <img src="data:image/jpeg;base64,{diagram_jpg_b64}" alt="Diagram struktury gry Edka" class="diagram-img" />
 </div>"""
     
     html = f"""{css}
 <div class="wrap">
   <div class="hdr">
-    <h1>EDEK RESPONDER™</h1>
+    <h1>ERYK RESPONDER™</h1>
     <div class="sub">System Zaawansowanego Doprecyzowywania · Sesja: {sn}</div>
   </div>
   <div class="body">
@@ -310,7 +310,7 @@ Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>edek_diagram_
     <div class="opc">{opcje_html}</div>
     {diagram_html}
   </div>
-  <div class="ft">Edek Responder™ v2.0 · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Edek nigdy nie miał.</div>
+  <div class="ft">Eryk Responder™ v2.0 · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
 </div>"""
     
     return html
@@ -328,7 +328,7 @@ def _buduj_gra_html(gra: dict, sender_name: str) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Edek Responder™</title>
+<title>Eryk Responder™</title>
 <style>
 :root{{--ink:#1a1a2e;--paper:#f5f0e8;--gold:#8b6914;--cream:#e8d5b0;--mid:#c8b89a;--dim:#6a5a3a;}}
 *{{box-sizing:border-box;margin:0;padding:0;}}
@@ -380,7 +380,7 @@ footer{{padding:13px 32px;font-size:10px;color:var(--mid);letter-spacing:2px;tex
 <body>
 <div class="karta">
   <header>
-    <h1>EDEK RESPONDER™</h1>
+    <h1>ERYK RESPONDER™</h1>
     <div class="sub">System Zaawansowanego Doprecyzowywania · Sesja: {sn}</div>
   </header>
   <div class="pbar"><div class="pfill" id="pf"></div></div>
@@ -399,7 +399,7 @@ footer{{padding:13px 32px;font-size:10px;color:var(--mid);letter-spacing:2px;tex
     <div class="wt"  id="wt"></div>
     <div class="prot" id="prot"></div>
   </div>
-  <footer>Edek Responder™ v1.0 &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</footer>
+  <footer>Eryk Responder™ v1.0 &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</footer>
 </div>
 <script>
 const G={gra_json};
@@ -471,7 +471,7 @@ def build_analiza_section(body: str,
                            sender_name: str = "",
                            test_mode: bool = False) -> dict:
     """
-    Edek Responder - generuje grę logiczną.
+    Eryk Responder - generuje grę logiczną.
     
     Parametr test_mode:
     - Jeśli test_mode=True (z KEYWORDS_TEST via app.py disable_flux),
@@ -480,7 +480,7 @@ def build_analiza_section(body: str,
     Zwraca:
       reply_html — treść maila (CSS :target, bez JS)
       gra_html   — plik HTML do załączenia jako pojedynczy attachment
-      docx_list  — [{"base64":..., "filename":"edek_gra.html", "content_type":"text/html"}]
+      docx_list  — [{"base64":..., "filename":"eryk_gra.html", "content_type":"text/html"}]
 
     W app.py zaktualizuj wywołanie:
       build_analiza_section(body, attachments,
@@ -520,12 +520,12 @@ def build_analiza_section(body: str,
     diagram_jpg_b64 = ""
     if diagram_jpg_bytes:
         diagram_jpg_b64 = base64.b64encode(diagram_jpg_bytes).decode("ascii")
-        logger.info("[edek] JPG diagram: %d bytes", len(diagram_jpg_bytes))
+        logger.info("[eryk] JPG diagram: %d bytes", len(diagram_jpg_bytes))
     
     # SVG HTML interaktywny  
     diagram_svg_html = generate_svg_html_interactive(gra_data, sn)
     diagram_svg_b64 = base64.b64encode(diagram_svg_html.encode("utf-8")).decode("ascii")
-    logger.info("[edek] SVG diagram: %d bytes", len(diagram_svg_html.encode("utf-8")))
+    logger.info("[eryk] SVG diagram: %d bytes", len(diagram_svg_html.encode("utf-8")))
     
     # ── Buduj HTML do maila — TYLKO pierwsza gra + diagram JPG ─────────────────
     reply_html   = _buduj_html_email_pierwsza_gra(gra_data, sn, diagram_jpg_b64)
@@ -534,32 +534,32 @@ def build_analiza_section(body: str,
     gra_html_str = _buduj_gra_html(gra_data, sn)
     gra_html_b64 = base64.b64encode(gra_html_str.encode("utf-8")).decode("ascii")
 
-    logger.info("[edek] Wygenerowano grę: %d kroków | sender=%s", len(gra_data["kroki"]), sender or "?")
+    logger.info("[eryk] Wygenerowano grę: %d kroków | sender=%s", len(gra_data["kroki"]), sender or "?")
 
     return {
         "reply_html": reply_html,
         "gra_html": {
             "base64":       gra_html_b64,
-            "filename":     "edek_gra.html",
+            "filename":     "eryk_gra.html",
             "content_type": "text/html",
         },
         "docx_list": [
             # Diagram interaktywny SVG
             {
                 "base64":       diagram_svg_b64,
-                "filename":     "edek_diagram_interaktywny.html",
+                "filename":     "eryk_diagram_interaktywny.html",
                 "content_type": "text/html",
             },
             # Diagram JPG z oddali
             {
                 "base64":       diagram_jpg_b64,
-                "filename":     "edek_diagram_mapa.jpg",
+                "filename":     "eryk_diagram_mapa.jpg",
                 "content_type": "image/jpeg",
             },
             # Stary format gry (pełny HTML)
             {
                 "base64":       gra_html_b64,
-                "filename":     "edek_gra_pelna.html",
+                "filename":     "eryk_gra_pelna.html",
                 "content_type": "text/html",
             }
         ],

@@ -393,7 +393,26 @@ def _build_log_txt_content(logger, response_data) -> str:
             if has_html:
                 lines.append(f"      - HTML: {len(section_data.get('reply_html', ''))} znaków")
             if has_attachments:
-                lines.append(f"      - Załączniki: {len(section_data.get('docx_list', []))} + {len(section_data.get('images', []))} obrazów")
+                # Wyświetl pełne nazwy plików
+                docx_list = section_data.get('docx_list', [])
+                images_list = section_data.get('images', [])
+                
+                attachment_names = []
+                if docx_list:
+                    for item in docx_list:
+                        if isinstance(item, dict) and 'filename' in item:
+                            attachment_names.append(item['filename'])
+                if images_list:
+                    for item in images_list:
+                        if isinstance(item, dict) and 'filename' in item:
+                            attachment_names.append(item['filename'])
+                        elif isinstance(item, str):
+                            attachment_names.append(item)
+                
+                if attachment_names:
+                    lines.append(f"      - Załączniki: {', '.join(attachment_names)}")
+                else:
+                    lines.append(f"      - Załączniki: {len(docx_list)} + {len(images_list)} obrazów")
     else:
         lines.append("  (brak wygenerowanych sekcji)")
     lines.append("")
@@ -520,6 +539,7 @@ def webhook():
 
     # ── Flagi żądania ─────────────────────────────────────────────────────────
     wants_scrabble      = bool(data.get("wants_scrabble"))
+    wants_biznes        = bool(data.get("wants_biznes"))
     wants_analiza       = bool(data.get("wants_analiza"))
     wants_emocje        = bool(data.get("wants_emocje"))
     wants_generator_pdf = bool(data.get("wants_generator_pdf"))
@@ -529,15 +549,17 @@ def webhook():
     is_retry            = bool(retry_responders)
 
     contains_keyword = bool(data.get("contains_keyword"))
+    contains_keyword1 = bool(data.get("contains_keyword1"))
     contains_keyword2 = bool(data.get("contains_keyword2"))
     contains_keyword3 = bool(data.get("contains_keyword3"))
     contains_keyword4 = bool(data.get("contains_keyword4"))
-    contains_keyword_test = bool(data.get("contains_keyword_test"))
+    contains_flaga_test = bool(data.get("contains_flaga_test"))
     contains_keyword_joker = bool(data.get("contains_keyword_joker"))
 
     matched_keywords = data.get("matched_keywords") or {}
     has_any_keyword = any([
         contains_keyword,
+        contains_keyword1,
         contains_keyword2,
         contains_keyword3,
         contains_keyword4,
@@ -546,10 +568,11 @@ def webhook():
 
     logger.set_metadata("has_any_keyword", has_any_keyword)
     logger.set_metadata("contains_keyword", contains_keyword)
+    logger.set_metadata("contains_keyword1", contains_keyword1)
     logger.set_metadata("contains_keyword2", contains_keyword2)
     logger.set_metadata("contains_keyword3", contains_keyword3)
     logger.set_metadata("contains_keyword4", contains_keyword4)
-    logger.set_metadata("contains_keyword_test", contains_keyword_test)
+    logger.set_metadata("contains_flaga_test", contains_flaga_test)
     logger.set_metadata("contains_keyword_joker", contains_keyword_joker)
     if matched_keywords:
         logger.set_metadata("matched_keywords", matched_keywords)
@@ -565,13 +588,15 @@ def webhook():
         "test_mode": test_mode,
         "disable_flux": disable_flux,
         "contains_keyword": contains_keyword,
+        "contains_keyword1": contains_keyword1,
         "contains_keyword2": contains_keyword2,
         "contains_keyword3": contains_keyword3,
         "contains_keyword4": contains_keyword4,
-        "contains_keyword_test": contains_keyword_test,
+        "contains_flaga_test": contains_flaga_test,
         "contains_keyword_joker": contains_keyword_joker,
         "matched_keywords": matched_keywords,
         "wants_scrabble": wants_scrabble,
+        "wants_biznes": wants_biznes,
         "wants_analiza": wants_analiza,
         "wants_emocje": wants_emocje,
         "wants_generator_pdf": wants_generator_pdf,
@@ -591,17 +616,11 @@ def webhook():
     # ── FALA 1: lekkie respondery ─────────────────────────────────────────────
     requested_sections = set(retry_responders) if is_retry else set()
     if not is_retry:
-        has_special_responder = wants_scrabble or wants_analiza or wants_emocje or wants_generator_pdf or wants_smierc
-        if wants_text_reply and not has_special_responder:
-            requested_sections.update(["zwykly", "biznes"])
-            logger.log_decision("text_reply_decision", "wants_text_reply=True and no special responder", "Dodaję zwykly/biznes")
-        elif has_special_responder:
-            logger.log_decision(
-                "text_reply_decision",
-                f"special responders active: scrabble={wants_scrabble}, analiza={wants_analiza}, emocje={wants_emocje}, generator_pdf={wants_generator_pdf}, smierc={wants_smierc}",
-                "Nie dodaję zwykly/biznes, specjalny responder obsłuży odpowiedź"
-            )
-
+        if contains_keyword or in_history_status == "tak":
+            requested_sections.add("zwykly")
+            logger.log_decision("text_reply_decision", "contains_keyword or known history", "Dodaję zwykly")
+        if wants_biznes:
+            requested_sections.add("biznes")
         if wants_scrabble:
             requested_sections.add("scrabble")
         if wants_analiza:
@@ -618,8 +637,8 @@ def webhook():
         _prev   = previous_body
         _sender = sender
         _sname  = sender_name
-        # ── test_mode ze KEYWORDS_TEST (disable_flux) ──────────────────────────
-        # Jeśli disable_flux=True (z KEYWORDS_TEST w mailu), to zwykly.py
+        # ── test_mode ze FLAGA_TEST (disable_flux) ──────────────────────────
+        # Jeśli disable_flux=True (z FLAGA_TEST w mailu), to zwykly.py
         # dostanie test_mode=True i wy generowanie Flux (będzie zastępczy obrazek)
         wave1["zwykly"] = lambda: run(
             build_zwykly_section,
@@ -630,10 +649,15 @@ def webhook():
             test_mode=disable_flux or test_mode,
             attachments=attachments,
         )
-    if "biznes" in requested_sections:
-        wave1["biznes"] = lambda: run(build_biznes_section, body)
-    if "scrabble" in requested_sections:
-        wave1["scrabble"] = lambda: run(build_scrabble_section, body)
+    if "analiza" in requested_sections:
+        wave1["analiza"] = lambda: run(
+            build_analiza_section,
+            body,
+            attachments,
+            sender=sender,
+            sender_name=sender_name,
+            test_mode=disable_flux or test_mode,
+        )
     if "nawiazanie" in requested_sections:
         wave1["nawiazanie"] = lambda: run(
             build_nawiazanie_section,
@@ -648,9 +672,9 @@ def webhook():
 
     has_wave2 = False
     if is_retry:
-        has_wave2 = bool({"obrazek", "emocje", "analiza", "generator_pdf", "smierc"} & requested_sections)
+        has_wave2 = bool({"biznes", "scrabble", "obrazek", "emocje", "generator_pdf", "smierc"} & requested_sections)
     else:
-        has_wave2 = bool(wants_emocje or wants_analiza or wants_generator_pdf or wants_smierc)
+        has_wave2 = bool(wants_biznes or wants_scrabble or wants_emocje or wants_generator_pdf or wants_smierc)
 
     # ── ZAWSZE generuj logi po Fali 1 ───────────────────────────────────────
     log_txt_content = _build_log_txt_content(logger, response_data)
@@ -663,20 +687,17 @@ def webhook():
 
     # ── WYSYŁKA PO FALI 1 ─────────────────────────────────────────────────────
     # Wyślij wszystkie respondery które zostały wygenerowane
+    # UWAGA: biznes, scrabble, emocje, generator_pdf, smierc wysyłamy w Fali 2
     html_fala1 = "".join(filter(None, [
         response_data.get("zwykly",     {}).get("reply_html", ""),
-        response_data.get("biznes",     {}).get("reply_html", ""),
         response_data.get("analiza",    {}).get("reply_html", ""),
-        response_data.get("emocje",     {}).get("reply_html", ""),
         response_data.get("nawiazanie", {}).get("reply_html", ""),
-        response_data.get("scrabble",   {}).get("reply_html", ""),
-        response_data.get("generator_pdf", {}).get("reply_html", ""),
     ]))
     zalaczniki_fala1 = zbierz_zalaczniki_z_response(
-        {k: response_data[k] for k in ("zwykly", "biznes", "scrabble", "analiza", "emocje", "generator_pdf", "log", "log_txt", "log_svg")
+        {k: response_data[k] for k in ("zwykly", "analiza", "nawiazanie", "log", "log_txt", "log_svg")
          if k in response_data}
     )
-    if html_fala1.strip() and ("zwykly" in requested_sections or "biznes" in requested_sections or "nawiazanie" in requested_sections or "analiza" in requested_sections or "emocje" in requested_sections or "scrabble" in requested_sections or "generator_pdf" in requested_sections):
+    if html_fala1.strip() and ("zwykly" in requested_sections or "analiza" in requested_sections or "nawiazanie" in requested_sections):
         success = wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
@@ -692,8 +713,8 @@ def webhook():
                 _strip_html_to_text(html_fala1)[:1000],
                 is_response=True,
             )
-    elif zalaczniki_fala1:
-        # Wysyłka tylko załączników, jeśli nie ma tekstu
+    elif zalaczniki_fala1_sections:
+        # Wysyłka tylko załączników Fali 1, jeśli brak tekstu i są załączniki sekcji
         success = wyslij_odpowiedz(
             to_email   = sender,
             to_name    = sender_name,
@@ -710,6 +731,10 @@ def webhook():
         # ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────
         # Przesyłam test_mode=disable_flux do wave2 respondentów także w retry,
         # aby respondenci wiedzieli że mają wy generowanie FLUX
+        if "biznes" in requested_sections:
+            wave2["biznes"] = lambda: run(build_biznes_section, body)
+        if "scrabble" in requested_sections:
+            wave2["scrabble"] = lambda: run(build_scrabble_section, body)
         if "emocje" in requested_sections:
             wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
         if "analiza" in requested_sections:
@@ -743,19 +768,13 @@ def webhook():
                 test_mode=disable_flux or test_mode,  # KEYWORDS_TEST (disable_flux) → test_mode dla FLUX
             )
     else:
+        if wants_biznes:
+            wave2["biznes"] = lambda: run(build_biznes_section, body)
+        if wants_scrabble:
+            wave2["scrabble"] = lambda: run(build_scrabble_section, body)
         if wants_emocje:
-            # disable_flux ze KEYWORDS_TEST blokuje FLUX w responderycie
+            # disable_flux ze FLAGA_TEST blokuje FLUX w responderycie
             wave2["emocje"]  = lambda: run(build_emocje_section, body, attachments, test_mode=disable_flux or test_mode)
-        if wants_analiza:
-            wave2["analiza"] = lambda: run(
-                build_analiza_section,
-                body,
-                attachments,
-                sender=sender,
-                sender_name=sender_name,
-                # disable_flux z KEYWORDS_TEST przekazywany jako test_mode
-                test_mode=disable_flux or test_mode,
-            )
         if wants_generator_pdf:
             _sn   = sender_name
             _body = body
@@ -793,9 +812,10 @@ def webhook():
 
         # ── WYSYŁKA PO FALI 2 ─────────────────────────────────────────────────
         html_fala2 = "".join(filter(None, [
+            response_data.get("biznes",        {}).get("reply_html", ""),
+            response_data.get("scrabble",      {}).get("reply_html", ""),
             response_data.get("obrazek",       {}).get("reply_html", ""),
             response_data.get("emocje",        {}).get("reply_html", ""),
-            response_data.get("analiza",       {}).get("reply_html", ""),
             response_data.get("generator_pdf", {}).get("reply_html", ""),
             response_data.get("smierc",        {}).get("reply_html", ""),
         ]))
@@ -806,7 +826,7 @@ def webhook():
             html_body  = html_fala2 or "<p>Załączniki z drugiej fali.</p>",
             zalaczniki = zbierz_zalaczniki_z_response(
                 {k: response_data[k] for k in
-                 ("obrazek", "emocje", "analiza", "generator_pdf", "smierc", "log", "log_txt", "log_svg")
+                 ("biznes", "scrabble", "obrazek", "emocje", "generator_pdf", "smierc", "log", "log_txt", "log_svg")
                  if k in response_data}
             ),
         )

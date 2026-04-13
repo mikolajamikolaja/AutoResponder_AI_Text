@@ -25,9 +25,9 @@ def _log(msg: str):
     if logger_enabled:
         from flask import current_app
         try:
-            current_app.logger.info(f"[edek-diagram] {msg}")
+            current_app.logger.info(f"[eryk-diagram] {msg}")
         except:
-            print(f"[edek-diagram] {msg}")
+            print(f"[eryk-diagram] {msg}")
 
 
 def _build_graph_dot(gra: Dict[str, Any]) -> str:
@@ -40,7 +40,7 @@ def _build_graph_dot(gra: Dict[str, Any]) -> str:
         return ""
     
     dot_lines = [
-        "digraph EdekTree {",
+        "digraph ErykTree {",
         "  rankdir=TB;",
         "  node [shape=box, style=filled, fontname=Arial];",
         "  edge [fontname=Arial, fontsize=9];",
@@ -168,7 +168,7 @@ def _generate_jpg_fallback(gra: Dict[str, Any], width: int = 1024, height: int =
                 font_small = font_med = font_big = ImageFont.load_default()
         
         # Nagłówek
-        draw.text((15, 12), "EDEK RESPONDER™", fill=(44, 44, 42), font=font_big)
+        draw.text((15, 12), "ERYK RESPONDER™", fill=(44, 44, 42), font=font_big)
         draw.text((15, 32), f"Diagram drzewa decyzyjnego ({len(kroki)} pytań × 3 opcje = {len(kroki)*3} ścieżek)", fill=(100, 100, 100), font=font_med)
         draw.line([(10, 50), (width - 10, 50)], fill=(139, 105, 20), width=2)
         
@@ -279,7 +279,7 @@ def generate_jpg_diagram(gra: Dict[str, Any]) -> Optional[bytes]:
 def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") -> str:
     """
     Generuje HTML z interaktywnym SVG diagramem drzewa decyzyjnego.
-    Na bazie struktury z backup/edek_responder_flowchart.html
+    Na bazie struktury z backup/eryk_responder_flowchart.html
     """
     kroki = gra.get("kroki", [])
     wyrok = gra.get("wyrok", "Brak wyroku.")
@@ -290,7 +290,7 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") ->
     
     # Oblicz wymiary SVG
     num_kroki = len(kroki)
-    svg_height = 100 + num_kroki * 300 + 200  # Przybliżenie
+    svg_height = 100 + num_kroki * 350 + 200  # Zwiększona wysokość na każde pytanie
     svg_width = 2200
     
     # Buduj SVG
@@ -337,7 +337,7 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") ->
     )
     svg_lines.append(
         f'<text x="1100" y="47" text-anchor="middle" font-size="14" fill="#F1EFE8" '
-        f'font-weight="bold" font-family="Arial">EDEK RESPONDER™ · Drzewo decyzyjne · {sn}</text>'
+        f'font-weight="bold" font-family="Arial">ERYK RESPONDER™ · Drzewo decyzyjne · {sn}</text>'
     )
     svg_lines.append('<line x1="1100" y1="64" x2="1100" y2="90" class="arr-main"/>')
     
@@ -371,8 +371,8 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") ->
         if "A" in opcje:
             tekst_a = opcje["A"].get("tekst", "A")
             tekst_a_lines = _wrap_svg_text(tekst_a, 38)
-            leaf_height = 24 + len(tekst_a_lines) * 16
-            leaf_height = max(leaf_height, 52)
+            leaf_height = 32 + len(tekst_a_lines) * 18  # Zwiększona wysokość
+            leaf_height = max(leaf_height, 60)
             svg_lines.append(f'<path d="M900 {y_current + (node_height // 2)} L900 {y_current + node_height + 10} L640 {y_current + node_height + 10} L640 {y_next}" class="arr-a"/>')
             svg_lines.append(
                 f'<text x="760" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-a" text-anchor="middle" '
@@ -388,8 +388,8 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") ->
         if "B" in opcje:
             tekst_b = opcje["B"].get("tekst", "B")
             tekst_b_lines = _wrap_svg_text(tekst_b, 38)
-            leaf_height = 24 + len(tekst_b_lines) * 16
-            leaf_height = max(leaf_height, 52)
+            leaf_height = 32 + len(tekst_b_lines) * 18  # Zwiększona wysokość
+            leaf_height = max(leaf_height, 60)
             svg_lines.append(f'<path d="M1100 {y_current + (node_height // 2)} L1100 {y_next}" class="arr-b"/>')
             svg_lines.append(
                 f'<text x="1145" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-b" font-family="Arial">B</text>'
@@ -404,8 +404,8 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") ->
         if "C" in opcje:
             tekst_c = opcje["C"].get("tekst", "C")
             tekst_c_lines = _wrap_svg_text(tekst_c, 38)
-            leaf_height = 24 + len(tekst_c_lines) * 16
-            leaf_height = max(leaf_height, 52)
+            leaf_height = 32 + len(tekst_c_lines) * 18  # Zwiększona wysokość
+            leaf_height = max(leaf_height, 60)
             svg_lines.append(f'<path d="M1300 {y_current + (node_height // 2)} L1300 {y_current + node_height + 10} L1560 {y_current + node_height + 10} L1560 {y_next}" class="arr-c"/>')
             svg_lines.append(
                 f'<text x="1430" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-c" text-anchor="middle" '
