@@ -33,6 +33,7 @@ from datetime import datetime, timedelta
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
+from core.groq_session import get_session_id, is_groq_exhausted, mark_groq_exhausted
 from core.config import (
     GROQ_API_URL,
     GROQ_MODEL,
@@ -127,6 +128,20 @@ def _call_groq_with_retry(system: str, user: str, max_tokens: int = 3000,
     Wywołuje Groq z rotacją kluczy — metoda z test groq.py.
     Dla każdego klucza próbuje raz, jeśli RATE_LIMIT lub błąd, przechodzi do następnego.
     """
+    if is_groq_exhausted():
+        session_id = get_session_id() or "(brak)"
+        current_app.logger.warning(
+            "[psych-raport] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq dla %s",
+            session_id,
+            section_name,
+        )
+        result = call_deepseek(system, user, MODEL_TYLER)
+        if result:
+            current_app.logger.info("[psych-raport] DeepSeek fallback OK dla %s", section_name)
+            return result
+        current_app.logger.warning("[psych-raport] DeepSeek fallback również zawiódł dla %s", section_name)
+        return None
+
     keys = _get_groq_keys()
     if not keys:
         current_app.logger.error("[psych-raport] Brak kluczy Groq dla sekcji %s", section_name)
@@ -145,9 +160,22 @@ def _call_groq_with_retry(system: str, user: str, max_tokens: int = 3000,
             current_app.logger.warning("[psych-raport] %s błąd klucz=%s → następny",
                                        section_name, name)
 
+    session_id = get_session_id()
+    if session_id:
+        mark_groq_exhausted(session_id)
+        current_app.logger.warning(
+            "[psych-raport] Sesja %s — wszystkie klucze wyczerpane, pomijam Groq w kolejnych callach",
+            session_id,
+        )
+
     current_app.logger.error("[psych-raport] %s — wszystkie klucze zawiodły",
                              section_name)
-    return None
+    result = call_deepseek(system, user, MODEL_TYLER)
+    if result:
+        current_app.logger.info("[psych-raport] DeepSeek fallback OK dla %s", section_name)
+    else:
+        current_app.logger.warning("[psych-raport] DeepSeek fallback również zawiódł dla %s", section_name)
+    return result
 
 
 def _parse_json_safe(raw: str, section: str) -> dict | list | None:

@@ -21,6 +21,7 @@ import io
 import base64
 from datetime import datetime
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2 import service_account
 
@@ -112,11 +113,16 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
             fields='id,webViewLink'
         ).execute()
 
-        # Ustaw publiczny dostęp
-        service.permissions().create(
-            fileId=file['id'],
-            body={'type': 'anyone', 'role': 'reader'}
-        ).execute()
+        try:
+            service.permissions().create(
+                fileId=file['id'],
+                body={'type': 'anyone', 'role': 'reader'}
+            ).execute()
+        except HttpError as e:
+            if e.resp.status == 403:
+                print(f"Błąd ustawiania uprawnień Drive (403) dla pliku {file['id']} — ignoruję, używam istniejącego linku")
+            else:
+                raise
 
         return {
             'id': file['id'],

@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 from core.ai_client import call_deepseek, extract_clean_text, sanitize_model_output, MODEL_TYLER
 from core.files import read_file_base64
+from core.groq_session import get_session_id, is_groq_exhausted, mark_groq_exhausted
 from core.html_builder import build_html_reply
 
 # reportlab — budowanie PDF CV
@@ -352,6 +353,11 @@ def _call_groq(system: str, user: str, max_tokens: int = 6000) -> str | None:
     Wywołuje Groq API SEKWENCYJNIE — próbuje klucze po kolei.
     Następny klucz jeśli: 429 (rate limit), None (timeout/błąd), lub pusty string.
     """
+    if is_groq_exhausted():
+        session_id = get_session_id() or "(brak)"
+        logger.warning("[groq] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq", session_id)
+        return None
+
     groq_keys = _get_groq_keys()
     if not groq_keys:
         logger.warning("[groq] Brak kluczy w env")
@@ -377,6 +383,10 @@ def _call_groq(system: str, user: str, max_tokens: int = 6000) -> str | None:
             logger.warning("[groq] ⚠ Błąd/timeout klucz=%s — próbuję następny", name)
             failed_reasons.append(f"{name}:None")
     
+    session_id = get_session_id()
+    if session_id:
+        mark_groq_exhausted(session_id)
+        logger.warning("[groq] Sesja %s — wszystkie klucze wyczerpane, zaznaczam do pominięcia w kolejnych callach", session_id)
     logger.error("[groq] ✗ Wszystkie %d kluczy wyczerpane! Historia: %s", len(groq_keys), " → ".join(failed_reasons))
     return None
 
@@ -4372,7 +4382,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         image_block = (
             '<div style="margin: 24px 0; text-align: center;">'
             '<p style="margin: 0 0 12px 0; color: #444; font-size: 14px;">'
-            "Obrazek gry wygenerowany na podstawie pliku <strong>doprecyzuj.html</strong>.</p>"
+            "Obrazek gry wygenerowany na podstawie pliku <strong>eryk_diagram_interaktywny.html</strong>.</p>"
             f'<img src="data:image/jpeg;base64,{image_b64}" alt="Mapa gry Edka" '
             'style="max-width:100%;height:auto;border-radius:14px;border:1px solid #ddd;" />'
             '</div>'
@@ -4398,7 +4408,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
                 analiza_docx_list.append({
                     "base64":       interactive_html_b64,
                     "content_type": "text/html",
-                    "filename":     "doprecyzuj.html"
+                    "filename":     "eryk_diagram_interaktywny.html"
                 })
             if diagram_jpg_b64:
                 reply_html = _build_html_reply_with_image(res_text, diagram_jpg_b64)

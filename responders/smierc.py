@@ -41,6 +41,7 @@ from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
 from core.config import HF_TOKEN_BLACKLIST
+from core.groq_session import get_session_id, is_groq_exhausted
 
 _HF_DEAD_TOKENS: set[str] = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
 
@@ -322,6 +323,10 @@ def _compress_flux_image(image_obj: dict, kompresja_jpg: int) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _call_groq(system: str, user: str) -> str | None:
+    if is_groq_exhausted():
+        session_id = get_session_id() or "(brak)"
+        current_app.logger.warning("[groq] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq", session_id)
+        return None
     api_key = os.getenv("API_KEY_GROQ", "").strip()
     if not api_key:
         current_app.logger.warning("[groq] Brak API_KEY_GROQ")
@@ -378,6 +383,10 @@ def _mutate_flux_prompt(prompt: str) -> tuple:
 
 
 def _call_groq_flux(system: str, user: str) -> str | None:
+    if is_groq_exhausted():
+        session_id = get_session_id() or "(brak)"
+        current_app.logger.warning("[groq-flux] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq", session_id)
+        return None
     api_key = os.getenv("API_KEY_GROQ", "").strip()
     if not api_key:
         current_app.logger.warning("[groq-flux] Brak API_KEY_GROQ")
