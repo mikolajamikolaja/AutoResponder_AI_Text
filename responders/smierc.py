@@ -41,7 +41,7 @@ from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
 from core.config import HF_TOKEN_BLACKLIST
-from core.groq_session import get_session_id, is_groq_exhausted
+from core.groq_session import get_session_id, is_groq_exhausted, mark_groq_exhausted
 
 _HF_DEAD_TOKENS: set[str] = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
 
@@ -349,6 +349,8 @@ def _call_groq(system: str, user: str) -> str | None:
         current_app.logger.warning("[groq] TIMEOUT (60s)")
     except Exception as e:
         current_app.logger.warning("[groq] Wyjatek: %s", str(e)[:100])
+    # Jeśli Groq zawiódł, oznacz sesję jako wyczerpaną
+    mark_groq_exhausted()
     return None
 
 

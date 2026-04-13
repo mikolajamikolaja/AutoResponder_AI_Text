@@ -1284,7 +1284,7 @@ function __AAA_processEmails() {
           containsFlagaTest, false, false,
           false,
           shouldSendSmierc,
-          false,
+          containsFlagaTest,
           null,
           [],
           1
@@ -1349,7 +1349,7 @@ function __AAA_processEmails() {
         containsFlagaTest, false, false,
         true,
         shouldSendSmierc,
-        false,
+        containsFlagaTest,
         null,
         [],
         1
@@ -1397,7 +1397,7 @@ function __AAA_processEmails() {
         containsFlagaTest, false, false,
         false,
         true,
-        false,
+        containsFlagaTest,
         null,
         [],
         1
@@ -1489,8 +1489,8 @@ function __AAA_processEmails() {
 
     // ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
     // KEYWORDS_TEST - jeśli jest to słowo w mailu, to wyślij disable_flux=true
-    // (ale TYLKO jeśli robimy odpowiedź). Respondenci sprawdzą ten parametr i
-    // wy generowanie Flux (obrazków), ale odrażąje uruchomić, aby nie marnować
+    // (jeśli robimy odpowiedź lub nową wiadomość z responderami). Respondenci sprawdzą ten parametr i
+    // wyłączą generowanie Flux (obrazków), ale będą działać, aby nie marnować
     // tokenów HF_TOKEN.
     var disableFlux = containsFlagaTest && (isBiz || isAllowed || isKnownSender || containsKeyword || containsKeyword2 || containsKeyword3 || containsKeyword4 || shouldSendSmierc);
     
