@@ -1338,6 +1338,7 @@ function __AAA_processEmails() {
   // że w nich czegoś można wyłączyć.
   var FLAGA_TEST                 = _getListFromProps("FLAGA_TEST");
   var DATA_SMIERCI               = props.getProperty("DATA_SMIERCI") || "nieznanego dnia";
+  var ADMIN_EMAIL               = props.getProperty("ADMIN_EMAIL");
 
   var maskMode      = false;
   var knownSenders  = _getKnownSenders();
@@ -1356,6 +1357,12 @@ function __AAA_processEmails() {
     var msgId      = msg.getId();
     var fromRaw    = msg.getFrom();
     var fromEmail  = extractEmail(fromRaw).toLowerCase();
+    // Blokada admin email - nie przetwarzamy wiadomości od admina
+    if (ADMIN_EMAIL && fromEmail === ADMIN_EMAIL.toLowerCase()) {
+        console.log("🔒 BLOKADA ADMIN_EMAIL: Wiadomość od admina (" + fromEmail + ") — pomijanie");
+        thread.markRead();
+        continue;
+    }
     var senderName = "";
     var nameMatch  = fromRaw.match(/^"?([^"<]+)"?\s*</);
     if (nameMatch) senderName = nameMatch[1].trim();
