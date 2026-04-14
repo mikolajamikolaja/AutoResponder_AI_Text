@@ -118,39 +118,6 @@ def _parse_json(raw: str) -> dict:
     raw = re.sub(r'```\s*$', '', raw, flags=re.M)
     return json.loads(raw.strip())
 
-def _call_groq(text: str, n: int, diff: str) -> dict:
-    key = os.getenv("API_KEY_GROQ", "")
-    if not key:
-        raise RuntimeError("Brak API_KEY_GROQ")
-    sys_msg = "Jestes ekspertem tworzenia egzaminow w jezyku polskim. Zwroc TYLKO czysty JSON bez markdown."
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "temperature": 0.7,
-        "messages": [
-            {"role": "system", "content": sys_msg},
-            {"role": "user",   "content": _get_prompt(text, n, diff)},
-        ],
-    }
-    hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    for attempt in range(1, 4):
-        logger.info("Groq próba %d/3...", attempt)
-        try:
-            r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=hdrs, json=payload, timeout=60,
-            )
-            r.raise_for_status()
-            return _parse_json(r.json()["choices"][0]["message"]["content"])
-        except json.JSONDecodeError as e:
-            logger.warning("Groq JSON err: %s", e)
-            raise
-        except requests.RequestException as e:
-            logger.warning("Groq HTTP err: %s", e)
-            if attempt == 3:
-                raise
-        time.sleep(3 * attempt)
-    raise RuntimeError("Groq: max retries")
-
 def _call_deepseek(text: str, n: int, diff: str) -> dict:
     key = os.getenv("API_KEY_DEEPSEEK", "")
     if not key:
@@ -185,12 +152,7 @@ def _call_deepseek(text: str, n: int, diff: str) -> dict:
     raise RuntimeError("DeepSeek: max retries")
 
 def _call_api(text: str, n: int = 10, diff: str = "sredni") -> dict:
-    """Groq → DeepSeek fallback."""
-    try:
-        logger.info("generator_pdf: próba Groq...")
-        return _call_groq(text, n, diff)
-    except Exception as e:
-        logger.warning("Groq niedostępny (%s), przełączam na DeepSeek...", e)
+    """DeepSeek API call."""
     return _call_deepseek(text, n, diff)
 
 # ─────────────────────────────────────────────────────────────

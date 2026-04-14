@@ -14,10 +14,10 @@ Najlszepszy byłby model Groq llama-3.3-70b-versatile: limit ~128 000 tokenów (
 MAX_DLUGOSC_EMAIL = 7000
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ API
+# DEEPSEEK API
 # ─────────────────────────────────────────────────────────────────────────────
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL   = "llama-3.3-70b-versatile"
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_MODEL   = "deepseek-chat"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HUGGING FACE / FLUX

@@ -123,8 +123,6 @@ def _register_fonts() -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────
 from core.config import (
     MAX_DLUGOSC_EMAIL,
-    GROQ_API_URL,
-    GROQ_MODEL,
     HF_API_URL,
     HF_STEPS,
     HF_GUIDANCE,
@@ -578,11 +576,10 @@ def _extract_nouns_from_body(body: str) -> list:
     return nouns
 
 
-def _extract_nouns_groq(body: str) -> dict:
+def _extract_nouns_deepseek(body: str) -> dict:
     """
-    Wysyła email do Groq (rotacja kluczy) z promptem z zwykly_znajdz_rzeczowniki.json.
+    Wysyła email do DeepSeek (rotacja kluczy) z promptem z zwykly_znajdz_rzeczowniki.json.
     Zwraca dict {rzecz001: 'kopalnia', rzecz002: 'pies', ...} lub {} przy błędzie.
-    Fallback: DeepSeek.
     """
     NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
     try:
@@ -3974,7 +3971,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     current_app.logger.info("[zwykly] VERSION_CHECK: isinstance_fix=True file=%s", __file__)
 
     # ── 0. Rzeczowniki przez Groq — raz na początku, używane wszędzie ─────────
-    nouns_dict = _extract_nouns_groq(body)
+    nouns_dict = _extract_nouns_deepseek(body)
     current_app.logger.info("[zwykly] rzeczowniki Groq: %d słów", len(nouns_dict))
 
     # ── 1. Załaduj i zrenderuj prompt ────────────────────────────────────────

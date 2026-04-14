@@ -29,8 +29,6 @@ from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
 from core.config import (
-    GROQ_API_URL,
-    GROQ_MODEL,
     HF_API_URL,
     HF_STEPS,
     HF_GUIDANCE,
@@ -45,72 +43,6 @@ BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 RAPORT_JSON = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — Groq rotacja tokenów
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _get_groq_keys() -> list:
-    keys = []
-    val = os.getenv("API_KEY_GROQ", "").strip()
-    if val:
-        keys.append(("API_KEY_GROQ", val))
-    for i in range(1, 40):
-        name = f"API_KEY_GROQ_{i:02d}"
-        val  = os.getenv(name, "").strip()
-        if val:
-            keys.append((name, val))
-    return keys
-
-def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 4000) -> str | None:
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {
-        "model":       GROQ_MODEL,
-        "messages":    [{"role": "system", "content": system},
-                        {"role": "user",   "content": user}],
-        "max_tokens":  max_tokens,
-        "temperature": 0.85,
-    }
-    try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=45)
-        if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        if resp.status_code == 429:
-            return "RATE_LIMIT"
-        current_app.logger.warning("[psych-raport] Groq HTTP %d", resp.status_code)
-    except Exception as e:
-        current_app.logger.warning("[psych-raport] Groq wyjątek: %s", e)
-    return None
-
-
-def _call_groq_with_retry(system: str, user: str, max_tokens: int = 4000,
-                           section_name: str = "?", max_attempts: int = 3) -> str | None:
-    """
-    Wywołuje Groq z rotacją kluczy. Każdy klucz próbuje max_attempts razy.
-    Zwraca odpowiedź lub None jeśli wszystkie klucze zawiodły.
-    """
-    keys = _get_groq_keys()
-    if not keys:
-        current_app.logger.error("[psych-raport] Brak kluczy Groq dla sekcji %s", section_name)
-        return None
-
-    for attempt in range(max_attempts):
-        for name, key in keys:
-            result = _call_groq_single(key, system, user, max_tokens)
-            if result and result != "RATE_LIMIT":
-                current_app.logger.info("[psych-raport] %s OK (klucz=%s attempt=%d)",
-                                        section_name, name, attempt + 1)
-                return result
-            if result == "RATE_LIMIT":
-                current_app.logger.warning("[psych-raport] %s RATE_LIMIT klucz=%s → następny",
-                                           section_name, name)
-                time.sleep(1)
-                continue
-        current_app.logger.warning("[psych-raport] %s — wszystkie klucze zawiodły attempt=%d/%d",
-                                   section_name, attempt + 1, max_attempts)
-
-    current_app.logger.error("[psych-raport] %s — brak odpowiedzi po %d próbach",
-                             section_name, max_attempts)
-    return None
 
 
 def _parse_json_safe(raw: str, section: str) -> dict | list | None:
@@ -210,7 +142,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "pacjent")
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "pacjent")
     if not result:
         fb = cfg.get("fallback_dane_pacjenta", {})
@@ -234,7 +166,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2500, "depozyt_leki", max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "depozyt_leki")
     if not result:
         current_app.logger.warning("[psych-raport] sekcja_depozyt_leki → fallback")
@@ -284,7 +216,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
         f"Zwróć TYLKO czysty JSON z tablicą 7 obiektów."
     )
     section_name = f"tydzien{tydzien}"
-    raw = _call_groq_with_retry(system, user, 8000, section_name, max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, section_name)
 
     # Wyciągnij tablicę z różnych możliwych struktur
@@ -319,7 +251,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "wypis", max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "wypis")
     if not result:
         return {"wypis": {
@@ -347,7 +279,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1500, "diagnozy", max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "diagnozy")
     if not result:
         return {
@@ -415,7 +347,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a = _call_groq_with_retry(system_7, user_7a, 1200, "zalecenia_7a", max_attempts=1)
+    raw_7a = call_deepseek(system_7, user_7a, MODEL_TYLER)
     result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
 
     # ── groq_7b — NOTATKI + INCYDENTY ────────────────────────────────────────
@@ -442,7 +374,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"nawiązujących do emaila. Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7b = _call_groq_with_retry(system_7, user_7b, 4000, "zalecenia_7b", max_attempts=1)
+    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER)
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
 
     # ── Scal wyniki obu wywołań ───────────────────────────────────────────────
@@ -509,7 +441,7 @@ def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON z dwoma promptami FLUX po angielsku."
     )
-    raw = _call_groq_with_retry(system, user, 600, "flux_prompty")
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "flux_prompty")
     if not result or not isinstance(result, dict):
         # hardkodowany fallback

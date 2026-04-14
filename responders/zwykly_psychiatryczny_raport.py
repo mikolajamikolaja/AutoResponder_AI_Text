@@ -2,7 +2,7 @@
 responders/zwykly_psychiatryczny_raport.py
 
 Moduł obsługujący CAŁY pipeline raportu psychiatrycznego:
-  - 10 wywołań Groq (każda sekcja osobno, rotacja tokenów, fallback per sekcja)
+  - 10 wywołań DeepSeek (każda sekcja osobno)
       Runda 1 (równolegle): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
       Runda 2 (równolegle): #3a tydzień1 dni 1-4 | #3b tydzień1 dni 5-7
                             #4a tydzień2 dni 8-11 | #4b tydzień2 dni 12-14 | #5 wypis
@@ -14,10 +14,9 @@ Moduł obsługujący CAŁY pipeline raportu psychiatrycznego:
 
 ZMIANY v5:
   - _sekcja_tydzien podzielona na chunki (3-4 dni każdy) → koniec z uciętymi JSON
-  - groq_7 podzielone na 3 osobne wywołania (7a/7b/7c) → koniec z powtarzalnością
+  - zalecenia podzielone na 3 osobne wywołania (7a/7b/7c) → koniec z powtarzalnością
   - Każdy chunk przekazuje listę już użytych motywów → zakaz powtórzeń
   - max_tokens obniżone do bezpiecznych wartości per chunk
-  - DeepSeek tone/completeness: dodatkowe klucze wykluczone (cytaty, wypis)
 """
 
 import os
@@ -33,10 +32,7 @@ from datetime import datetime, timedelta
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
-from core.groq_session import get_session_id, is_groq_exhausted, mark_groq_exhausted
 from core.config import (
-    GROQ_API_URL,
-    GROQ_MODEL,
     HF_API_URL,
     HF_STEPS,
     HF_GUIDANCE,
@@ -55,128 +51,6 @@ BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 RAPORT_JSON = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 SUBSTITUTE_IMAGE_PATH = os.path.join(BASE_DIR, "images", "zastepczy.jpg")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS — Groq rotacja tokenów
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _get_groq_keys() -> list:
-    """
-    Zbiera wszystkie klucze Groq.
-    Metodologia (taka sama jak w backup/cv/test groq.py):
-    1. Czytaj zmienną GROQ_KEYS (zawiera klucze oddzielone newline)
-    2. Fallback: czytaj zmienne API_KEY_GROQ, API_KEY_GROQ_01..API_KEY_GROQ_09
-    """
-    keys = []
-    
-    # Metoda 1: Czytaj zmienną GROQ_KEYS (zawiera wszystkie klucze oddzielone \n)
-    groq_keys_str = os.getenv("GROQ_KEYS", "").strip()
-    if groq_keys_str:
-        # Parsuj linia po linię (dokładnie jak w backup/cv)
-        for i, line in enumerate(groq_keys_str.split('\n'), 1):
-            key = line.strip()
-            if not key:
-                break  # pusta linia = koniec
-            keys.append((f"GROQ_KEYS[{i}]", key))
-        if keys:
-            return keys  # Jeśli znaleźliśmy klucze, zwróć je
-    
-    # Metoda 2: Fallback na zmienne API_KEY_GROQ_XX (dla backward compatibility)
-    val = os.getenv("API_KEY_GROQ", "").strip()
-    if val:
-        keys.append(("API_KEY_GROQ", val))
-    for i in range(1, 40):
-        name = f"API_KEY_GROQ_{i:02d}"
-        val  = os.getenv(name, "").strip()
-        if val:
-            keys.append((name, val))
-    return keys
-
-
-def _call_groq_single(key: str, system: str, user: str, max_tokens: int = 3000) -> str | None:
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {
-        "model":       GROQ_MODEL,
-        "messages":    [{"role": "system", "content": system},
-                        {"role": "user",   "content": user}],
-        "max_tokens":  max_tokens,
-        "temperature": 0.85,
-    }
-    try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=45)
-        if resp.status_code == 200:
-            logger = get_logger()
-            logger.log_api_call("groq", model=GROQ_MODEL, success=True)
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        if resp.status_code == 429:
-            logger = get_logger()
-            logger.log_api_call("groq", model=GROQ_MODEL, success=False, error="RATE_LIMIT")
-            return "RATE_LIMIT"
-        logger = get_logger()
-        logger.log_api_call("groq", model=GROQ_MODEL, success=False, error=f"HTTP {resp.status_code}")
-        current_app.logger.warning("[psych-raport] Groq HTTP %d", resp.status_code)
-    except Exception as e:
-        logger = get_logger()
-        logger.log_api_call("groq", model=GROQ_MODEL, success=False, error=str(e))
-        current_app.logger.warning("[psych-raport] Groq wyjątek: %s", e)
-    return None
-
-
-def _call_groq_with_retry(system: str, user: str, max_tokens: int = 3000,
-                           section_name: str = "?", max_attempts: int = 3) -> str | None:
-    """
-    Wywołuje Groq z rotacją kluczy — metoda z test groq.py.
-    Dla każdego klucza próbuje raz, jeśli RATE_LIMIT lub błąd, przechodzi do następnego.
-    """
-    if is_groq_exhausted():
-        session_id = get_session_id() or "(brak)"
-        current_app.logger.warning(
-            "[psych-raport] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq dla %s",
-            session_id,
-            section_name,
-        )
-        result = call_deepseek(system, user, MODEL_TYLER)
-        if result:
-            current_app.logger.info("[psych-raport] DeepSeek fallback OK dla %s", section_name)
-            return result
-        current_app.logger.warning("[psych-raport] DeepSeek fallback również zawiódł dla %s", section_name)
-        return None
-
-    keys = _get_groq_keys()
-    if not keys:
-        current_app.logger.error("[psych-raport] Brak kluczy Groq dla sekcji %s", section_name)
-        return None
-
-    for name, key in keys:
-        result = _call_groq_single(key, system, user, max_tokens)
-        if result and result != "RATE_LIMIT":
-            current_app.logger.info("[psych-raport] %s OK (klucz=%s)",
-                                    section_name, name)
-            return result
-        if result == "RATE_LIMIT":
-            current_app.logger.warning("[psych-raport] %s RATE_LIMIT klucz=%s → następny",
-                                       section_name, name)
-        else:
-            current_app.logger.warning("[psych-raport] %s błąd klucz=%s → następny",
-                                       section_name, name)
-
-    session_id = get_session_id()
-    if session_id:
-        mark_groq_exhausted(session_id)
-        current_app.logger.warning(
-            "[psych-raport] Sesja %s — wszystkie klucze wyczerpane, pomijam Groq w kolejnych callach",
-            session_id,
-        )
-
-    current_app.logger.error("[psych-raport] %s — wszystkie klucze zawiodły",
-                             section_name)
-    result = call_deepseek(system, user, MODEL_TYLER)
-    if result:
-        current_app.logger.info("[psych-raport] DeepSeek fallback OK dla %s", section_name)
-    else:
-        current_app.logger.warning("[psych-raport] DeepSeek fallback również zawiódł dla %s", section_name)
-    return result
-
 
 def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     if not raw:
@@ -367,11 +241,11 @@ def _load_cfg() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #1 — dane pacjenta + powód + cytaty
+# DEEPSEEK #1 — dane pacjenta + powód + cytaty
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
-    sec = cfg.get("groq_1_pacjent", {})
+    sec = cfg.get("deepseek_1_pacjent", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
@@ -380,7 +254,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "pacjent")
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "pacjent")
     if not result:
         fb = cfg.get("fallback_dane_pacjenta", {})
@@ -390,11 +264,11 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #2 — depozyt + leki
+# DEEPSEEK #2 — depozyt + leki
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
-    sec = cfg.get("groq_2_depozyt_leki", {})
+    sec = cfg.get("deepseek_2_depozyt_leki", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "(brak rzeczowników)"
@@ -404,7 +278,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2500, "depozyt_leki", max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "depozyt_leki")
     if not result:
         current_app.logger.warning("[psych-raport] sekcja_depozyt_leki → fallback")
@@ -423,7 +297,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #3/#4 — tygodnie hospitalizacji (CHUNKI po 3-4 dni)
+# DEEPSEEK #3/#4 — tygodnie hospitalizacji (CHUNKI po 3-4 dni)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
@@ -436,7 +310,7 @@ def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
     uzyte_motywy — lista krótkich opisów zdarzeń już wygenerowanych,
                    żeby model nie powtarzał tych samych motywów.
     """
-    sec_key = f"groq_{2 + tydzien}_tydzien{tydzien}"
+    sec_key = f"deepseek_{2 + tydzien}_tydzien{tydzien}"
     sec = cfg.get(sec_key, {})
     system = sec.get("system", "")
 
@@ -489,7 +363,7 @@ def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
     section_name = f"tydzien{tydzien}_dni{dni_od}-{dni_do}"
     # max_tokens: ~700 tokenów na dzień × liczba dni + bufor
     mt = (dni_do - dni_od + 1) * 700 + 300
-    raw = _call_groq_with_retry(system, user, mt, section_name, max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, section_name)
 
     if isinstance(result, list):
@@ -554,11 +428,11 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #5 — wypis (dzień 15)
+# DEEPSEEK #5 — wypis (dzień 15)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
-    sec = cfg.get("groq_5_wypis", {})
+    sec = cfg.get("deepseek_5_wypis", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     try:
@@ -572,7 +446,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 2000, "wypis", max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "wypis")
     if not result:
         return {"wypis": {
@@ -586,11 +460,11 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #6 — łacińskie diagnozy
+# DEEPSEEK #6 — łacińskie diagnozy
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
-    sec = cfg.get("groq_6_diagnozy_lacina", {})
+    sec = cfg.get("deepseek_6_diagnozy_lacina", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
@@ -600,7 +474,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = _call_groq_with_retry(system, user, 1500, "diagnozy", max_attempts=1)
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "diagnozy")
     if not result:
         return {
@@ -624,18 +498,18 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #7 — zalecenia + notatki + rokowanie (TRZY OSOBNE WYWOŁANIA)
+# DEEPSEEK #7 — zalecenia + notatki + rokowanie (TRZY OSOBNE WYWOŁANIA)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
     """
-    Podzielone na TRZY osobne wywołania Groq:
-      groq_7a — zalecenia_tylera + rokowanie          (max_tokens: 1500)
-      groq_7b — notatki_pielegniarek                  (max_tokens: 2500)
-      groq_7c — notatki_sprzataczki + incydenty       (max_tokens: 2500)
+    Podzielone na TRZY osobne wywołania DeepSeek:
+      deepseek_7a — zalecenia_tylera + rokowanie          (max_tokens: 1500)
+      deepseek_7b — notatki_pielegniarek                  (max_tokens: 2500)
+      deepseek_7c — notatki_sprzataczki + incydenty       (max_tokens: 2500)
     Wyniki scalane w jeden dict.
     """
-    sec_7 = cfg.get("groq_7_zalecenia_notatki", {})
+    sec_7 = cfg.get("deepseek_7_zalecenia_notatki", {})
     system_7 = sec_7.get("system", "")
 
     # Kontekst zdarzeń z hospitalizacji
@@ -647,7 +521,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
 
     email_fragment = body[:MAX_DLUGOSC_EMAIL]
 
-    # ── groq_7a — ZALECENIA + ROKOWANIE ──────────────────────────────────────
+    # ── deepseek_7a — ZALECENIA + ROKOWANIE ──────────────────────────────────────
     schema_7a = json.dumps({
         "zalecenia_tylera": sec_7.get("schema", {}).get("zalecenia_tylera", {
             "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIA OBOWIĄZKOWE",
@@ -668,10 +542,10 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a = _call_groq_with_retry(system_7, user_7a, 1500, "zalecenia_7a", max_attempts=1)
+    raw_7a = call_deepseek(system_7, user_7a, MODEL_TYLER)
     result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
 
-    # ── groq_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
+    # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
     schema_7b = json.dumps({
         "notatki_pielegniarek": sec_7.get("schema", {}).get("notatki_pielegniarek",
             "Lista MINIMUM 10 obiektów: {imie_pielegniarki, data, tresc}")
@@ -687,10 +561,10 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"KAŻDA notatka musi nawiązywać do INNEGO zdarzenia i INNEGO dnia — bezwzględny zakaz powtórzeń.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7b = _call_groq_with_retry(system_7, user_7b, 2500, "zalecenia_7b", max_attempts=1)
+    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER)
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
 
-    # ── groq_7c — NOTATKI SPRZĄTACZKI + INCYDENTY ────────────────────────────
+    # ── deepseek_7c — NOTATKI SPRZĄTACZKI + INCYDENTY ────────────────────────────
     schema_7c = json.dumps({
         "notatki_sprzataczki": sec_7.get("schema", {}).get("notatki_sprzataczki",
             "Lista MINIMUM 10 obiektów: {data, tresc}"),
@@ -710,7 +584,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7c = _call_groq_with_retry(system_7, user_7c, 2500, "zalecenia_7c", max_attempts=1)
+    raw_7c = call_deepseek(system_7, user_7c, MODEL_TYLER)
     result_7c = _parse_json_safe(raw_7c, "zalecenia_7c") or {}
 
     # ── Scal wyniki trzech wywołań ────────────────────────────────────────────
@@ -737,12 +611,12 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GROQ #8 — prompty FLUX
+# DEEPSEEK #8 — prompty FLUX
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
                           sender_name: str, gender: str, test_mode: bool = False) -> dict:
-    sec = cfg.get("groq_8_flux_prompty", {})
+    sec = cfg.get("deepseek_8_flux_prompty", {})
     if test_mode:
         current_app.logger.info("[psych-raport] test_mode — pomijam generowanie promptów FLUX")
         return {"prompt_pacjent": "", "prompt_przedmioty": ""}
@@ -757,7 +631,7 @@ def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON z dwoma promptami FLUX po angielsku."
     )
-    raw = _call_groq_with_retry(system, user, 600, "flux_prompty")
+    raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "flux_prompty")
     if not result or not isinstance(result, dict):
         objects_critical = f"CRITICAL OBJECTS: {nouns_str}."
@@ -790,8 +664,8 @@ _DEEPSEEK_SKIP = {
     "notatki_pielegniarek",
     "notatki_sprzataczki",
     "incydenty_specjalne",
-    "cytaty_z_przyjecia",   # długie, Groq generuje je już z właściwym stylem
-    "wypis",                # też długie, styl już OK z Groq
+    "cytaty_z_przyjecia",   # długie, DeepSeek generuje je już z właściwym stylem
+    "wypis",                # też długie, styl już OK z DeepSeek
 }
 
 
@@ -850,6 +724,46 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
     merged = _merge_dicts(raport, result)
     current_app.logger.info("[psych-raport] DeepSeek completeness OK — merge zastosowany")
     return merged
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEEPSEEK #3 — relacje świadków
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
+    """
+    Generuje relacje świadków: ksiądz, dostawca jedzenia, kurier, rodzina, hydraulik, serwisant automatu do kawy.
+    Każda relacja minimum 4-5 zdań, w stylu gwarowym, absurdalnie śmieszna, nawiązująca do emaila.
+    """
+    sec = cfg.get("deepseek_3_relacje_swiadkow", {})
+    if not sec:
+        current_app.logger.warning("[psych-raport] Brak konfiguracji deepseek_3_relacje_swiadkow")
+        return {"relacje_swiadkow": []}
+    
+    system = sec.get("system", "")
+    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    
+    # Przygotuj kontekst z raportu: imię pacjenta, stan cywilny, kluczowe zachowania
+    imie_pacjenta = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
+    stan_cywilny = raport.get("dane_pacjenta", {}).get("stan_cywilny", "")
+    
+    user = (
+        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"INFORMACJE O PACJENCIE:\n"
+        f"- Imię: {imie_pacjenta}\n"
+        f"- Stan cywilny: {stan_cywilny if stan_cywilny else 'nieznany'}\n\n"
+        f"SCHEMAT JSON:\n{schema}\n\n"
+        f"Zwróć TYLKO czysty JSON z listą relacji świadków."
+    )
+    
+    raw = call_deepseek(system, user, MODEL_TYLER)
+    result = _parse_json_safe(raw, "relacje_swiadkow")
+    
+    if not result or not isinstance(result, dict):
+        current_app.logger.warning("[psych-raport] _sekcja_relacje_swiadkow → brak wyników")
+        return {"relacje_swiadkow": []}
+    
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1036,6 +950,19 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         section.bottom_margin = Cm(2)
         section.left_margin   = Cm(2.5)
         section.right_margin  = Cm(2.5)
+
+    # Dodaj stopkę z numerami stron
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    section = doc.sections[0]
+    footer = section.footer
+    footer_paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    footer_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_run = footer_paragraph.add_run()
+    footer_run.add_field('PAGE')
+    footer_run.add_text(' / ')
+    footer_run.add_field('NUMPAGES')
+    footer_run.font.size = Pt(9)
+    footer_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
 
     RED   = RGBColor(0x99, 0x1A, 0x1A)
     DARK  = RGBColor(0x0D, 0x0D, 0x0D)
@@ -1413,9 +1340,56 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         separator()
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SEKCJA 12 — PODPIS + NOTATKI
+    # SEKCJA 12 — RELACJE ŚWIADKÓW
     # ══════════════════════════════════════════════════════════════════════════
-    heading("XII. PODPIS I NOTATKI PERSONELU", 2, RED, 11)
+    heading("XII. RELACJE ŚWIADKÓW", 2, RED, 11)
+    relacje_swiadkow = raport.get("relacje_swiadkow", [])
+    if relacje_swiadkow:
+        heading("Świadkowie (osoby trzecie) — zeznania:", 3, DARK, 9)
+        if isinstance(relacje_swiadkow, list):
+            for sw in relacje_swiadkow:
+                if isinstance(sw, dict):
+                    imie = sw.get("imie_swiadka", "")
+                    zawod = sw.get("zawod", "")
+                    data = sw.get("data", "")
+                    tresc = sw.get("tresc", "")
+                    if tresc == "__BRAK__":
+                        continue
+                    
+                    # Nagłówek świadka
+                    header_parts = []
+                    if imie and imie != "__BRAK__":
+                        header_parts.append(imie)
+                    if zawod and zawod != "__BRAK__":
+                        header_parts.append(f"({zawod})")
+                    if data and data != "__BRAK__":
+                        header_parts.append(data)
+                    
+                    if header_parts:
+                        p_hdr = doc.add_paragraph()
+                        p_hdr.paragraph_format.left_indent = Pt(12)
+                        r_hdr = p_hdr.add_run("  ".join(header_parts))
+                        r_hdr.bold = True
+                        r_hdr.font.size = Pt(8)
+                        r_hdr.font.color.rgb = DARK
+                    
+                    if tresc:
+                        para(tresc, italic=True, color=GREY, size=8)
+                else:
+                    if str(sw) != "__BRAK__":
+                        para(str(sw), italic=True, color=GREY, size=9)
+        else:
+            para(str(relacje_swiadkow), italic=True, color=GREY, size=9)
+        doc.add_paragraph()
+    else:
+        para("Brak relacji świadków w dokumentacji.", italic=True, color=GREY, size=9)
+    doc.add_paragraph()
+    separator()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SEKCJA 13 — PODPIS + NOTATKI
+    # ══════════════════════════════════════════════════════════════════════════
+    heading("XIII. PODPIS I NOTATKI PERSONELU", 2, RED, 11)
     field("Lekarz prowadzący", szpital.get("lekarz", "Dr. T. Durden, MD, PhD, FIGHT"))
     doc.add_paragraph()
 
@@ -1492,7 +1466,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     """
     Główna funkcja modułu.
 
-    Równoległość Groq:
+    Równoległość DeepSeek:
       Runda 1 (niezależne): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
       Runda 2 (równolegle): #3a t1 dni 1-4 | #3b t1 dni 5-7
                             #4a t2 dni 8-11 | #4b t2 dni 12-14 | #5 wypis
@@ -1512,7 +1486,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # RUNDA 1 — niezależne sekcje Groq równolegle
+    # RUNDA 1 — niezależne sekcje DeepSeek równolegle
     # ══════════════════════════════════════════════════════════════════════════
     def _r1_pacjent():
         with app_obj.app_context():
@@ -1631,6 +1605,20 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ── DeepSeek completeness check ──────────────────────────────────────────
     raport = _deepseek_completeness_check(cfg, raport, body)
     current_app.logger.info("[psych-raport] DeepSeek#2 completeness OK")
+
+    # ── Relacje świadków ─────────────────────────────────────────────────────
+    try:
+        relacje_result = _sekcja_relacje_swiadkow(cfg, body, raport)
+        if relacje_result and "relacje_swiadkow" in relacje_result:
+            raport["relacje_swiadkow"] = relacje_result["relacje_swiadkow"]
+            current_app.logger.info("[psych-raport] Relacje świadków OK (%d relacji)",
+                                    len(relacje_result["relacje_swiadkow"]))
+        else:
+            raport["relacje_swiadkow"] = []
+            current_app.logger.warning("[psych-raport] Brak relacji świadków")
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd generowania relacji świadków: %s", e)
+        raport["relacje_swiadkow"] = []
 
     # ── FLUX — oba zdjęcia równolegle ─────────────────────────────────────────
     prompt_pacjent    = sekcja_flux.get("prompt_pacjent", "")

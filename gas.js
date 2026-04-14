@@ -27,6 +27,9 @@
  * - Kolumna D: odpowiedz_pawla | E: last_msg_id
  */
 
+// ── Stałe ─────────────────────────────────────────────────────────────────────
+// (inne ID są w PropertiesService.getScriptProperties())
+
 // ── Normalizacja tekstu ───────────────────────────────────────────────────────
 function _normalize(text) {
   if (!text) return "";
@@ -377,7 +380,7 @@ function _processPendingRetries(webhookUrl) {
     var response = _callBackend(
       entry.sender, entry.sender_name, entry.subject, entry.body, entry.body, webhookUrl, entry.msg_id || "",
       entry.retry_responders.indexOf("scrabble") !== -1,
-      entry.retry_responders.indexOf("analiza") !== -1,
+      entry.retry_responders.indexOf("dociekliwy") !== -1,
       entry.retry_responders.indexOf("emocje") !== -1,
       entry.retry_responders.indexOf("generator_pdf") !== -1,
       entry.retry_responders.indexOf("smierc") !== -1,
@@ -579,6 +582,94 @@ function _getDriveFolder() {
   var today      = Utilities.formatDate(new Date(), "GMT+1", "yyyy-MM-dd");
   var it         = rootFolder.getFoldersByName(today);
   return it.hasNext() ? it.next() : rootFolder.createFolder(today);
+}
+
+function _csvQuote(value) {
+  var text = value == null ? "" : value.toString();
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+
+function _getPrzeplywCsvFile(folder) {
+  var it = folder.getFilesByName("przeplyw.csv");
+  return it.hasNext() ? it.next() : null;
+}
+
+function _appendPrzeplywSheetRow(row) {
+  // Dopisuj tylko skuteczne wysyłki
+  if (!row.wysylka) {
+    console.log("[Flow] Pominieto — wysylka === false");
+    return;
+  }
+
+  try {
+    var sheetId = PropertiesService.getScriptProperties().getProperty("DECYZJA_WYSYLKI_SHEET_ID");
+    if (!sheetId) { console.warn("[Flow] Brak DECYZJA_WYSYLKI_SHEET_ID"); return; }
+    var sheet = SpreadsheetApp.openById(sheetId).getSheets()[0];
+    
+    // Nagłówki
+    var headers = [
+      "ts", "from", "subject", "isNewMsg", "KEYWORDS", "KEYWORDS1", "KEYWORDS2", "KEYWORDS3", 
+      "KEYWORDS4", "KEYWORDS_GENERATOR_PDF", "KEYWORDS_SMIERC", "JOKER", 
+      "lista_smiert", "lista_historia", "flaga_test", "wysylka", "action", "notes"
+    ];
+    
+    // Sprawdź czy arkusz ma nagłówki
+    var lastRow = sheet.getLastRow();
+    var needsHeaders = true;
+    
+    if (lastRow > 0) {
+      var firstRow = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+      // Sprawdź czy pierwszy wiersz zawiera nagłówiki (kolumna "ts" i "wysylka")
+      if (firstRow[0] === "ts" && firstRow[15] === "wysylka") {
+        needsHeaders = false;
+      }
+    }
+    
+    // Dodaj nagłówki jeśli ich brakuje
+    if (needsHeaders) {
+      sheet.insertSheet(sheet.getName() + "_old", 0);
+      sheet.clearContents();
+      sheet.appendRow(headers);
+      console.log("[Flow] Dodano nagłówki do arkusza");
+    }
+    
+    // Przygotuj dane wiersza
+    var values = [
+      row.ts || Utilities.formatDate(new Date(), "GMT+1", "yyyy-MM-dd HH:mm:ss"),
+      row.fromEmail,
+      (row.subject || "").substring(0, 120),
+      row.isNewMsg ? "tak" : "nie",
+      row.KEYWORDS ? "tak" : "nie",
+      row.KEYWORDS1 ? "tak" : "nie",
+      row.KEYWORDS2 ? "tak" : "nie",
+      row.KEYWORDS3 ? "tak" : "nie",
+      row.KEYWORDS4 ? "tak" : "nie",
+      row.KEYWORDS_GENERATOR_PDF ? "tak" : "nie",
+      row.KEYWORDS_SMIERC ? "tak" : "nie",
+      row.JOKER ? "tak" : "nie",
+      row.lista_smiert ? "tak" : "nie",
+      row.lista_historia ? "tak" : "nie",
+      row.flaga_test ? "tak" : "nie",
+      row.wysylka ? "tak" : "nie",
+      row.action || "",
+      row.notes || ""
+    ];
+    
+    // Dodaj wiersz
+    sheet.appendRow(values);
+    var newRowNum = sheet.getLastRow();
+    
+    // Zabarwij komórki z "tak" na zielono
+    for (var i = 0; i < values.length; i++) {
+      if (values[i] === "tak") {
+        sheet.getRange(newRowNum, i + 1).setBackground("#90EE90");
+      }
+    }
+    
+    console.log("[Flow] Dodano wiersz #" + newRowNum + " (wysylka OK)");
+  } catch (e) {
+    console.error("[Flow] Błąd zapisu do arkusza: " + e.message);
+  }
 }
 
 function _saveFileToDriveNow(fileObj) {
@@ -994,7 +1085,7 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
   }
 }
 
-function executeAnalizaMailSend(data, recipient, subject, msg) {
+function executeDociekliwyMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych analizy dla " + recipient); return; }
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
   if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
@@ -1027,11 +1118,11 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
   addAttachment(data.gra_html, "analiza.html");
 
   attachLogFiles(data, attachments, attachedNames);
-  var htmlBody = data.reply_html || "<p>Analiza powtórzeń w załączniku.</p>";
+  var htmlBody = data.reply_html || "<p>Dociekliwy powtórzeń w załączniku.</p>";
   try {
-    msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Doprecyzuj analiza - autoresponder" });
+    msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Doprecyzuj dociekliwy - autoresponder" });
   } catch (e) {
-    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, attachments: attachments, name: "Doprecyzuj analiza - autoresponder" });
+    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, attachments: attachments, name: "Doprecyzuj dociekliwy - autoresponder" });
   }
 }
 
@@ -1108,7 +1199,7 @@ function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
 function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
-                      wantsScrabble, wantsAnaliza, wantsEmocje,
+                      wantsScrabble, wantsDociekliwy, wantsEmocje,
                       wantsGeneratorPdf, wantsSmierc, smircData,
                       attachments, previousBody, previousSubject,
                       isBiz, isAllowed, isKnownSender, containsKeyword,
@@ -1133,7 +1224,7 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
     subject:             subject,
     body:                body,
     wants_scrabble:      wantsScrabble      ? true : false,
-    wants_analiza:       wantsAnaliza       ? true : false,
+    wants_dociekliwy:   wantsDociekliwy   ? true : false,
     wants_emocje:        wantsEmocje        ? true : false,
     wants_generator_pdf: wantsGeneratorPdf  ? true : false,
     wants_smierc:        wantsSmierc        ? true : false,
@@ -1146,7 +1237,7 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
     contains_keyword_generator_pdf: containsKeywordGeneratorPdf ? true : false,
     contains_keyword_smierc: containsKeywordSmierc ? true : false,
     contains_keyword_joker: containsJoker ? true : false,
-    wants_text_reply:    (isBiz || isAllowed || isKnownSender || containsKeyword || wantsScrabble || wantsAnaliza || wantsEmocje || wantsGeneratorPdf) ? true : false,
+    wants_text_reply:    (isBiz || isAllowed || isKnownSender || containsKeyword || wantsScrabble || wantsDociekliwy || wantsEmocje || wantsGeneratorPdf) ? true : false,
     attachments:         attachments        || [],
     previous_body:       previousBody       || null,
     previous_subject:    previousSubject    || null,
@@ -1299,8 +1390,29 @@ function __AAA_processEmails() {
     console.log("DEBUG: isNewMsg=" + isNewMsg + " from=" + fromEmail +
                 " | zwykly=" + shouldSendZwykly + " | smierc=" + shouldSendSmierc);
 
-    // ── ODPOWIEDŹ (RE:/FWD:) ─────────────────────────────────────────────────
+    // Zapis sytuacji w pliku przeplyw.csv dla wiadomości RE/FWD
     if (!isNewMsg) {
+      var flowRow = {
+        fromEmail: fromEmail,
+        subject: subject,
+        isNewMsg: isNewMsg,
+        KEYWORDS: false,
+        KEYWORDS1: false,
+        KEYWORDS2: false,
+        KEYWORDS3: false,
+        KEYWORDS4: false,
+        KEYWORDS_GENERATOR_PDF: false,
+        KEYWORDS_SMIERC: false,
+        JOKER: false,
+        lista_smiert: isSmierc,
+        lista_historia: shouldSendZwykly,
+        flaga_test: containsFlagaTest,
+        wysylka: shouldSendSmierc || shouldSendZwykly,
+        action: (shouldSendSmierc || shouldSendZwykly) ? "RE_WYSYLKA" : "RE_POMINIETO",
+        notes: "RE/FWD"
+      };
+      _appendPrzeplywSheetRow(flowRow);
+
       console.log("Odpowiedź (RE:/FWD:) od: " + fromEmail);
 
       if (shouldSendSmierc || shouldSendZwykly) {
@@ -1396,7 +1508,7 @@ function __AAA_processEmails() {
         if (jj.biznes)        { executeMailSend(sectionWithLogs(jj.biznes, jj), fromEmail, subject, msg, "Notariusz – Informacja"); saveResponseToHistory(fromEmail, subject, jj.biznes.reply_html || ""); }
         if (jj.zwykly)        { executeMailSend(sectionWithLogs(jj.zwykly, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
         if (jj.scrabble)      { executeScrabbleMailSend(sectionWithLogs(jj.scrabble, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
-        if (jj.analiza)       { executeAnalizaMailSend(sectionWithLogs(jj.analiza, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.analiza.reply_html || ""); }
+        if (jj.dociekliwy)     { executeDociekliwyMailSend(sectionWithLogs(jj.dociekliwy, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.dociekliwy.reply_html || ""); }
         if (jj.emocje)        { executeEmocjeMailSend(sectionWithLogs(jj.emocje, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
         // Wysyłaj nawiazanie z nazwą Bot Tylera (zawiera pełną historię + zdania AI)
         if (jj.nawiazanie)    { executeNawiazanieMailSend(sectionWithLogs(jj.nawiazanie, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.nawiazanie.reply_html || ""); }
@@ -1459,11 +1571,32 @@ function __AAA_processEmails() {
 
     // ── SMIERC start (nowe słowo kluczowe SMIERC, brak arkusza) ──────────────
     var containsKeywordSmierc = _containsAny(searchText, KEYWORDS_SMIERC);
+    var flowRow = {
+      fromEmail: fromEmail,
+      subject: subject,
+      isNewMsg: isNewMsg,
+      KEYWORDS: false,
+      KEYWORDS1: false,
+      KEYWORDS2: false,
+      KEYWORDS3: false,
+      KEYWORDS4: false,
+      KEYWORDS_GENERATOR_PDF: false,
+      KEYWORDS_SMIERC: false,
+      JOKER: false,
+      lista_smiert: isSmierc,
+      lista_historia: shouldSendZwykly,
+      flaga_test: containsFlagaTest,
+      wysylka: false,
+      action: "",
+      notes: ""
+    };
+
     if (containsKeywordSmierc) {
       if (_createSmircSheetForEmail(fromEmail, DATA_SMIERCI)) {
         smircData        = _getSmircData(fromEmail);
         isSmierc         = true;
         shouldSendSmierc = true;
+        flowRow.lista_smiert = true;
         console.log("SMIERC start: " + fromEmail);
       }
     }
@@ -1476,6 +1609,45 @@ function __AAA_processEmails() {
     var containsFlagaTest      = _containsAny(searchText, FLAGA_TEST);
     var containsKeywordGeneratorPdf = _containsAny(searchText, KEYWORDS_GENERATOR_PDF);
 
+    flowRow.KEYWORDS = containsKeyword;
+    flowRow.KEYWORDS1 = containsKeyword1;
+    flowRow.KEYWORDS2 = containsKeyword2;
+    flowRow.KEYWORDS3 = containsKeyword3;
+    flowRow.KEYWORDS4 = containsKeyword4;
+    flowRow.KEYWORDS_GENERATOR_PDF = containsKeywordGeneratorPdf;
+    flowRow.KEYWORDS_SMIERC = containsKeywordSmierc;
+    flowRow.JOKER = containsJoker;
+    flowRow.flaga_test = containsFlagaTest;
+
+    // Aktualizuj shouldSendZwykly jeśli zawiera słowo kluczowe
+    if (containsKeyword) shouldSendZwykly = true;
+    flowRow.lista_historia = shouldSendZwykly;
+
+    if (containsJoker) {
+      flowRow.wysylka = true;
+      flowRow.action = "JOKER_WYSYLKA";
+      flowRow.notes = "JOKER";
+    } else if (shouldSendSmierc) {
+      flowRow.wysylka = true;
+      flowRow.action = "SMIERC_WYSYLKA";
+      flowRow.notes = "SMIERC";
+    } else if (!isBiz && !shouldSendZwykly && !containsKeyword1 && !containsKeyword2 && !containsKeyword3 &&
+               !containsKeyword4 && !containsKeywordGeneratorPdf && !containsJoker && !containsKeywordSmierc && !shouldSendSmierc) {
+      flowRow.wysylka = false;
+      flowRow.action = "POMINIETO";
+      flowRow.notes = "brak warunków wysyłki";
+      _appendPrzeplywSheetRow(flowRow);
+      var labelSkip = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
+      thread.addLabel(labelSkip);
+      thread.markRead();
+      continue;
+    } else {
+      flowRow.wysylka = true;
+      flowRow.action = "WYSYLKA";
+      flowRow.notes = "zwykły lub keyword";
+    }
+    _appendPrzeplywSheetRow(flowRow);
+
     // Flaga: komunikacja z dotychczas znanym użytkownikiem lub specjalnym JOKER-em
     var shouldSaveHistory      = isKnownSender || isAllowed || containsKeyword || containsKeyword1 || containsKeyword2 || containsKeyword3 || containsKeyword4 || containsKeywordGeneratorPdf || containsJoker || containsKeywordSmierc || shouldSendSmierc;
 
@@ -1483,16 +1655,6 @@ function __AAA_processEmails() {
     var hasAnyKeyword = containsKeyword || containsKeyword1 || containsKeyword2 || containsKeyword3 || 
                         containsKeyword4 || containsKeywordGeneratorPdf || containsKeywordSmierc || containsJoker || shouldSendSmierc;
 
-    // Aktualizuj shouldSendZwykly jeśli zawiera słowo kluczowe
-    if (containsKeyword) shouldSendZwykly = true;
-
-    if (!isBiz && !shouldSendZwykly && !containsKeyword1 && !containsKeyword2 && !containsKeyword3 &&
-        !containsKeyword4 && !containsKeywordGeneratorPdf && !containsJoker && !containsKeywordSmierc && !shouldSendSmierc) {
-      var labelSkip = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
-      thread.addLabel(labelSkip);
-      thread.markRead();
-      continue;
-    }
 
     var combinedKeywords = KEYWORDS.concat(KEYWORDS1).concat(KEYWORDS2).concat(KEYWORDS3)
       .concat(KEYWORDS4).concat(KEYWORDS_JOKER).concat(KEYWORDS_SMIERC).filter(Boolean);
@@ -1560,8 +1722,8 @@ function __AAA_processEmails() {
       if (containsKeyword2 && json.scrabble) {
         executeScrabbleMailSend(sectionWithLogs(json.scrabble, json), fromEmail, subject, msg);
       }
-      if (containsKeyword3 && json.analiza) {
-        executeAnalizaMailSend(sectionWithLogs(json.analiza, json), fromEmail, subject, msg);
+      if (containsKeyword3 && json.dociekliwy) {
+        executeDociekliwyMailSend(sectionWithLogs(json.dociekliwy, json), fromEmail, subject, msg);
       }
       if (containsKeyword4 && json.emocje) {
         executeEmocjeMailSend(sectionWithLogs(json.emocje, json), fromEmail, subject, msg);

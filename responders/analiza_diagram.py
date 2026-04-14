@@ -33,10 +33,13 @@ def _log(msg: str):
 def _build_graph_dot(gra: Dict[str, Any]) -> str:
     """
     Buduje DOT file dla Graphviz z drzewa decyzyjnego.
-    Każde pytanie ma 3 dzieci (A, B, C).
+    Obsługuje starą strukturę ("kroki") i nową drzewiastą ("pytania").
     """
+    # Nowa struktura drzewiasta
+    pytania = gra.get("pytania", [])
     kroki = gra.get("kroki", [])
-    if not kroki:
+    
+    if not pytania and not kroki:
         return ""
     
     dot_lines = [
@@ -51,50 +54,127 @@ def _build_graph_dot(gra: Dict[str, Any]) -> str:
         "A": "#E6F1FB",  # Niebieski
         "B": "#E1F5EE",  # Zielony
         "C": "#FAEEDA",  # Brązowy
-        "Q": "#EEEDFE",  # Fiolet
+        "Q": "#EEEDFE",  # Fiolet (pytanie główne)
+        "R": "#F0E6FA",  # Jasny fiolet (runda)
     }
     
-    # Każde pytanie
-    for i, krok in enumerate(kroki, 1):
-        nr = krok.get("nr", i)
-        pytanie = krok.get("pytanie", f"P{i}")[:40]  # Skróć
-        
-        # Node pytania
-        node_id = f"q{i}"
-        dot_lines.append(
-            f'  {node_id} [label="P{i}:\\n{pytanie}", fillcolor="{colors["Q"]}", '
-            f'color="#534AB7", penwidth=1.5];'
-        )
-        
-        # Połączenia do poprzedniego (jeśli i > 1)
-        if i > 1:
-            prev_id = f"q{i-1}"
-            dot_lines.append(f"  {prev_id} -> {node_id} [style=dashed];")
-        
-        # Opcje A, B, C
-        opcje = krok.get("opcje", {})
-        for lit in ["A", "B", "C"]:
-            if lit not in opcje:
-                continue
-            
-            val = opcje[lit]
-            tekst = val.get("tekst", lit)[:25]
-            leaf_id = f"opt_{i}_{lit}"
-            
-            dot_lines.append(
-                f'  {leaf_id} [label="{lit}: {tekst}", fillcolor="{colors.get(lit, "#EEEEE")}", '
-                f'color="#666", penwidth=0.8, fontsize=9];'
-            )
-            dot_lines.append(
-                f'  {node_id} -> {leaf_id} [label="{lit}", color="#888"];'
-            )
+    # Liczniki unikalnych ID
+    node_counter = 0
     
-    # Wyrok końcowy
-    dot_lines.append(
-        '  wyrok [label="⚖ WYROK\\nKOŃCOWY", fillcolor="#3C3489", fontcolor="#F1EFE8", '
-        'shape=ellipse, penwidth=2];'
-    )
-    dot_lines.append(f"  q{len(kroki)} -> wyrok [style=dashed];")
+    def next_id():
+        nonlocal node_counter
+        node_counter += 1
+        return f"n{node_counter}"
+    
+    if pytania:
+        # Nowa struktura drzewiasta
+        for p_idx, pytanie in enumerate(pytania):
+            p_id = pytanie.get("id", f"P{p_idx+1}")
+            tresc = pytanie.get("tresc", f"Pytanie {p_idx+1}")[:40]
+            opcje = pytanie.get("opcje", {})
+            
+            # Node głównego pytania
+            main_node_id = f"p{p_idx+1}"
+            dot_lines.append(
+                f'  {main_node_id} [label="{p_id}:\\n{tresc}", fillcolor="{colors["Q"]}", '
+                f'color="#534AB7", penwidth=1.5];'
+            )
+            
+            # Rekurencyjna funkcja dodająca drzewo opcji
+            def add_option_tree(parent_id, options, depth=1, path=""):
+                if depth > 3:  # MAX_RUNDY = 3
+                    return
+                if not options:
+                    return
+                
+                for lit, opt in options.items():
+                    tekst = opt.get("tekst", lit)[:25]
+                    opt_node_id = f"{parent_id}_{lit}_{depth}"
+                    dot_lines.append(
+                        f'  {opt_node_id} [label="{lit}: {tekst}", fillcolor="{colors.get(lit, "#EEEEE")}", '
+                        f'color="#666", penwidth=0.8, fontsize=9];'
+                    )
+                    dot_lines.append(
+                        f'  {parent_id} -> {opt_node_id} [label="{lit}", color="#888"];'
+                    )
+                    
+                    # Reakcja (nie rysujemy)
+                    # Sprawdź czy jest kolejna runda
+                    next_round_key = f"runda{depth+1}"
+                    if next_round_key in opt:
+                        next_round = opt[next_round_key]
+                        if "pytanie" in next_round:
+                            # Node rundy
+                            round_node_id = f"{opt_node_id}_r{depth+1}"
+                            round_text = next_round.get("pytanie", f"Runda {depth+1}")[:35]
+                            dot_lines.append(
+                                f'  {round_node_id} [label="R{depth+1}:\\n{round_text}", fillcolor="{colors["R"]}", '
+                                f'color="#7A5FB7", penwidth=1.2];'
+                            )
+                            dot_lines.append(
+                                f'  {opt_node_id} -> {round_node_id} [style=dashed, color="#666"];'
+                            )
+                            # Rekurencja dla opcji w tej rundzie
+                            if "opcje" in next_round:
+                                add_option_tree(round_node_id, next_round["opcje"], depth+1, path+lit)
+            
+            # Rozpocznij drzewo od głównego pytania
+            add_option_tree(main_node_id, opcje, depth=1)
+            
+            # Połączenie do następnego pytania (jeśli istnieje)
+            if p_idx < len(pytania) - 1:
+                next_main_id = f"p{p_idx+2}"
+                dot_lines.append(f"  {main_node_id} -> {next_main_id} [style=invis];")
+        
+        # Wyrok końcowy
+        dot_lines.append(
+            '  wyrok [label="⚖ WYROK\\nKOŃCOWY", fillcolor="#3C3489", fontcolor="#F1EFE8", '
+            'shape=ellipse, penwidth=2];'
+        )
+        if pytania:
+            last_main_id = f"p{len(pytania)}"
+            dot_lines.append(f"  {last_main_id} -> wyrok [style=dashed];")
+    
+    else:
+        # Stara struktura sekwencyjna (dla kompatybilności)
+        for i, krok in enumerate(kroki, 1):
+            nr = krok.get("nr", i)
+            pytanie = krok.get("pytanie", f"P{i}")[:40]
+            
+            node_id = f"q{i}"
+            dot_lines.append(
+                f'  {node_id} [label="P{i}:\\n{pytanie}", fillcolor="{colors["Q"]}", '
+                f'color="#534AB7", penwidth=1.5];'
+            )
+            
+            if i > 1:
+                prev_id = f"q{i-1}"
+                dot_lines.append(f"  {prev_id} -> {node_id} [style=dashed];")
+            
+            opcje = krok.get("opcje", {})
+            for lit in ["A", "B", "C"]:
+                if lit not in opcje:
+                    continue
+                
+                val = opcje[lit]
+                tekst = val.get("tekst", lit)[:25]
+                leaf_id = f"opt_{i}_{lit}"
+                
+                dot_lines.append(
+                    f'  {leaf_id} [label="{lit}: {tekst}", fillcolor="{colors.get(lit, "#EEEEE")}", '
+                    f'color="#666", penwidth=0.8, fontsize=9];'
+                )
+                dot_lines.append(
+                    f'  {node_id} -> {leaf_id} [label="{lit}", color="#888"];'
+                )
+        
+        # Wyrok końcowy
+        dot_lines.append(
+            '  wyrok [label="⚖ WYROK\\nKOŃCOWY", fillcolor="#3C3489", fontcolor="#F1EFE8", '
+            'shape=ellipse, penwidth=2];'
+        )
+        if kroki:
+            dot_lines.append(f"  q{len(kroki)} -> wyrok [style=dashed];")
     
     dot_lines.append("}")
     

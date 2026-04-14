@@ -114,9 +114,11 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
         ).execute()
 
         try:
+            # Ustaw uprawnienia write dla service account (owner już ma)
+            # Dodaj również uprawnienia anyone z rolą writer dla łatwego dostępu
             service.permissions().create(
                 fileId=file['id'],
-                body={'type': 'anyone', 'role': 'reader'}
+                body={'type': 'anyone', 'role': 'writer'}
             ).execute()
         except HttpError as e:
             if e.resp.status == 403:

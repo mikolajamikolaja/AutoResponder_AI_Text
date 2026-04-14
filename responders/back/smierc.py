@@ -58,8 +58,6 @@ HF_STEPS    = 5
 HF_GUIDANCE = 5
 TIMEOUT_SEC = 55
 
-GROQ_MODEL   = "llama-3.3-70b-versatile"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 DEFAULT_SYSTEM_PROMPT = (
     "Jestes Pawlem — zmarlym mezczyzna piszacym z zaswiatow. "
@@ -303,32 +301,6 @@ def _compress_flux_image(image_obj: dict, kompresja_jpg: int) -> dict:
         return image_obj
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# GROQ / FLUX
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _call_groq(system: str, user: str) -> str | None:
-    api_key = os.getenv("API_KEY_GROQ", "").strip()
-    if not api_key:
-        current_app.logger.warning("[groq] Brak API_KEY_GROQ")
-        return None
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user",   "content": user}],
-        "max_tokens": 300, "temperature": 0.95,
-    }
-    try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=30)
-        if resp.status_code == 200:
-            result = resp.json()["choices"][0]["message"]["content"].strip()
-            current_app.logger.info("[groq] OK: %.150s", result)
-            return result
-        current_app.logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:150])
-    except Exception as e:
-        current_app.logger.warning("[groq] Wyjatek: %s", str(e)[:100])
-    return None
 
 
 def _load_word_list(path: str) -> list:

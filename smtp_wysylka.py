@@ -260,7 +260,7 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
     Zbiera WSZYSTKIE pliki ze wszystkich sekcji response_data i zwraca
     płaską listę słowników {base64, content_type, filename}.
 
-    Obsługiwane sekcje: zwykly, biznes, scrabble, analiza, emocje,
+    Obsługiwane sekcje: zwykly, biznes, scrabble, dociekliwy, emocje,
                         obrazek, generator_pdf, smierc, nawiazanie.
 
     Top-level fields (BEZPOŚREDNIO w response_data):

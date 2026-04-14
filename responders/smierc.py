@@ -41,7 +41,6 @@ from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
 from core.config import HF_TOKEN_BLACKLIST
-from core.groq_session import get_session_id, is_groq_exhausted, mark_groq_exhausted
 
 _HF_DEAD_TOKENS: set[str] = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
 
@@ -62,9 +61,6 @@ HF_API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-lab
 HF_STEPS = 1
 HF_GUIDANCE = 1
 TIMEOUT_SEC = 55
-
-GROQ_MODEL = "llama-3.3-70b-versatile"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 DEFAULT_SYSTEM_PROMPT = (
     "Byłeś człowiekiem, teraz jesteś duszą piszacą z zaswiatow. "
@@ -322,36 +318,6 @@ def _compress_flux_image(image_obj: dict, kompresja_jpg: int) -> dict:
 # GROQ / FLUX
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _call_groq(system: str, user: str) -> str | None:
-    if is_groq_exhausted():
-        session_id = get_session_id() or "(brak)"
-        current_app.logger.warning("[groq] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq", session_id)
-        return None
-    api_key = os.getenv("API_KEY_GROQ", "").strip()
-    if not api_key:
-        current_app.logger.warning("[groq] Brak API_KEY_GROQ")
-        return None
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": user}],
-        "max_tokens": 300, "temperature": 0.7,  # Zmniejszone z 0.95
-    }
-    try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)  # Zwiększony z 30
-        if resp.status_code == 200:
-            result = resp.json()["choices"][0]["message"]["content"].strip()
-            current_app.logger.info("[groq] OK: %.150s", result)
-            return result
-        current_app.logger.warning("[groq] HTTP %s: %s", resp.status_code, resp.text[:150])
-    except requests.exceptions.Timeout:
-        current_app.logger.warning("[groq] TIMEOUT (60s)")
-    except Exception as e:
-        current_app.logger.warning("[groq] Wyjatek: %s", str(e)[:100])
-    # Jeśli Groq zawiódł, oznacz sesję jako wyczerpaną
-    mark_groq_exhausted()
-    return None
 
 
 def _load_word_list(path: str) -> list:
@@ -384,35 +350,6 @@ def _mutate_flux_prompt(prompt: str) -> tuple:
     return result, changes
 
 
-def _call_groq_flux(system: str, user: str) -> str | None:
-    if is_groq_exhausted():
-        session_id = get_session_id() or "(brak)"
-        current_app.logger.warning("[groq-flux] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq", session_id)
-        return None
-    api_key = os.getenv("API_KEY_GROQ", "").strip()
-    if not api_key:
-        current_app.logger.warning("[groq-flux] Brak API_KEY_GROQ")
-        return None
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": user}],
-        "max_tokens": 2000,
-        "temperature": 0.7,  # Zmniejszone z 0.95
-    }
-    try:
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)  # Zwiększony z 30
-        if resp.status_code == 200:
-            result = resp.json()["choices"][0]["message"]["content"].strip()
-            current_app.logger.info("[groq-flux] OK: %.150s", result)
-            return result
-        current_app.logger.warning("[groq-flux] HTTP %s: %s", resp.status_code, resp.text[:150])
-    except requests.exceptions.Timeout:
-        current_app.logger.warning("[groq-flux] TIMEOUT (60s)")
-    except Exception as e:
-        current_app.logger.warning("[groq-flux] Wyjatek: %s", str(e)[:100])
-    return None
 
 
 def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> tuple:
@@ -422,7 +359,7 @@ def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> t
         "Na podstawie tekstu generujesz wizualny opis obrazu. "
         "Wynik: jeden akapit, max 100 słów, bez nawiasów, w angielskim lub polskim."
     ))
-    prompt = _call_groq_flux(groq_system, source_text)
+    prompt = call_deepseek(groq_system, source_text, MODEL_TYLER)
     if not prompt:
         current_app.logger.warning("[flux] Groq zawiodl — probuje DeepSeek")
         from core.ai_client import call_deepseek, MODEL_TYLER
@@ -875,7 +812,7 @@ def build_smierc_section(
         wynik_tekst = call_deepseek(system_wyslannik, user_msg, MODEL_TYLER)
         if not wynik_tekst:
             current_app.logger.warning("[wyslannik] DeepSeek zawiodl — probuje Groq")
-            wynik_tekst = _call_groq(system_wyslannik, user_msg)
+            wynik_tekst = call_deepseek(system_wyslannik, user_msg, MODEL_TYLER)
 
         # 🆕 ZMIANA: Dodaj dni do HTML
         reply_text = wynik_tekst or "Pawła nie ma — reinkarnował się."
@@ -985,7 +922,7 @@ def build_smierc_section(
     # Fallback do Groq jeśli DeepSeek zawiedzie
     if not wynik:
         current_app.logger.warning("[smierc-etapy] DeepSeek zawiodl — probuje Groq")
-        wynik = _call_groq(system, user_msg)
+        wynik = call_deepseek(system, user_msg, MODEL_TYLER)
 
     # 🆕 ZMIANA: Dodaj dni do HTML
     reply_text = wynik or "To autoresponder. Chwilowo brak zasięgu w tej strefie kosmicznej."

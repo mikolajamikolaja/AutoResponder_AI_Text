@@ -55,8 +55,6 @@ HF_STEPS    = 5
 HF_GUIDANCE = 5
 TIMEOUT_SEC = 55
 
-GROQ_MODEL   = "llama-3.3-70b-versatile"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 DEFAULT_SYSTEM_PROMPT = (
     "Jestes Pawlem — zmarlym mezczyzna piszacym z zaswiatow. "

@@ -4,11 +4,11 @@ Responder emocjonalny — Tyler Durden + Sokrates.
 
 ZMIANY W TEJ WERSJI:
   1. prompt.txt → prompt.json  (czysta struktura, render programowy)
-  2. Groq PIERWSZY do generowania tekstu, DeepSeek jako fallback
+  2. DeepSeek do generowania tekstu
   3. Brak ograniczeń długości tekstu
   4. Generowanie tryptyku FLUX (3 panele Fight Club)
      - styl z zwykly_obrazek_tyler.js
-     - Groq generuje prompty dla każdego panelu, DeepSeek fallback
+     - DeepSeek generuje prompty dla każdego panelu
      - rotacja tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKEN20)
      - jeśli tokeny wyczerpane → wysyłamy tyle ile wygenerowano
   5. Każdy panel PNG jest od razu konwertowany do JPG 95% (Pillow)
@@ -36,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 from core.ai_client import call_deepseek, extract_clean_text, sanitize_model_output, MODEL_TYLER
 from core.files import read_file_base64
-from core.groq_session import get_session_id, is_groq_exhausted, mark_groq_exhausted
 from core.html_builder import build_html_reply
 
 # reportlab — budowanie PDF CV
@@ -130,8 +129,6 @@ def _register_fonts() -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────
 from core.config import (
     MAX_DLUGOSC_EMAIL,
-    GROQ_API_URL,
-    GROQ_MODEL,
     HF_API_URL,
     HF_STEPS,
     HF_GUIDANCE,
@@ -342,68 +339,6 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
     lines.append("")
 
     return "\n".join(lines)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# GROQ — główny model (szybszy), DeepSeek — fallback
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _call_groq(system: str, user: str, max_tokens: int = 6000) -> str | None:
-    """
-    Wywołuje Groq API SEKWENCYJNIE — próbuje klucze po kolei.
-    Następny klucz jeśli: 429 (rate limit), None (timeout/błąd), lub pusty string.
-    """
-    if is_groq_exhausted():
-        session_id = get_session_id() or "(brak)"
-        logger.warning("[groq] Sesja %s ma już wyczerpane klucze Groq — pomijam Groq", session_id)
-        return None
-
-    groq_keys = _get_groq_keys()
-    if not groq_keys:
-        logger.warning("[groq] Brak kluczy w env")
-        return None
-    logger.info("[groq] Odpytywanie %d kluczy SEKWENCYJNIE", len(groq_keys))
-    failed_reasons = []
-    for i, (name, key) in enumerate(groq_keys, 1):
-        try:
-            logger.debug("[groq] Klucz %d/%d: %s", i, len(groq_keys), name)
-            result = _call_groq_single(key, system, user, max_tokens)
-        except Exception as e:
-            logger.warning("[groq] Wyjątek klucz=%s: %s", name, e)
-            failed_reasons.append(f"{name}:exception")
-            continue
-        
-        if result and result != "RATE_LIMIT":
-            logger.info("[groq] ✓ Sukces klucz=%s (%d znaków) na próbie %d/%d", name, len(result), i, len(groq_keys))
-            return result
-        elif result == "RATE_LIMIT":
-            logger.warning("[groq] ⚠ Rate limit (429) klucz=%s — próbuję następny", name)
-            failed_reasons.append(f"{name}:429")
-        else:
-            logger.warning("[groq] ⚠ Błąd/timeout klucz=%s — próbuję następny", name)
-            failed_reasons.append(f"{name}:None")
-    
-    session_id = get_session_id()
-    if session_id:
-        mark_groq_exhausted(session_id)
-        logger.warning("[groq] Sesja %s — wszystkie klucze wyczerpane, zaznaczam do pominięcia w kolejnych callach", session_id)
-    logger.error("[groq] ✗ Wszystkie %d kluczy wyczerpane! Historia: %s", len(groq_keys), " → ".join(failed_reasons))
-    return None
-
-def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
-    """
-    Groq rotacja (wszystkie klucze) → DeepSeek FALLBACK.
-    Zwraca (tekst_odpowiedzi, nazwa_providera).
-    """
-    result = _call_groq(system, user, max_tokens=max_tokens)
-    if result:
-        return result, "groq"
-    logger.warning("[zwykly] Wszystkie klucze Groq wyczerpane → DeepSeek")
-    result = call_deepseek(system, user, MODEL_TYLER)
-    if result:
-        return result, "deepseek"
-    logger.error("[zwykly] Groq i DeepSeek zawiodły!")
-    return None, "none"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -618,11 +553,10 @@ def _extract_nouns_from_body(body: str) -> list:
             break
     return nouns
 
-def _extract_nouns_groq(body: str) -> dict:
+def _extract_nouns_deepseek(body: str) -> dict:
     """
-    Wysyła email do Groq SEKWENCYJNIE (klucze po kolei).
+    Wysyła email do DeepSeek SEKWENCYJNIE (klucze po kolei).
     Zwraca dict {rzecz001: 'kopalnia', ...} lub {} przy błędzie.
-    Fallback: DeepSeek.
     """
     NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
     try:
@@ -637,48 +571,8 @@ def _extract_nouns_groq(body: str) -> dict:
     max_tokens = cfg.get("max_tokens", 3000)
     temperature = cfg.get("temperature", 0.1)
     user_msg = user_prefix + (body or "")
-    model = cfg.get("model", GROQ_MODEL)
 
-    raw = None
-
-    def _single_nouns_call(key: str):
-        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=60)  # Zwiększony z 30 na 60s
-        if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        elif resp.status_code == 429:
-            return "RATE_LIMIT"
-        return None
-
-    # Groq — klucze sekwencyjnie
-    groq_keys = _get_groq_keys()
-    if groq_keys:
-        for name, key in groq_keys:
-            try:
-                result = _single_nouns_call(key)
-            except Exception as e:
-                logger.warning("[rzeczowniki] Wyjątek klucz=%s: %s", name, e)
-                continue
-            if result and result != "RATE_LIMIT":
-                logger.info("[rzeczowniki] Groq OK klucz=%s (%d znaków)", name, len(result))
-                raw = result
-                break
-            elif result == "RATE_LIMIT":
-                logger.warning("[rzeczowniki] 429 klucz=%s — próbuję następny", name)
-
-    # Fallback DeepSeek
-    if not raw:
-        logger.warning("[rzeczowniki] Groq zawiodło → DeepSeek")
-        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
 
     if not raw:
         logger.error("[rzeczowniki] Brak odpowiedzi od AI")
@@ -762,7 +656,7 @@ def _detect_gender(body: str, sender_name: str = "") -> str:
     Wykrywa płeć nadawcy na podstawie treści emaila i sender_name.
     Kolejność:
       1. Regex na końcówkach czasowników/przymiotników w body
-      2. Groq — zapytanie o płeć na podstawie body + sender_name
+      2. DeepSeek — zapytanie o płeć na podstawie body + sender_name
       3. Fallback: 'nieznana'
     Zwraca 'kobieta', 'mezczyzna' lub 'nieznana'.
     """
@@ -2505,91 +2399,7 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ROTACJA KLUCZY GROQ
-# ═══════════════════════════════════════════════════════════════════════════════
 
-def _get_groq_keys() -> list:
-    """
-    Zbiera wszystkie klucze Groq.
-    Metodologia (taka sama jak w backup/cv/test groq.py):
-    1. Czytaj zmienną GROQ_KEYS (zawiera klucze oddzielone newline)
-    2. Fallback: czytaj zmienne API_KEY_GROQ, API_KEY_GROQ_01..API_KEY_GROQ_09
-    """
-    keys = []
-    
-    # Metoda 1: Czytaj zmienną GROQ_KEYS (zawiera wszystkie klucze oddzielone \n)
-    groq_keys_str = os.getenv("GROQ_KEYS", "").strip()
-    if groq_keys_str:
-        # Parsuj linia po linię (dokładnie jak w backup/cv)
-        for i, line in enumerate(groq_keys_str.split('\n'), 1):
-            key = line.strip()
-            if not key:
-                break  # pusta linia = koniec
-            keys.append((f"GROQ_KEYS[{i}]", key))
-        if keys:
-            return keys  # Jeśli znaleźliśmy klucze, zwróć je
-    
-    # Metoda 2: Fallback na zmienne API_KEY_GROQ_XX (dla backward compatibility)
-    # Klucz bazowy
-    k = os.getenv("API_KEY_GROQ", "").strip()
-    if k:
-        keys.append(("API_KEY_GROQ", k))
-    # Klucze _01 do _09 (format Render)
-    for i in range(1, 10):
-        name = f"API_KEY_GROQ_{i:02d}"
-        k = os.getenv(name, "").strip()
-        if k:
-            keys.append((name, k))
-    # Klucze _10 do _20 na przyszłość
-    for i in range(10, 21):
-        name = f"API_KEY_GROQ_{i}"
-        k = os.getenv(name, "").strip()
-        if k:
-            keys.append((name, k))
-    
-    return keys
-
-
-def _call_groq_single(api_key: str, system: str, user: str, max_tokens: int) -> str | None:
-    """Wywołuje Groq z jednym kluczem. Zwraca tekst lub None."""
-    import time
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    timeout_sec = 60  # Dopasowane do test_groq.py (zamiast 30)
-    temperature = 0.7  # Zmniejszone z 0.9 dla stabilności
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user}
-        ],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    logger.debug("[groq-single] Timeout=%ds, temperature=%.1f, max_tokens=%d", timeout_sec, temperature, max_tokens)
-    try:
-        start = time.time()
-        resp = requests.post(GROQ_API_URL, headers=headers, json=payload, timeout=timeout_sec)
-        elapsed = time.time() - start
-        logger.info("[groq-single] HTTP %s w %.2fs", resp.status_code, elapsed)
-        if resp.status_code == 200:
-            result = resp.json()["choices"][0]["message"]["content"].strip()
-            logger.info("[groq-single] OK: %d znaków w %.2fs", len(result), elapsed)
-            return result
-        elif resp.status_code == 429:
-            logger.warning("[groq-single] RATE_LIMIT (429) — spróbuję następny klucz")
-            return "RATE_LIMIT"
-        else:
-            logger.warning("[groq-single] HTTP %s: %s", resp.status_code, resp.text[:100])
-            return None
-    except requests.exceptions.Timeout:
-        logger.warning("[groq-single] TIMEOUT po %ds", timeout_sec)
-        return None
-    except Exception as e:
-        logger.warning("[groq-single] Wyjątek: %s", str(e)[:80])
-        return None
-
-    # ═══════════════════════════════════════════════════════════════════════════════
-    # ANKIETA HTML + PDF
     # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -2614,11 +2424,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = _call_groq(system_msg, user_msg, max_tokens=4000)
-    if raw:
-        logger.info("[ankieta] Groq OK")
-    else:
-        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
 
     if not raw:
         logger.warning("[ankieta] Brak danych od AI")
@@ -2966,10 +2772,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
     )
 
-    raw = _call_groq(system_msg, user_msg, max_tokens=2500)
-
-    if not raw:
-        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
         return None
 
@@ -3161,9 +2964,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
 
-    raw = _call_groq(system_msg, user_msg, max_tokens=2000)
-    if not raw:
-        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
         logger.warning("[karta-rpg] Brak odpowiedzi od AI")
         return None
@@ -3518,10 +3319,8 @@ def _build_raport_psychiatryczny(
     context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
     context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
-    # DeepSeek PIERWSZY dla raportu, Groq fallback równolegle
+    # DeepSeek dla raportu
     raw = call_deepseek(system_msg, context, MODEL_TYLER)
-    if not raw:
-        raw = _call_groq(system_msg, context, max_tokens=3500)
 
     if not raw:
         logger.warning("[raport] Brak odpowiedzi od AI")
@@ -3792,9 +3591,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj w 'plakat'."
     )
 
-    raw = _call_groq(system_msg, user_msg, max_tokens=800)
-    if not raw:
-        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
         logger.warning("[plakat] Brak odpowiedzi od AI")
         return None
@@ -3961,7 +3758,7 @@ def _build_flow_diagram_svg(logger) -> dict | None:
         in_requiem = logger.metadata.get('in_requiem', 'nieznany')
 
         # Przygotuj dane do wizualizacji
-        groq_count = sum(1 for call in api_calls if call.get('provider') == 'groq')
+        groq_count = 0  # Groq removed
         deepseek_count = sum(1 for call in api_calls if call.get('provider') == 'deepseek')
         total_tokens = sum(call.get('tokens', 0) for call in api_calls)
 
@@ -4277,7 +4074,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     """
     from flask import current_app as flask_app
     import re
-    from responders.analiza import build_analiza_section
+    from responders.dociekliwy import build_dociekliwy_section
 
     logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2 - oszczędny Groq)")
     app_obj = flask_app._get_current_object()
@@ -4299,7 +4096,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             txt, emo = _parse_response(raw)
             return txt, emo, prov, p_data, p_str
 
-    nouns_dict = _extract_nouns_groq(body)
+    nouns_dict = _extract_nouns_deepseek(body)
     res_text, emotion_key, provider, prompt_data, user_msg = _get_ai_main()
 
     if not res_text:
@@ -4360,10 +4157,8 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     except Exception:
         pass
 
-    try:
-        plakat_svg = _build_plakat_svg(res_text, body)
-    except Exception:
-        pass
+    # Usunięto generowanie plakatu SVG - zgodnie z życzeniem użytkownika
+    plakat_svg = None
 
     try:
         flow_diagram_svg = _build_flow_diagram_svg(logger)
@@ -4392,7 +4187,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     reply_html = build_html_reply(res_text)
     analiza_docx_list = []
     try:
-        analiza_res = build_analiza_section(body, attachments or [], sender=sender_email, sender_name=sender_name)
+        analiza_res = build_dociekliwy_section(body, attachments or [], sender=sender_email, sender_name=sender_name)
         if isinstance(analiza_res, dict):
             diagram_jpg_b64 = None
             interactive_html_b64 = None

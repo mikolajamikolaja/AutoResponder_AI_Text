@@ -32,43 +32,14 @@ from .analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive
 logger = logging.getLogger(__name__)
 
 # ── KLUCZE API ────────────────────────────────────────────────────────────────
-_GROQ_KEYS = [k.strip() for k in [
-    os.getenv("API_KEY_GROQ",   ""),
-    os.getenv("API_KEY_GROQ_2", ""),
-    os.getenv("API_KEY_GROQ_3", ""),
-] if k.strip()]
 
 _DEEPSEEK_KEY = os.getenv("API_KEY_DEEPSEEK", "").strip()
 
-MAX_KROKOW = 10
+MAX_PYTANIA = 3
+MAX_RUNDY = 3
 
 
-# ── GROQ / DEEPSEEK ───────────────────────────────────────────────────────────
-
-def _groq_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str]:
-    for key_idx, key in enumerate(_GROQ_KEYS, 1):
-        try:
-            resp = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user",   "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": 0.93,
-                },
-                timeout=90,
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"].strip()
-            logger.warning("[eryk] Groq-key%d → HTTP %d", key_idx, resp.status_code)
-        except Exception as e:
-            logger.warning("[eryk] Groq error: %s", e)
-    return _deepseek_call(prompt, system, max_tokens)
-
+# ── DEEPSEEK ───────────────────────────────────────────────────────────
 
 def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str]:
     if not _DEEPSEEK_KEY:
@@ -90,13 +61,14 @@ def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional
         )
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"].strip()
-        logger.error("[eryk] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200])
+        logger.error("[dociekliwy] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200])
     except Exception as e:
-        logger.error("[eryk] DeepSeek error: %s", e)
+        logger.error("[dociekliwy] DeepSeek error: %s", e)
     return None
 
 
 def _deepseek_korekta(raw: str) -> str:
+    """DeepSeek sprawdza gramatykę całego JSON-a bez zmiany struktury."""
     """DeepSeek sprawdza gramatykę całego JSON-a bez zmiany struktury."""
     if not _DEEPSEEK_KEY:
         return raw
@@ -126,40 +98,58 @@ _SYSTEM_ERYK = (
 def _generuj_gre(body: str, sender_name: str) -> Optional[dict]:
     """
     Generuje kompletną grę jednym wywołaniem AI.
-    Zwraca dict z kluczami 'kroki' (lista) i 'wyrok' (str).
+    Zwraca dict z kluczami 'pytania' (lista drzew) i 'wyrok' (str).
     """
-    prompt = f"""Rozmówca "{sender_name or 'Anonim'}" napisał do Edka:
+    prompt = f"""Rozmówca "{sender_name or 'Anonim'}" napisał:
 "{body[:500]}"
 
-Wygeneruj kompletną grę Edka: dokładnie {MAX_KROKOW} kroków + wyrok końcowy.
+Przeanalizuj wiadomość i wyodrębnij maksymalnie {MAX_PYTANIA} pytania lub stwierdzenia, które Eryk uzna za nieprecyzyjne.
+Dla każdego z tych pytań stwórz drzewo doprecyzowań o głębokości {MAX_RUNDY} rund (każda runda ma 3 opcje A/B/C).
 
 Zasady BEZWZGLĘDNE:
-- Krok 1: pytanie wynika BEZPOŚREDNIO z treści wiadomości (konkretne słowo lub fraza)
-- Krok N+1: pytanie wynika z REAKCJI wybranej w kroku N (absurdalna logika łańcuchowa)
-- Każde pytanie z INNEJ dziedziny (filozofia, biologia, prawo, kosmologia, kulinaria, etc.)
-- Każda reakcja (A/B/C) INNA i śmieszna — nie tylko "tak/nie/może"
-- Wyrok nawiązuje do całości, musi być absurdalny i logicznie (po edkowsku) uzasadniony
-- Tylko po polsku
+1. Wyodrębnij 1-{MAX_PYTANIA} pytań/stwierdzeń z oryginalnej wiadomości. Każde musi być konkretne i wiarygodne.
+2. Dla każdego pytania stwórz drzewo z {MAX_RUNDY} rundami dopytywania.
+3. Każda runda ma 3 opcje (A/B/C) — każda opcja musi brzmieć jak pytanie, które realna osoba mogłaby zadać (wiarygodne, konkretne, nie abstrakcyjne).
+4. Każda opcja prowadzi do kolejnej rundy (opcja zawiera pole "runda2", a w nim "pytanie" i "opcje").
+5. Ostatnia runda (runda{MAX_RUNDY}) ma tylko "tekst" i "reakcję" (bez dalszych rund).
+6. Reakcje Eryka są absurdalne, biurokratyczne, ironiczne. Wyciągają błędne wnioski z wyboru.
+7. Każde pytanie z INNEJ dziedziny (filozofia, biologia, prawo, kosmologia, kulinaria, heraldyka, stomatologia, meteorologia, filologia, ekonomia, ogrodnictwo itd.)
+8. Wyrok końcowy musi być absurdalnym wnioskiem wynikającym logicznie (po erykowemu) z dokonanych wyborów we wszystkich pytaniach.
+9. Tylko po polsku.
 
 Odpowiedz WYŁĄCZNIE w JSON, zero komentarzy, zero backtick-ów:
 {{
-  "kroki": [
+  "pytania": [
     {{
-      "nr": 1,
-      "intro": "Zanim odpowiem, muszę wyjaśnić fundamentalną kwestię.",
-      "pytanie": "Co dokładnie masz na myśli przez słowo X?",
+      "id": "P1",
+      "tresc": "Co dokładnie masz na myśli mówiąc 100zł?",
       "opcje": {{
-        "A": {{"tekst": "treść opcji A", "reakcja": "Skoro wybrałeś A, to oznacza że..."}},
-        "B": {{"tekst": "treść opcji B", "reakcja": "Fascynujące. B sugeruje, że..."}},
-        "C": {{"tekst": "treść opcji C", "reakcja": "C jest odpowiedzią osoby, która..."}}
+        "A": {{
+          "tekst": "Banknot",
+          "reakcja": "Skoro wybrałeś banknot, to sugerujesz że pieniądze materialne...",
+          "runda2": {{
+            "pytanie": "A czy ten banknot jest nowy czy używany?",
+            "opcje": {{
+              "A": {{"tekst": "Nowy", "reakcja": "Nowy banknot wskazuje na brak zaufania do cyrkulacji...", "runda3": {{"pytanie": "...", "opcje": {{...}}}}}},
+              "B": {{"tekst": "Używany", "reakcja": "Używany banknot sugeruje że akceptujesz ślady poprzednich właścicieli...", "runda3": {{...}}}},
+              "C": {{"tekst": "Nie wiem", "reakcja": "Brak wiedzy o stanie banknotu demaskuje Cię jako...", "runda3": {{...}}}}
+            }}
+          }}
+        }},
+        "B": {{...}},
+        "C": {{...}}
       }}
+    }},
+    {{
+      "id": "P2",
+      "tresc": "...",
+      "opcje": {{...}}
     }}
-    // ... łącznie {MAX_KROKOW} obiektów
   ],
-  "wyrok": "Ostateczny absurdalny wyrok Eryka po {MAX_KROKOW} rundach. Zakończ podpisem: Z pozdrowieniami, Eryk."
+  "wyrok": "Ostateczny absurdalny wyrok Eryka po przejściu wszystkich drzew. Zakończ podpisem: Z pozdrowieniami, Eryk."
 }}"""
 
-    raw = _groq_call(prompt, _SYSTEM_ERYK, max_tokens=3000)
+    raw = _deepseek_call(prompt, _SYSTEM_ERYK, max_tokens=4000)
     if not raw:
         return None
 
@@ -213,34 +203,44 @@ def _repair_json(raw: str) -> Optional[str]:
 # ── FALLBACK ──────────────────────────────────────────────────────────────────
 
 def _fallback_gra() -> dict:
-    dziedziny = [
-        ("filozoficznym", "Byt czy niebyt?"),
-        ("biologicznym",  "Odruch bezwarunkowy czy warunkowy?"),
-        ("prawnym",       "Czyn umyślny czy nieumyślny?"),
-        ("kosmologicznym","Fala czy cząstka?"),
-        ("kulinarnym",    "Smak umami czy brak smaku?"),
-        ("heraldycznym",  "Lew rampant czy passant?"),
-        ("stomatologicznym","Ząb mleczny czy stały?"),
-        ("meteorologicznym","Front ciepły czy zimny?"),
-        ("filologicznym", "Metafora czy metonimia?"),
-        ("ekonomicznym",  "Popyt czy podaż?"),
-    ]
-    kroki = []
-    for i, (dz, hint) in enumerate(dziedziny, 1):
-        kroki.append({
-            "nr": i,
-            "intro": f"W sensie {dz} Twoja odpowiedź rodzi kolejne pytanie.",
-            "pytanie": f"Jak rozumiesz tę kwestię w kontekście {dz}? ({hint})",
-            "opcje": {
-                "A": {"tekst": "Pierwsza opcja", "reakcja": "Opcja A demaskuje Cię jako optymistę. To niepokojące."},
-                "B": {"tekst": "Druga opcja",    "reakcja": "Opcja B wskazuje na pesymizm. Eryk to szanuje, ale nie rozumie."},
-                "C": {"tekst": "Trzecia opcja",  "reakcja": "Opcja C jest odpowiedzią osoby, która nie przeczytała pytania."},
-            }
+    """Fallback dla drzewiastej struktury (3 pytania, każde z 3 rundami)."""
+    pytania = []
+    for i in range(1, MAX_PYTANIA + 1):
+        # Budujemy drzewo o głębokości MAX_RUNDY
+        def build_tree(rundy_pozostale: int, prefix: str = ""):
+            if rundy_pozostale == 0:
+                return None
+            opcje = {}
+            for lit in ["A", "B", "C"]:
+                tekst = f"Opcja {lit} w rundzie {MAX_RUNDY - rundy_pozostale + 1}"
+                reakcja = f"Wybrałeś {lit}. To sugeruje, że {['nie rozumiesz pytania', 'jesteś zbyt pewny siebie', 'masz ukryte motywy'][ord(lit)-65]}."
+                if rundy_pozostale > 1:
+                    opcje[lit] = {
+                        "tekst": tekst,
+                        "reakcja": reakcja,
+                        f"runda{MAX_RUNDY - rundy_pozostale + 2}": {
+                            "pytanie": f"Kolejne doprecyzowanie (runda {MAX_RUNDY - rundy_pozostale + 2})",
+                            "opcje": build_tree(rundy_pozostale - 1, prefix + lit)
+                        }
+                    }
+                else:
+                    opcje[lit] = {
+                        "tekst": tekst,
+                        "reakcja": reakcja
+                    }
+            return opcje
+        
+        opcje_tree = build_tree(MAX_RUNDY)
+        pytania.append({
+            "id": f"P{i}",
+            "tresc": f"Pytanie fallback {i}: Co masz na myśli?",
+            "opcje": opcje_tree
         })
+    
     return {
-        "kroki": kroki,
+        "pytania": pytania,
         "wyrok": (
-            "Po analizie Twoich 10 odpowiedzi stwierdzam, że Twoja pierwotna wiadomość "
+            f"Po analizie Twoich wyborów w {MAX_PYTANIA} pytaniach stwierdzam, że Twoja pierwotna wiadomość "
             "była testem Turinga przeprowadzonym na mnie bez mojej zgody. "
             "Niestety, to Ty oblałeś test — jako człowiek. "
             "Z pozdrowieniami, Eryk."
@@ -252,16 +252,15 @@ def _fallback_gra() -> dict:
 
 def _buduj_html_email_pierwsza_gra(gra: dict, sender_name: str, diagram_jpg_b64: str) -> str:
     """
-    Buduje HTML dla reply_html — pokazuje TYLKO pierwsze pytanie + diagram JPG
+    Buduje HTML dla reply_html — pokazuje TYLKO pierwsze pytanie (pierwsze drzewo) + diagram JPG
     """
-    kroki = gra.get("kroki", [])
-    if not kroki:
+    pytania = gra.get("pytania", [])
+    if not pytania:
         return "<p>Brak pytań gry.</p>"
     
-    first_krok = kroki[0]
-    intro = first_krok.get("intro", "")
-    pytanie = first_krok.get("pytanie", "")
-    opcje = first_krok.get("opcje", {})
+    pierwsze_pytanie = pytania[0]
+    tresc = pierwsze_pytanie.get("tresc", "")
+    opcje = pierwsze_pytanie.get("opcje", {})
     sn = sender_name or "Użytkowniku"
     
     css = """<style>
@@ -289,10 +288,12 @@ def _buduj_html_email_pierwsza_gra(gra: dict, sender_name: str, diagram_jpg_b64:
             tekst = opcje[lit].get("tekst", lit)
             opcje_html += f"<a href='#' class='olink'><span class='lit'>{lit})</span> {tekst}</a>\n"
     
+    # Oblicz całkowitą liczbę ścieżek: 3 pytania × 3 rundy × 3 opcje = 3^4? W rzeczywistości: każde pytanie ma 3^3 = 27 ścieżek, 3 pytania = 81 ścieżek
+    total_sciezek = len(pytania) * (3 ** MAX_RUNDY)
     diagram_html = ""
     if diagram_jpg_b64:
         diagram_html = f"""<div class="diagram-wrap">
-<p><strong>Mapa całej gry:</strong> {len(kroki)} pytań × 3 opcje = {len(kroki)*3} ścieżek decyzyjnych. 
+<p><strong>Mapa całej gry:</strong> {len(pytania)} pytań × {MAX_RUNDY} rund × 3 opcje = do {total_sciezek} ścieżek decyzyjnych. 
 Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_interaktywny.html</strong></p>
 <img src="data:image/jpeg;base64,{diagram_jpg_b64}" alt="Diagram struktury gry Edka" class="diagram-img" />
 </div>"""
@@ -304,13 +305,13 @@ Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_
     <div class="sub">System Zaawansowanego Doprecyzowywania · Sesja: {sn}</div>
   </div>
   <div class="body">
-    <div class="knr">Pytanie 1 z {len(kroki)}</div>
-    <div class="intro">{intro}</div>
-    <div class="pyt">{pytanie}</div>
+    <div class="knr">Pytanie 1 z {len(pytania)} (runda 1)</div>
+    <div class="intro">Eryk potrzebuje doprecyzowania:</div>
+    <div class="pyt">{tresc}</div>
     <div class="opc">{opcje_html}</div>
     {diagram_html}
   </div>
-  <div class="ft">Eryk Responder™ v2.0 · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
+  <div class="ft">Eryk Responder™ v3.0 (drzewiasty) · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
 </div>"""
     
     return html
@@ -321,7 +322,8 @@ Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_
 def _buduj_gra_html(gra: dict, sender_name: str) -> str:
     gra_json  = json.dumps(gra, ensure_ascii=False)
     sn        = sender_name or "Anonim"
-    max_k     = MAX_KROKOW
+    max_pytania = MAX_PYTANIA
+    max_rundy = MAX_RUNDY
 
     return f"""<!DOCTYPE html>
 <html lang="pl">
@@ -399,62 +401,121 @@ footer{{padding:13px 32px;font-size:10px;color:var(--mid);letter-spacing:2px;tex
     <div class="wt"  id="wt"></div>
     <div class="prot" id="prot"></div>
   </div>
-  <footer>Eryk Responder™ v1.0 &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</footer>
+  <footer>Eryk Responder™ v3.0 (drzewiasty) &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</footer>
 </div>
 <script>
-const G={gra_json};
-const MAX={max_k};
-let krok=0, hist=[];
+const G = {{gra_json}};
+const MAX_PYTANIA = {{max_pytania}};
+const MAX_RUNDY = {{max_rundy}};
+let currentPytanieIndex = 0;
+let currentRound = 1;
+let currentPath = {{}}; // ścieżka: {{pytanieIndex: {{round: choice, ...}}}}
+let hist = [];
+
+function getCurrentNode() {{
+    if (currentPytanieIndex >= G.pytania.length) return null;
+    let node = G.pytania[currentPytanieIndex];
+    // przejdź po ścieżce dla tego pytania
+    let path = currentPath[currentPytanieIndex];
+    if (path) {{
+        for (let round = 1; round <= currentRound - 1; round++) {{
+            let choice = path[round];
+            if (choice && node.opcje && node.opcje[choice]) {{
+                node = node.opcje[choice];
+                if (node['runda' + (round + 1)]) {{
+                    node = node['runda' + (round + 1)];
+                }}
+            }}
+        }}
+    }}
+    return node;
+}}
 
 function render(){{
-  const d=G.kroki[krok];
-  document.getElementById('knr').textContent=`Pytanie ${{krok+1}} z ${{MAX}}`;
-  document.getElementById('pf').style.width=`${{(krok/MAX)*100}}%`;
-  ['intro','pyt'].forEach(id=>{{
-    const el=document.getElementById(id);
-    el.style.animation='none'; el.offsetHeight; el.style.animation='';
-  }});
-  document.getElementById('intro').textContent=d.intro;
-  document.getElementById('pyt').textContent=d.pytanie;
-  document.getElementById('rbox').style.display='none';
-  document.getElementById('bdalej').style.display='none';
-  const op=document.getElementById('opcje');
-  op.innerHTML='';
-  Object.entries(d.opcje).forEach(([lit,val],idx)=>{{
-    const b=document.createElement('button');
-    b.className='bopc';
-    b.style.animationDelay=`${{0.34+idx*0.1}}s`;
-    b.innerHTML=`<span class="lit">${{lit}})</span>${{val.tekst}}`;
-    b.onclick=()=>wybierz(lit,val.tekst,val.reakcja);
-    op.appendChild(b);
-  }});
+    const node = getCurrentNode();
+    if (!node) {{
+        wyrok();
+        return;
+    }}
+    const pytanie = G.pytania[currentPytanieIndex];
+    const pytanieNr = currentPytanieIndex + 1;
+    const totalPytania = G.pytania.length;
+    const totalProgress = ((currentPytanieIndex * MAX_RUNDY + (currentRound - 1)) / (totalPytania * MAX_RUNDY)) * 100;
+    
+    document.getElementById('knr').textContent = `Pytanie ${{pytanieNr}} z ${{totalPytania}} · Runda ${{currentRound}} z ${{MAX_RUNDY}}`;
+    document.getElementById('pf').style.width = `${{totalProgress}}%`;
+    ['intro','pyt'].forEach(id=>{{
+        const el=document.getElementById(id);
+        el.style.animation='none'; el.offsetHeight; el.style.animation='';
+    }});
+    document.getElementById('intro').textContent = 'Eryk potrzebuje doprecyzowania:';
+    document.getElementById('pyt').textContent = node.pytanie || node.tresc || '';
+    document.getElementById('rbox').style.display='none';
+    document.getElementById('bdalej').style.display='none';
+    const op=document.getElementById('opcje');
+    op.innerHTML='';
+    
+    const opcje = node.opcje || {{}};
+    Object.entries(opcje).forEach(([lit,val],idx)=>{{
+        const b=document.createElement('button');
+        b.className='bopc';
+        b.style.animationDelay=`${{0.34+idx*0.1}}s`;
+        b.innerHTML=`<span class="lit">${{lit}})</span>${{val.tekst}}`;
+        b.onclick=()=>wybierz(lit,val.tekst,val.reakcja);
+        op.appendChild(b);
+    }});
 }}
 
 function wybierz(lit,tekst,reakcja){{
-  hist.push(`Krok ${{krok+1}}: ${{lit}}) ${{tekst}}`);
-  document.querySelectorAll('.bopc').forEach(b=>b.disabled=true);
-  const rb=document.getElementById('rbox');
-  rb.textContent=reakcja; rb.style.display='block';
-  rb.style.animation='none'; rb.offsetHeight; rb.style.animation='';
-  const bd=document.getElementById('bdalej');
-  bd.style.display='inline-block';
-  bd.textContent=krok+1>=MAX?'⚖ Poznaj wyrok Edka':'→ Dalej';
+    if (!currentPath[currentPytanieIndex]) currentPath[currentPytanieIndex] = {{}};
+    currentPath[currentPytanieIndex][currentRound] = lit;
+    hist.push(`Pytanie ${{currentPytanieIndex+1}}, runda ${{currentRound}}: ${{lit}}) ${{tekst}}`);
+    document.querySelectorAll('.bopc').forEach(b=>b.disabled=true);
+    const rb=document.getElementById('rbox');
+    rb.textContent=reakcja; rb.style.display='block';
+    rb.style.animation='none'; rb.offsetHeight; rb.style.animation='';
+    const bd=document.getElementById('bdalej');
+    bd.style.display='inline-block';
+    // Sprawdź czy to ostatnia runda w tym pytaniu
+    const node = getCurrentNode();
+    const opcje = node.opcje || {{}};
+    const wybrana = opcje[lit];
+    const maDalej = wybrana && wybrana['runda' + (currentRound + 1)];
+    bd.textContent = maDalej ? '→ Następna runda' : 
+                     (currentPytanieIndex + 1 < G.pytania.length) ? '→ Następne pytanie' : '⚖ Poznaj wyrok Eryka';
 }}
 
 function dalej(){{
-  krok++;
-  if(krok>=MAX){{wyrok();return;}}
-  render();
+    const node = getCurrentNode();
+    const opcje = node.opcje || {{}};
+    const wybranaLit = currentPath[currentPytanieIndex]?.[currentRound];
+    const wybrana = opcje[wybranaLit];
+    const maDalej = wybrana && wybrana['runda' + (currentRound + 1)];
+    
+    if (maDalej) {{
+        currentRound++;
+    }} else {{
+        // przejdź do następnego pytania
+        currentPytanieIndex++;
+        currentRound = 1;
+    }}
+    
+    if (currentPytanieIndex >= G.pytania.length) {{
+        wyrok();
+        return;
+    }}
+    render();
 }}
 
 function wyrok(){{
-  document.getElementById('ekg').style.display='none';
-  document.getElementById('ekw').style.display='block';
-  document.getElementById('pf').style.width='100%';
-  document.getElementById('wt').innerHTML=G.wyrok.replace(/\\n/g,'<br>');
-  document.getElementById('prot').innerHTML=
-    'Protokół wyborów:<br>'+hist.map(h=>`· ${{h}}`).join('<br>')+
-    '<br><br>Korespondent uznany za: NIEJASNY · Sesja zamknięta.';
+    document.getElementById('ekg').style.display='none';
+    document.getElementById('ekw').style.display='block';
+    document.getElementById('pf').style.width='100%';
+    document.getElementById('wt').innerHTML = G.wyrok.replace(/\\n/g,'<br>');
+    const protHist = hist.map(h=>`· ${{h}}`).join('<br>');
+    document.getElementById('prot').innerHTML =
+        'Protokół wyborów:<br>' + protHist +
+        '<br><br>Korespondent uznany za: NIEJASNY · Sesja zamknięta.';
 }}
 
 render();
@@ -465,7 +526,7 @@ render();
 
 # ── GŁÓWNA FUNKCJA ────────────────────────────────────────────────────────────
 
-def build_analiza_section(body: str,
+def build_dociekliwy_section(body: str,
                            attachments: list = None,
                            sender: str = "",
                            sender_name: str = "",
@@ -496,23 +557,11 @@ def build_analiza_section(body: str,
 
     # ── Generuj całą grę jednym wywołaniem AI ─────────────────────────────────
     gra_data = _generuj_gre(body, sn)
-    if not gra_data or not isinstance(gra_data.get("kroki"), list) or not gra_data["kroki"]:
+    # Nowa struktura: "pytania" zamiast "kroki"
+    if not gra_data or not isinstance(gra_data.get("pytania"), list) or not gra_data["pytania"]:
         logger.warning("[edek] Brak danych z AI — fallback")
         gra_data = _fallback_gra()
-
-    # Uzupełnij do MAX_KROKOW jeśli AI dało mniej
-    while len(gra_data["kroki"]) < MAX_KROKOW:
-        n = len(gra_data["kroki"]) + 1
-        gra_data["kroki"].append({
-            "nr": n,
-            "intro": f"Pytanie {n} wynika z dogłębnej analizy Twoich poprzednich wyborów.",
-            "pytanie": "Czy jesteś pewien, że wszystkie Twoje poprzednie odpowiedzi były przemyślane?",
-            "opcje": {
-                "A": {"tekst": "Tak, podtrzymuję każdą", "reakcja": "Upór jest cechą mułów i filozofów. Edek zalicza Cię do drugiej grupy — warunkowo."},
-                "B": {"tekst": "Wycofuję niektóre",      "reakcja": "Które? To wymaga osobnej serii pytań doprecyzowujących, którą Edek wyśle za tydzień."},
-                "C": {"tekst": "Nie rozumiem pytania",   "reakcja": "To zrozumiałe. Pytanie było skierowane do kogoś bardziej przygotowanego."},
-            }
-        })
+    # W fallback mamy już strukturę drzewiastą, nie trzeba uzupełniać
 
     # ── GENERUJ DIAGRAMY ──────────────────────────────────────────────────────
     # JPG diagram (1024x1024) — z oddali, pokazuje całą strukturę
@@ -534,7 +583,7 @@ def build_analiza_section(body: str,
     gra_html_str = _buduj_gra_html(gra_data, sn)
     gra_html_b64 = base64.b64encode(gra_html_str.encode("utf-8")).decode("ascii")
 
-    logger.info("[eryk] Wygenerowano grę: %d kroków | sender=%s", len(gra_data["kroki"]), sender or "?")
+    logger.info("[eryk] Wygenerowano grę: %d pytań | sender=%s", len(gra_data.get("pytania", [])), sender or "?")
 
     return {
         "reply_html": reply_html,

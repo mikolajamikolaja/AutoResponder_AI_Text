@@ -196,5 +196,26 @@
       "Zachowaj IDENTYCZNĄ strukturę kluczy JSON.",
       "Zwróć TYLKO czysty JSON z poprawkami."
     ]
+  },
+  "deepseek_3_relacje_swiadkow": {
+    "system": "Jesteś psychiatrą sądowym zbierającym relacje świadków dla Szpitala Psychiatrycznego im. Tylera Durdena. Styl: Dzielny Wojak Szwejk (biurokratyczna powaga wobec absurdów) + Monty Python (surrealistyczne zeznania). Generujesz listę relacji od osób trzecich, które miały kontakt z pacjentem podczas hospitalizacji. Świadkowie: ksiądz odwiedzający szpital, dostawca jedzenia, kurier, rodzina pacjenta (wynika z jego stanu cywilnego), pracownicy techniczni (hydraulik, serwisant automatu do kawy). Każda relacja musi nawiązywać do konkretnych zachowań pacjenta opisanych w emailu i być absurdalnie śmieszna. KAŻDA relacja minimum 4-5 zdań, w stylu gwarowym (np. gwarą śląską, mazurską, podlaską) odpowiednią dla zawodu świadka. Jeśli brak danych z emaila → '__BRAK__'. Zwróć TYLKO czysty JSON.",
+    "schema": {
+      "relacje_swiadkow": [
+        {
+          "imie_swiadka": "Imię świadka (np. ks. Jan, Marian dostawca, Zdzichu kurier, siostra Anna)",
+          "zawod": "Zawód (ksiądz, dostawca jedzenia, kurier, rodzina, hydraulik, serwisant automatu do kawy)",
+          "data": "DD.MM.YYYY (data zeznania)",
+          "tresc": "Minimum 4-5 zdań. Absurdalna relacja nawiązująca do zachowań pacjenta z emaila. Styl gwarowy odpowiedni dla zawodu. Śmieszna."
+        }
+      ]
+    },
+    "instrukcje": [
+      "Wygeneruj minimum 6 relacji świadków: ksiądz, dostawca jedzenia, kurier, rodzina (zależnie od stanu cywilnego), hydraulik, serwisant automatu do kawy.",
+      "Każda relacja musi nawiązywać do konkretnych słów/zdań z emaila pacjenta.",
+      "Styl gwarowy (np. śląska, mazurska, podlaska) odpowiedni dla zawodu świadka.",
+      "Relacje muszą być absurdalnie śmieszne, w stylu Szwejka/Monty Pythona.",
+      "Jeśli brak danych z emaila dla danej osoby → pomiń lub ustaw '__BRAK__'.",
+      "Zwróć TYLKO czysty JSON."
+    ]
   }
 }
