@@ -40,7 +40,7 @@ from core.logging_reporter import init_logger, get_logger
 from responders.zwykly        import build_zwykly_section
 from responders.biznes        import build_biznes_section
 from responders.scrabble      import build_scrabble_section
-from responders.analiza       import build_analiza_section
+from responders.dociekliwy    import build_dociekliwy_section as build_analiza_section
 from responders.emocje        import build_emocje_section
 from responders.nawiazanie    import build_nawiazanie_section
 from responders.gif_maker     import make_gif
