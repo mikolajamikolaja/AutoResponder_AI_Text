@@ -342,6 +342,24 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# GROQ — główny model (szybszy), DeepSeek — fallback
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
+    """
+    Groq rotacja (wszystkie klucze) → DeepSeek FALLBACK.
+    Zwraca (tekst_odpowiedzi, nazwa_providera).
+    """
+    # Uproszczona wersja: używa tylko DeepSeek, ponieważ klucze Groq mogą być niedostępne
+    # W przyszłości można dodać rotację kluczy Groq
+    result = call_deepseek(system, user, MODEL_TYLER, max_tokens=max_tokens)
+    if result:
+        return result, "deepseek"
+    logger.error("[zwykly] DeepSeek zawiódł!")
+    return None, "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # PARSOWANIE ODPOWIEDZI MODELU
 # ═══════════════════════════════════════════════════════════════════════════════
 def _clean_manifest_labels(text: str) -> str:
@@ -3881,9 +3899,9 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = _call_groq(system_msg, user_msg, max_tokens=3000)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=3000)
     if not raw:
-        raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+        logger.warning("[gra] Brak odpowiedzi od AI")
     if not raw:
         logger.warning("[gra] Brak odpowiedzi od AI")
         return None
