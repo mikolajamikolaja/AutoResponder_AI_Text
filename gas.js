@@ -627,7 +627,7 @@ function _appendPrzeplywSheetRow(row) {
     
     // Dodaj nagłówki jeśli ich brakuje
     if (needsHeaders) {
-      sheet.insertSheet(sheet.getName() + "_old", 0);
+      // Wyczyść arkusz i dodaj nagłówki
       sheet.clearContents();
       sheet.appendRow(headers);
       console.log("[Flow] Dodano nagłówki do arkusza");
