@@ -492,6 +492,21 @@ def webhook():
     subject = data.get("subject", "")
     logger.log_input(sender, subject, body, sender_name)
 
+    # ── WYJĄTEK: Zablokuj wysyłkę jeśli sender to ADMIN_EMAIL (przerwanie pętli) ─
+    admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    if admin_email and sender.strip().lower() == admin_email:
+        logger.log_decision("admin_email_block", f"sender == ADMIN_EMAIL ({sender})", True)
+        flask_app.logger.warning(
+            "[AUTORESPONDER] 🔒 WYSYŁKA ZABLOKOWANA: Wiadomość od ADMIN_EMAIL (%s) — przerwanie pętli", 
+            sender
+        )
+        return jsonify({
+            "status": "blocked",
+            "reason": "sender_is_admin_email",
+            "message": "Wysyłka wiadomości do ADMIN_EMAIL jest zablokowana (ochrona przed pętlą)",
+            "sender": sender
+        }), 200
+
     # ── Pola nadawcy i historia ───────────────────────────────────────────────
     previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None

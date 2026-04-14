@@ -182,6 +182,15 @@ def wyslij_odpowiedz(
         logger.error("[gmail] Brak SMTP_USER.")
         return False
 
+    # ── WYJĄTEK: Zablokuj wysyłkę do ADMIN_EMAIL (ochrona przed pętlą) ─────
+    admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+    if admin_email and to_email.strip().lower() == admin_email:
+        logger.warning(
+            "[gmail] 🔒 BLOKADA WYSYŁKI: Nie wysyłam do ADMIN_EMAIL (%s) — ochrona przed pętlą",
+            to_email
+        )
+        return False
+
     # ── Buduj wiadomość MIME ──────────────────────────────────────────────────
     msg = MIMEMultipart("mixed")
     msg["From"]     = formataddr((SMTP_FROM_NAME, SMTP_USER))

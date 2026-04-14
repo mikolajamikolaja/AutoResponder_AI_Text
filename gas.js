@@ -706,6 +706,12 @@ function __AAA_driveFlush() {
 // ════════════════════════════════════════════════════════════════════════════
 
 function executeMailSend(data, recipient, subject, msg, senderName) {
+  if (!data) { console.warn("Brak danych dla " + recipient); return; }
+  var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
+    console.log("[zwykly] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    return;
+  }
   var inlineImages = {};
   var attachments  = [];
   var attachedNames = {};
@@ -869,6 +875,11 @@ function sectionWithLogs(sectionData, rootJson) {
 
 function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych generator_pdf dla " + recipient); return; }
+  var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
+    console.log("[generator_pdf] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    return;
+  }
   var attachments = [];
   var attachedNames = {};
   if (data.pdf && data.pdf.base64) {
@@ -890,6 +901,11 @@ function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
 
 function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
   if (!data) { console.warn("Brak danych smierc dla " + recipient); return; }
+  var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
+    console.log("[smierc] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    return;
+  }
   var attachments  = [];
   var inlineImages = {};
   var imagesHtml   = "";
@@ -949,6 +965,11 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
 }
 
 function executeScrabbleMailSend(data, recipient, subject, msg) {
+  var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
+    console.log("[scrabble] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    return;
+  }
   var inlineImages = {};
   var attachments  = [];
   var attachedNames = {};
@@ -975,6 +996,11 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
 
 function executeAnalizaMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych analizy dla " + recipient); return; }
+  var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
+    console.log("[analiza] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    return;
+  }
   var attachments = [];
   var attachedNames = {};
 
@@ -1011,6 +1037,11 @@ function executeAnalizaMailSend(data, recipient, subject, msg) {
 
 function executeEmocjeMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych emocji dla " + recipient); return; }
+  var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
+    console.log("[emocje] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    return;
+  }
   var attachments = [];
   var attachedNames = {};
   (data.images || []).forEach(function(img, i) {
@@ -1059,9 +1090,14 @@ function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
 
 function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
   if (!data || !data.has_history || !data.reply_html) return;
+  var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
+    console.log("[nawiazanie] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    return;
+  }
   var attachments = [];
   var attachedNames = {};
-  attachLogFiles(data, attachments, attachedNames);
+  // nawiazanie: już ma walidację powyżej
   try {
     msg.reply("", { htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder", attachments: attachments });
     console.log("Wysłano nawiązanie -> " + recipient);
