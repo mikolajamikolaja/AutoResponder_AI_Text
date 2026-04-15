@@ -75,7 +75,8 @@ def extract_clean_text(text: str) -> str:
 
 
 def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
-                  timeout: int = 35, max_retries: int = 1, retry_delay: float = 2.0):
+                  timeout: int = 35, max_retries: int = 1, 
+                  retry_delay: float = 2.0, max_tokens: int = 3000):
     """
     Wywołanie modelu przez API DeepSeek
     Zwraca czysty tekst lub None przy błędzie.
@@ -100,7 +101,7 @@ def call_deepseek(system_prompt: str, user_msg: str, model_name: str,
             {"role": "user",   "content": user_msg},
         ],
         "temperature": 0.0,
-        "max_tokens":  3000,
+        "max_tokens":  max_tokens,
     }
 
     for attempt in range(1, max_retries + 1):
