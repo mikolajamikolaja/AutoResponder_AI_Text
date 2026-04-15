@@ -30,7 +30,7 @@ import io
 import json
 import re
 import traceback
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, current_app
 import requests
 
 from drive_utils import upload_file_to_drive, update_sheet_with_data, save_to_history_sheet
@@ -156,10 +156,6 @@ def _build_log_svg_content(logger) -> str:
     decisions = [e for e in entries if e['type'] == 'DECISION']
     
     # Zlicz API calls
-    groq_all = [e for e in api_calls if e['data'].get('api') == 'groq']
-    groq_success = sum(1 for e in groq_all if e['data'].get('success'))
-    groq_fail = len(groq_all) - groq_success
-    
     deepseek_all = [e for e in api_calls if e['data'].get('api') == 'deepseek']
     deepseek_success = sum(1 for e in deepseek_all if e['data'].get('success'))
     deepseek_fail = len(deepseek_all) - deepseek_success
@@ -237,16 +233,12 @@ def _build_log_svg_content(logger) -> str:
     
     # SEKCJA 3: STATYSTYKA API
     svg += f'''  <!-- SEKCJA 3: API CALLS STATYSTYKA -->
-  <rect x="20" y="{y_pos}" width="1160" height="130" class="{'success' if (groq_success > 0 or deepseek_success > 0) else 'error'}"/>
+  <rect x="20" y="{y_pos}" width="1160" height="130" class="{'success' if deepseek_success > 0 else 'error'}"/>
   <text x="30" y="{y_pos+20}" class="title">⚙️ API CALLS — PRÓBY vs SKUTECZNE</text>
-  <rect x="30" y="{y_pos+35}" width="540" height="80" fill="rgba(0,0,0,0.03)" stroke="none"/>
-  <text x="40" y="{y_pos+50}" class="metric">GROQ PRÓBY: {len(groq_all)}</text>
-  <text x="40" y="{y_pos+68}" class="metric">GROQ SKUTECZNE: {groq_success}</text>
-  <text x="40" y="{y_pos+86}" class="metric">GROQ NIEUDANE: {groq_fail}</text>
-  <rect x="590" y="{y_pos+35}" width="590" height="80" fill="rgba(0,0,0,0.03)" stroke="none"/>
-  <text x="600" y="{y_pos+50}" class="metric">DEEPSEEK PRÓBY: {len(deepseek_all)}</text>
-  <text x="600" y="{y_pos+68}" class="metric">DEEPSEEK SKUTECZNE: {deepseek_success}</text>
-  <text x="600" y="{y_pos+86}" class="metric">DEEPSEEK NIEUDANE: {deepseek_fail}</text>
+  <rect x="30" y="{y_pos+35}" width="1140" height="80" fill="rgba(0,0,0,0.03)" stroke="none"/>
+  <text x="40" y="{y_pos+50}" class="metric">DEEPSEEK PRÓBY: {len(deepseek_all)}</text>
+  <text x="40" y="{y_pos+68}" class="metric">DEEPSEEK SKUTECZNE: {deepseek_success}</text>
+  <text x="40" y="{y_pos+86}" class="metric">DEEPSEEK NIEUDANE: {deepseek_fail}</text>
 '''
     
     y_pos += 160
@@ -295,10 +287,6 @@ def _build_log_txt_content(logger, response_data) -> str:
     """
     # API Calls — liczenie prób i skutecznych
     api_calls = [e for e in logger.entries if e['type'] == 'API_CALL']
-    groq_calls = [e for e in api_calls if e['data'].get('api') == 'groq']
-    groq_success = sum(1 for e in groq_calls if e['data'].get('success'))
-    groq_total = len(groq_calls)
-    
     deepseek_calls = [e for e in api_calls if e['data'].get('api') == 'deepseek']
     deepseek_success = sum(1 for e in deepseek_calls if e['data'].get('success'))
     deepseek_total = len(deepseek_calls)
@@ -355,16 +343,8 @@ def _build_log_txt_content(logger, response_data) -> str:
     lines.append("")
     
     lines.append("1. STATYSTYKA API CALLS — PRÓBY vs SKUTECZNE")
-    groq_success = sum(1 for e in groq_calls if e['data'].get('success'))
     deepseek_success = sum(1 for e in deepseek_calls if e['data'].get('success'))
-    groq_total = len(groq_calls)
     deepseek_total = len(deepseek_calls)
-    
-    if groq_total > 0:
-        groq_accuracy = (groq_success / groq_total * 100)
-        lines.append(f"- Groq: {groq_total} PRÓB | {groq_success} SKUTECZNYCH (dokładność: {groq_accuracy:.1f}%)")
-    else:
-        lines.append(f"- Groq: 0 prób")
     
     if deepseek_total > 0:
         deepseek_accuracy = (deepseek_success / deepseek_total * 100)
@@ -455,8 +435,6 @@ def _build_log_txt_content(logger, response_data) -> str:
     else:
         lines.append(f"- Status: ✗ ZŁY — Znaczne problemy ({sections_rate:.0f}% sekcji pomyślnych)")
     
-    if groq_total > 0:
-        lines.append(f"- Groq: {(groq_success/groq_total*100):.0f}% odpowiedzi było skutecznych")
     if deepseek_total > 0:
         lines.append(f"- DeepSeek: {(deepseek_success/deepseek_total*100):.0f}% odpowiedzi było skutecznych")
     if keywords_used:
@@ -496,7 +474,7 @@ def webhook():
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     if admin_email and sender.strip().lower() == admin_email:
         logger.log_decision("admin_email_block", f"sender == ADMIN_EMAIL ({sender})", True)
-        flask_app.logger.warning(
+        current_app.logger.warning(
             "[AUTORESPONDER] 🔒 WYSYŁKA ZABLOKOWANA: Wiadomość od ADMIN_EMAIL (%s) — przerwanie pętli", 
             sender
         )
@@ -929,6 +907,4 @@ def oauth_callback():
 if __name__ == "__main__":
     if not os.getenv("API_KEY_DEEPSEEK"):
         app.logger.warning("API_KEY_DEEPSEEK nie ustawiony.")
-    if not os.getenv("API_KEY_GROQ"):
-        app.logger.warning("API_KEY_GROQ nie ustawiony.")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))

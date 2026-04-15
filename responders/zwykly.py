@@ -342,7 +342,7 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GROQ — główny model (szybszy), DeepSeek — fallback
+# DeepSeek — główny model
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
@@ -3777,7 +3777,6 @@ def _build_flow_diagram_svg(exec_logger) -> dict | None:
         in_requiem = metadata.get('in_requiem', 'nieznany')
 
         # Przygotuj dane do wizualizacji
-        groq_count = 0  # Groq removed
         deepseek_count = sum(1 for call in api_calls if call.get('provider') == 'deepseek')
         total_tokens = sum(call.get('tokens', 0) for call in api_calls)
 
@@ -3805,11 +3804,9 @@ def _build_flow_diagram_svg(exec_logger) -> dict | None:
   <rect x="220" y="80" width="140" height="100" fill="#2196F3" rx="10"/>
   <text x="290" y="110" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
         fill="#ffffff" text-anchor="middle">API CALLS</text>
-  <text x="290" y="130" font-family="Arial, sans-serif" font-size="12"
-        fill="#ffffff" text-anchor="middle">Groq: {groq_count}</text>
-  <text x="290" y="145" font-family="Arial, sans-serif" font-size="12"
+  <text x="290" y="135" font-family="Arial, sans-serif" font-size="12"
         fill="#ffffff" text-anchor="middle">DeepSeek: {deepseek_count}</text>
-  <text x="290" y="160" font-family="Arial, sans-serif" font-size="12"
+  <text x="290" y="155" font-family="Arial, sans-serif" font-size="12"
         fill="#ffffff" text-anchor="middle">Tokens: {total_tokens}</text>
 
   <!-- Strzałka 2 -->
@@ -4131,29 +4128,13 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars, test_mode=test_mode)
             return imgs
 
-    def task_emotka():
-        with app_obj.app_context():
-            # _generate_icon_flux nie używa już Groq — zwraca plik lokalny
-            return _generate_icon_flux(body, emotion_key) or read_file_base64(os.path.join(EMOTKI_DIR, f"{emotion_key}.png"))
-
     try:
         triptych_images = task_tryptyk()
     except Exception:
         triptych_images = []
 
-    try:
-        png_b64 = task_emotka()
-    except Exception:
-        png_b64 = None
-
-    # Emotyka została usunięta z odpowiedzi
+    # Emotyka usunięta z odpowiedzi
     png_b64 = None
-
-    try:
-        # CV PDF zostało usunięte z odpowiedzi
-        pass
-    except Exception:
-        cv_data = None
 
     # ── DEADLINE dla tasków pobocznych ────────────────────────────────────────
     # Render ma limit ~10 min. Każdy poniższy task to osobny call DeepSeek.

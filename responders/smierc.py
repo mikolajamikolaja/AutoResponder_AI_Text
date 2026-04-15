@@ -375,7 +375,7 @@ def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> t
     if changes:
         current_app.logger.info("[flux] Mutacje: %s", ", ".join(changes))
 
-    provider = "groq" if groq_system_override == "" else "custom"
+    provider = "deepseek" if groq_system_override == "" else "custom"
     return mutated_prompt, changes, provider, prompt
 
 
@@ -645,9 +645,9 @@ def _build_debug_txt(
         lines.append("(brak tekstu wejściowego)")
     lines.append("")
 
-    # ═══ [2] SYSTEM PROMPT DLA GROQ ═══
+    # ═══ [2] SYSTEM PROMPT DLA DEEPSEEK ═══
     lines.append("=" * 88)
-    lines.append("[2] SYSTEM PROMPT DLA GROQ")
+    lines.append("[2] SYSTEM PROMPT DLA DEEPSEEK")
     lines.append("=" * 88)
     if system_prompt:
         lines.append(system_prompt)
@@ -655,15 +655,15 @@ def _build_debug_txt(
         lines.append("(brak system promptu)")
     lines.append("")
 
-    # ═══ [3] ODPOWIEDŹ OD GROQ ═══
+    # ═══ [3] ODPOWIEDŹ OD DEEPSEEK ═══
     lines.append("=" * 88)
-    lines.append("[3] ODPOWIEDŹ OD GROQ")
+    lines.append("[3] ODPOWIEDŹ OD DEEPSEEK")
     lines.append("=" * 88)
     if groq_response:
-        lines.append(f"Groq odpowiedział ({len(groq_response)} znaków):")
+        lines.append(f"DeepSeek odpowiedział ({len(groq_response)} znaków):")
         lines.append(groq_response)
     else:
-        lines.append("(brak odpowiedzi od Groq)")
+        lines.append("(brak odpowiedzi od DeepSeek)")
     lines.append("")
 
     # ═══ [4] MUTACJA SŁÓW ZAKAZANYCH ═══
@@ -684,8 +684,8 @@ def _build_debug_txt(
     lines.append("[5] FINALNA ZAWARTOŚĆ WYSŁANA DO FLUX")
     lines.append("=" * 88)
     lines.append(f"FLUX Provider: {flux_provider.upper()}")
-    lines.append(f"FLUX Model: FLUX.1-schnell")
-    lines.append(f"Max tokens: bez limitu")
+    lines.append("FLUX Model: FLUX.1-schnell")
+    lines.append("Max tokens: bez limitu")
     lines.append("")
     lines.append("--- PROMPT PRZED MUTACJĄ ---")
     lines.append(flux_prompt_raw or "(brak)")
