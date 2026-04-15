@@ -3766,14 +3766,15 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
 # DIAGRAM PRZEPŁYWU SVG
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _build_flow_diagram_svg(logger) -> dict | None:
+def _build_flow_diagram_svg(exec_logger) -> dict | None:
     """Generuje diagram przepływu pokazujący INPUT → API CALLS → SECTIONS."""
     try:
-        # Pobierz dane z logger metadata
-        api_calls = logger.metadata.get('api_calls', [])
-        sections_completed = logger.metadata.get('sections_completed', [])
-        in_history = logger.metadata.get('in_history', 'nieznany')
-        in_requiem = logger.metadata.get('in_requiem', 'nieznany')
+        # Pobierz dane z exec_logger metadata (ExecutionLogger, nie logging.Logger)
+        metadata = getattr(exec_logger, 'metadata', {}) or {}
+        api_calls = metadata.get('api_calls', [])
+        sections_completed = metadata.get('sections_completed', [])
+        in_history = metadata.get('in_history', 'nieznany')
+        in_requiem = metadata.get('in_requiem', 'nieznany')
 
         # Przygotuj dane do wizualizacji
         groq_count = 0  # Groq removed
@@ -4178,8 +4179,10 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     # Usunięto generowanie plakatu SVG - zgodnie z życzeniem użytkownika
     plakat_svg = None
 
+    flow_diagram_svg = None
     try:
-        flow_diagram_svg = _build_flow_diagram_svg(logger)
+        from core.logging_reporter import get_logger as get_exec_logger
+        flow_diagram_svg = _build_flow_diagram_svg(get_exec_logger())
     except Exception:
         pass
 
