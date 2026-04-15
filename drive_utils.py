@@ -106,11 +106,13 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
         if folder_id:
             file_metadata['parents'] = [folder_id]
 
-        # Upload
+        # Upload - support shared drives (Team Drives)
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id,webViewLink'
+            fields='id,webViewLink',
+            supportsAllDrives=True,
+            supportsTeamDrives=True
         ).execute()
 
         try:
@@ -118,7 +120,9 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
             # Dodaj również uprawnienia anyone z rolą writer dla łatwego dostępu
             service.permissions().create(
                 fileId=file['id'],
-                body={'type': 'anyone', 'role': 'writer'}
+                body={'type': 'anyone', 'role': 'writer'},
+                supportsAllDrives=True,
+                supportsTeamDrives=True
             ).execute()
         except HttpError as e:
             if e.resp.status == 403:
