@@ -3900,9 +3900,8 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=3000)
-    if not raw:
-        logger.warning("[gra] Brak odpowiedzi od AI")
+    # max_tokens=3000 było za mało dla pełnego JSON gry — zwiększone do 5000
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=5000)
     if not raw:
         logger.warning("[gra] Brak odpowiedzi od AI")
         return None
@@ -4156,23 +4155,45 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     except Exception:
         cv_data = None
 
+    # ── DEADLINE dla tasków pobocznych ────────────────────────────────────────
+    # Render ma limit ~10 min. Każdy poniższy task to osobny call DeepSeek.
+    # Jeśli mamy mało czasu (>300s od startu) pomijamy kolejne taski.
+    import time as _time
+    _start_ts = _time.monotonic()
+    _TASK_BUDGET_S = 240  # Max łączny czas na taski poboczne (4 min)
+
+    def _time_ok() -> bool:
+        return (_time.monotonic() - _start_ts) < _TASK_BUDGET_S
+
     try:
-        ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
+        if _time_ok():
+            ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
+        else:
+            logger.warning("[zwykly] SKIP ankieta — przekroczono budżet czasu")
     except Exception:
         pass
 
     try:
-        horoskop_pdf = _build_horoskop(body, res_text)
+        if _time_ok():
+            horoskop_pdf = _build_horoskop(body, res_text)
+        else:
+            logger.warning("[zwykly] SKIP horoskop — przekroczono budżet czasu")
     except Exception:
         pass
 
     try:
-        karta_rpg_pdf = _build_karta_rpg(body, res_text)
+        if _time_ok():
+            karta_rpg_pdf = _build_karta_rpg(body, res_text)
+        else:
+            logger.warning("[zwykly] SKIP karta_rpg — przekroczono budżet czasu")
     except Exception:
         pass
 
     try:
-        gra_html = _build_gra_html(body, res_text)
+        if _time_ok():
+            gra_html = _build_gra_html(body, res_text)
+        else:
+            logger.warning("[zwykly] SKIP gra_html — przekroczono budżet czasu")
     except Exception:
         pass
 

@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 
 _DEEPSEEK_KEY = os.getenv("API_KEY_DEEPSEEK", "").strip()
 
-MAX_PYTANIA = 3
-MAX_RUNDY = 3
+MAX_PYTANIA = 2  # Zmniejszone z 3 → mniejszy JSON, mniej tokenów, mniej timeoutów
+MAX_RUNDY = 2    # Zmniejszone z 3 → j.w.
 
 
 # ── DEEPSEEK ───────────────────────────────────────────────────────────
@@ -149,11 +149,12 @@ Odpowiedz WYŁĄCZNIE w JSON, zero komentarzy, zero backtick-ów:
   "wyrok": "Ostateczny absurdalny wyrok Eryka po przejściu wszystkich drzew. Zakończ podpisem: Z pozdrowieniami, Eryk."
 }}"""
 
-    raw = _deepseek_call(prompt, _SYSTEM_ERYK, max_tokens=4000)
+    # Zwiększono max_tokens — wcześniej 4000 było za mało dla zagnieżdżonego JSON 3x3
+    # _deepseek_korekta USUNIĘTA: dodawała ~30s i często niszczyła poprawny JSON
+    raw = _deepseek_call(prompt, _SYSTEM_ERYK, max_tokens=6000)
     if not raw:
         return None
 
-    raw = _deepseek_korekta(raw)
     return _parse_json_safe(raw)
 
 

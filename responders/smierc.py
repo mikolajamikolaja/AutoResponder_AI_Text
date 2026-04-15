@@ -919,10 +919,10 @@ def build_smierc_section(
     )
     wynik = call_deepseek(system, user_msg, MODEL_TYLER)
 
-    # Fallback do Groq jeśli DeepSeek zawiedzie
+    # Fallback — poprzednio błędnie wywoływał DeepSeek drugi raz (identyczny call)
+    # Teraz tylko logujemy brak odpowiedzi i używamy tekstu awaryjnego
     if not wynik:
-        current_app.logger.warning("[smierc-etapy] DeepSeek zawiodl — probuje Groq")
-        wynik = call_deepseek(system, user_msg, MODEL_TYLER)
+        current_app.logger.warning("[smierc-etapy] DeepSeek zawiodl — uzywam tekstu awaryjnego")
 
     # 🆕 ZMIANA: Dodaj dni do HTML
     reply_text = wynik or "To autoresponder. Chwilowo brak zasięgu w tej strefie kosmicznej."
