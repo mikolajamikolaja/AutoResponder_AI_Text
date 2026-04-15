@@ -4078,7 +4078,7 @@ function pokazWynik() {{
     logger.info("[gra] OK: %d pytań", len(pytania))
     return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
 
-def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False, attachments: list = None) -> dict:
+def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False, attachments: list = None, skip_dociekliwy: bool = False) -> dict:
     """
     Zwykły responder - generuje odpowiedź tekstową i obrazki FLUX.
     
@@ -4209,29 +4209,35 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
 
     reply_html = build_html_reply(res_text)
     analiza_docx_list = []
-    try:
-        analiza_res = build_dociekliwy_section(body, attachments or [], sender=sender_email, sender_name=sender_name)
-        if isinstance(analiza_res, dict):
-            diagram_jpg_b64 = None
-            interactive_html_b64 = None
-            for doc in analiza_res.get("docx_list", []):
-                if not isinstance(doc, dict) or not doc.get("base64"):
-                    continue
-                content_type = doc.get("content_type", "text/html")
-                if content_type == "image/jpeg" and not diagram_jpg_b64:
-                    diagram_jpg_b64 = doc["base64"]
-                elif content_type == "text/html" and not interactive_html_b64:
-                    interactive_html_b64 = doc["base64"]
-            if interactive_html_b64:
-                analiza_docx_list.append({
-                    "base64":       interactive_html_b64,
-                    "content_type": "text/html",
-                    "filename":     "eryk_diagram_interaktywny.html"
-                })
-            if diagram_jpg_b64:
-                reply_html = _build_html_reply_with_image(res_text, diagram_jpg_b64)
-    except Exception as e:
-        logger.warning("[zwykly] analiza attachment failed: %s", e)
+    # POPRAWKA: wywołuj dociekliwy TYLKO gdy są załączniki i app.py
+    # nie zaplanował osobnego wywołania (skip_dociekliwy=True).
+    # Zapobiega podwójnemu wywołaniu AI i timeoutowi 502.
+    if bool(attachments) and not skip_dociekliwy:
+        try:
+            analiza_res = build_dociekliwy_section(body, attachments, sender=sender_email, sender_name=sender_name)
+            if isinstance(analiza_res, dict):
+                diagram_jpg_b64 = None
+                interactive_html_b64 = None
+                for doc in analiza_res.get("docx_list", []):
+                    if not isinstance(doc, dict) or not doc.get("base64"):
+                        continue
+                    content_type = doc.get("content_type", "text/html")
+                    if content_type == "image/jpeg" and not diagram_jpg_b64:
+                        diagram_jpg_b64 = doc["base64"]
+                    elif content_type == "text/html" and not interactive_html_b64:
+                        interactive_html_b64 = doc["base64"]
+                if interactive_html_b64:
+                    analiza_docx_list.append({
+                        "base64":       interactive_html_b64,
+                        "content_type": "text/html",
+                        "filename":     "eryk_diagram_interaktywny.html"
+                    })
+                if diagram_jpg_b64:
+                    reply_html = _build_html_reply_with_image(res_text, diagram_jpg_b64)
+        except Exception as e:
+            logger.warning("[zwykly] analiza attachment failed: %s", e)
+    elif skip_dociekliwy:
+        logger.info("[zwykly] Pomijam dociekliwy — app.py wywoła go osobno")
 
     # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
     # Uruchamiamy po KROK 2, żeby nie rywalizować o klucze Groq z tryptyk/ankieta/horo/rpg/gra

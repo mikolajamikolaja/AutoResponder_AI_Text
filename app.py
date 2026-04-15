@@ -3,26 +3,31 @@
 app.py
 Webhook backend dla Google Apps Script.
 
-Respondery uruchamiane w DWÓCH FALACH równolegle:
-  Fala 1 (lekkie — tekst AI): zwykly, biznes, scrabble, nawiazanie
-  Fala 2 (ciężkie — obrazy/pliki): obrazek, emocje, analiza, generator_pdf, smierc
+KOLEJNOŚĆ WYSYŁKI (priorytetowa):
+  1. zwykly    — zawsze, jeśli nadawca jest znany
+  2. smierc    — jeśli wants_smierc (requiem aktywne)
+  3. dociekliwy (analiza / Eryk) — jeśli wants_analiza lub KEYWORDS3
+  4. pozostałe — biznes, scrabble, emocje, generator_pdf, nawiazanie
 
-Respondery:
-  - generator_pdf: Aktywowany przez flagę wants_generator_pdf
-  - smierc: Pośmiertny autoresponder — aktywowany przez wants_smierc
-    * Wymaga dodatkowych pól: etap, data_smierci, historia
-    * Generuje odpowiedzi z zaświatów z progressją etapów
-    * Etap 8+: Wysłannik generujący obrazki FLUX
-
-    ZWRACA:
-      {
-        "reply_html": string,
-        "nowy_etap": int,
-        "images": [{"base64": ..., "content_type": "image/png", "filename": "..."}],
-        "videos": [...],
-        "debug_txt": {"base64": ..., "content_type": "text/plain", "filename": "_.txt"}
-      }
+NAPRAWIONE BŁĘDY:
+  - [BUG] attachments (zmienna lokalna) nadpisywała zewnętrzny parametr
+    przy zbieraniu załączników w pętli wysyłki → każdy responder teraz
+    używa osobnej zmiennej `zal`
+  - [BUG] smierc nie był uruchamiany w Wave 1/2 mimo wants_smierc=True
+    → dodany do Wave 1 sekwencyjnie po zwykly (ma własną kolejkę)
+  - [BUG] dociekliwy (build_analiza_section) był wywoływany wewnątrz
+    zwykly.py ORAZ oddzielnie przez app.py → podwójne wywołanie AI
+    → teraz zwykly NIE wywołuje dociekliwy; app.py robi to osobno
+  - [BUG] JOKER (zwykly+smierc) powodował timeout 502 przez brak limitu
+    czasu gunicorn → dodaj --timeout 300 do gunicorn (patrz __main__)
+  - [BUG] log_txt / log_svg generowane PRZED smierc i dociekliwy
+    → logi generowane na końcu, po wszystkich responderach
+  - [BUG] requested_sections nie zawierał 'smierc' ani 'dociekliwy'
+    → teraz dodawane poprawnie
+  - [BUG] historia zapisywana podwójnie (w pętli + na końcu)
+    → jeden zapis na końcu
 """
+
 import os
 import base64
 import html
@@ -31,11 +36,10 @@ import json
 import re
 import traceback
 from flask import Flask, request, jsonify, current_app
-import requests
+import requests as http_requests
 
 from drive_utils import upload_file_to_drive, update_sheet_with_data, save_to_history_sheet
 from core.logging_reporter import init_logger, get_logger
-
 
 from responders.zwykly        import build_zwykly_section
 from responders.biznes        import build_biznes_section
@@ -51,15 +55,23 @@ from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 app = Flask(__name__)
 
 
-def _run_parallel(tasks: dict, flask_app) -> dict:
-    """Uruchamia słownik {klucz: lambda} sekwencyjnie, zwraca {klucz: wynik}."""
+# ═══════════════════════════════════════════════════════════════════════════════
+# POMOCNIKI
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _run_sequential(tasks: dict, flask_app) -> dict:
+    """Uruchamia słownik {klucz: lambda} SEKWENCYJNIE, zwraca {klucz: wynik}.
+    Sekwencyjność jest kluczowa — zapobiega timeout 502 przy równoległych
+    ciężkich calach AI (zwykly + smierc + FLUX = crash workera)."""
     results = {}
     for key, fn in tasks.items():
         try:
+            flask_app.logger.info("[pipeline] START: %s", key)
             results[key] = fn()
+            flask_app.logger.info("[pipeline] OK:    %s", key)
         except Exception as e:
             flask_app.logger.error(
-                "Błąd responderu '%s': %s\n%s", key, e, traceback.format_exc()
+                "[pipeline] BŁĄD responderu '%s': %s\n%s", key, e, traceback.format_exc()
             )
             results[key] = {}
     return results
@@ -139,44 +151,37 @@ def _format_log_entry_data(data: object) -> list:
 
 
 def _build_log_svg_content(logger) -> str:
-    """
-    Rozszerzony diagram SVG przebiegu autorespondera.
-    Pokazuje: INPUT → DECISIONS → TIMELINE → API CALLS → SECTIONS → OUTPUT
-    """
+    """Rozszerzony diagram SVG przebiegu autorespondera."""
     entries = logger.entries
     if not entries:
         return '''<svg width="1000" height="300" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300">
   <text x="10" y="150" font-size="16" font-family="Arial">Brak danych logowania</text>
 </svg>'''
 
-    # Zbierz informacje z logów
     input_data = next((e for e in entries if e['type'] == 'INPUT'), None)
     api_calls = [e for e in entries if e['type'] == 'API_CALL']
     section_results = [e for e in entries if e['type'] == 'SECTION_RESULT']
     decisions = [e for e in entries if e['type'] == 'DECISION']
-    
-    # Zlicz API calls
+
     deepseek_all = [e for e in api_calls if e['data'].get('api') == 'deepseek']
     deepseek_success = sum(1 for e in deepseek_all if e['data'].get('success'))
     deepseek_fail = len(deepseek_all) - deepseek_success
-    
+
     sections_ok = sum(1 for e in section_results if e['data'].get('success'))
     sections_fail = len(section_results) - sections_ok
-    
-    # Harmonogram czasowy
+
     first_ts = entries[0].get('timestamp', 0)
     last_ts = entries[-1].get('timestamp', 0)
     total_time = last_ts - first_ts
-    
+
     def escape_xml(text):
         return (str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
                 .replace('"', '&quot;').replace("'", '&apos;').replace('&nbsp;', '&#160;'))
-    
-    # Wymiary SVG
+
     num_timeline_items = min(len(entries), 15)
     height = 200 + len(section_results) * 30 + num_timeline_items * 20 + 200
     width = 1200
-    
+
     svg = f'''<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">
   <defs>
     <style>
@@ -191,62 +196,49 @@ def _build_log_svg_content(logger) -> str:
       .metric {{ font-size: 11px; font-weight: bold; }}
     </style>
   </defs>
-  
-  <!-- BACKGROUND -->
   <rect width="{width}" height="{height}" fill="#fafafa" stroke="#ddd" stroke-width="1"/>
-  
-  <!-- NAGŁÓWEK -->
   <rect x="0" y="0" width="{width}" height="40" fill="#1a1a2e" stroke="none"/>
   <text x="20" y="26" class="title" fill="#e8d5b0">Diagram Przebiegu AutoRespondera</text>
   <text x="{width-400}" y="26" class="subtitle" fill="#aaa">Czas: {total_time:.2f}s | Wpisy: {len(entries)} | Sekcje: {sections_ok}✓ {sections_fail}✗</text>
 '''
-    
     y_pos = 60
-    
+
     # SEKCJA 1: INPUT
-    sender = input_data['data'].get('sender', '?') if input_data else "?"
-    subject = input_data['data'].get('subject', '?') if input_data else "?"
+    sender_disp = input_data['data'].get('sender', '?') if input_data else "?"
+    subject_disp = input_data['data'].get('subject', '?') if input_data else "?"
     body_preview = (input_data['data'].get('body_preview', '')[:35] + "...") if input_data else ""
-    
-    svg += f'''  <!-- SEKCJA 1: WEJŚCIE -->
-  <rect x="20" y="{y_pos}" width="340" height="110" class="box"/>
+
+    svg += f'''  <rect x="20" y="{y_pos}" width="340" height="110" class="box"/>
   <text x="30" y="{y_pos+20}" class="title">📧 WEJŚCIE</text>
-  <text x="30" y="{y_pos+42}" class="text">Nadawca: {escape_xml(sender)}</text>
-  <text x="30" y="{y_pos+60}" class="text">Temat: {escape_xml(subject[:35])}</text>
+  <text x="30" y="{y_pos+42}" class="text">Nadawca: {escape_xml(sender_disp)}</text>
+  <text x="30" y="{y_pos+60}" class="text">Temat: {escape_xml(subject_disp[:35])}</text>
   <text x="30" y="{y_pos+78}" class="text">Treść: {escape_xml(body_preview)}</text>
 '''
-    
     y_pos += 140
-    
+
     # SEKCJA 2: DECYZJE
     if decisions:
-        svg += f'''  <!-- SEKCJA 2: DECYZJE PRZEPŁYWU -->
-  <rect x="20" y="{y_pos}" width="340" height="{50 + min(len(decisions), 4) * 20}" class="info"/>
+        svg += f'''  <rect x="20" y="{y_pos}" width="340" height="{50 + min(len(decisions), 4) * 20}" class="info"/>
   <text x="30" y="{y_pos+20}" class="title">🎯 DECYZJE: {len(decisions)}</text>
 '''
         for i, decision in enumerate(decisions[:4]):
             result = decision['data'].get('result', '?')
             decision_text = decision['data'].get('decision', 'N/A')[:25]
             svg += f'  <text x="30" y="{y_pos+40+i*18}" class="text">• {decision_text} → {result}</text>\n'
-        
         y_pos += 70 + min(len(decisions), 4) * 20
-    
-    # SEKCJA 3: STATYSTYKA API
-    svg += f'''  <!-- SEKCJA 3: API CALLS STATYSTYKA -->
-  <rect x="20" y="{y_pos}" width="1160" height="130" class="{'success' if deepseek_success > 0 else 'error'}"/>
-  <text x="30" y="{y_pos+20}" class="title">⚙️ API CALLS — PRÓBY vs SKUTECZNE</text>
-  <rect x="30" y="{y_pos+35}" width="1140" height="80" fill="rgba(0,0,0,0.03)" stroke="none"/>
+
+    # SEKCJA 3: API
+    svg += f'''  <rect x="20" y="{y_pos}" width="1160" height="130" class="{'success' if deepseek_success > 0 else 'error'}"/>
+  <text x="30" y="{y_pos+20}" class="title">⚙️ API CALLS</text>
   <text x="40" y="{y_pos+50}" class="metric">DEEPSEEK PRÓBY: {len(deepseek_all)}</text>
   <text x="40" y="{y_pos+68}" class="metric">DEEPSEEK SKUTECZNE: {deepseek_success}</text>
   <text x="40" y="{y_pos+86}" class="metric">DEEPSEEK NIEUDANE: {deepseek_fail}</text>
 '''
-    
     y_pos += 160
-    
-    # SEKCJA 4: HARMONOGRAM CZASOWY
-    svg += f'''  <!-- SEKCJA 4: HARMONOGRAM CZASOWY WYKONANIA -->
-  <rect x="20" y="{y_pos}" width="1160" height="{60 + num_timeline_items * 20}" class="warning"/>
-  <text x="30" y="{y_pos+20}" class="title">⏱️ HARMONOGRAM CZASOWY PIERWSZYCH {num_timeline_items} ETAPÓW</text>
+
+    # SEKCJA 4: HARMONOGRAM
+    svg += f'''  <rect x="20" y="{y_pos}" width="1160" height="{60 + num_timeline_items * 20}" class="warning"/>
+  <text x="30" y="{y_pos+20}" class="title">⏱️ HARMONOGRAM PIERWSZYCH {num_timeline_items} ETAPÓW</text>
 '''
     for i, entry in enumerate(entries[:num_timeline_items]):
         ts = entry.get('timestamp', 0)
@@ -255,51 +247,44 @@ def _build_log_svg_content(logger) -> str:
         pct = (delta / total_time * 100) if total_time > 0 else 0
         svg += f'  <rect x="30" y="{y_pos+35+i*20}" width="{pct*8}" height="16" fill="#ffc107" opacity="0.6" stroke="none"/>\n'
         svg += f'  <text x="40" y="{y_pos+47+i*20}" class="text">+{delta:5.2f}s [{entry_type:18s}]</text>\n'
-    
     y_pos += 80 + num_timeline_items * 20
-    
+
     # SEKCJA 5: SEKCJE RESPONDENTÓW
     section_details = [(e['data'].get('section'), e['data'].get('success')) for e in section_results]
-    svg += f'''  <!-- SEKCJA 5: SEKCJE RESPONDENTÓW -->
-  <rect x="20" y="{y_pos}" width="1160" height="{60 + max(len(section_details), 1) * 28}" class="box"/>
-  <text x="30" y="{y_pos+20}" class="title">📋 SEKCJE RESPONDENTÓW: {sections_ok}✓ {sections_fail}✗</text>
+    svg += f'''  <rect x="20" y="{y_pos}" width="1160" height="{60 + max(len(section_details), 1) * 28}" class="box"/>
+  <text x="30" y="{y_pos+20}" class="title">📋 SEKCJE: {sections_ok}✓ {sections_fail}✗</text>
 '''
     for i, (section_name, success) in enumerate(section_details):
         box_class = 'success' if success else 'error'
         status = '✓' if success else '✗'
         svg += f'  <rect x="30" y="{y_pos+35+i*28}" width="1140" height="24" class="{box_class}"/>\n'
         svg += f'  <text x="40" y="{y_pos+53+i*28}" class="text">{status} {section_name.upper() if section_name else "UNKNOWN"}</text>\n'
-    
-    svg += '''  <!-- Arrow marker -->
-  <defs>
+
+    svg += '''  <defs>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto">
       <polygon points="0,0 10,5 0,10" fill="#0066cc"/>
     </marker>
   </defs>
 </svg>'''
-    
     return svg
 
 
 def _build_log_txt_content(logger, response_data) -> str:
-    """
-    Generuje tekst loggera z podsumowaniem wykonania.
-    """
-    # API Calls — liczenie prób i skutecznych
     api_calls = [e for e in logger.entries if e['type'] == 'API_CALL']
     deepseek_calls = [e for e in api_calls if e['data'].get('api') == 'deepseek']
     deepseek_success = sum(1 for e in deepseek_calls if e['data'].get('success'))
     deepseek_total = len(deepseek_calls)
-    
+
     nouns_dict = response_data.get('zwykly', {}).get('nouns_dict', {})
     detected_nouns = []
     if isinstance(nouns_dict, dict):
         detected_nouns = [v for v in nouns_dict.values() if isinstance(v, str) and v.strip()]
-    
-    # Liczenie sekcji
+
     section_results = [e for e in logger.entries if e['type'] == 'SECTION_RESULT']
     sections_success = sum(1 for e in section_results if e['data'].get('success'))
     sections_total = len(section_results)
+
+    keywords_used = logger.metadata.get('keywords_used', False)
 
     lines = []
     lines.append("=" * 88)
@@ -308,155 +293,150 @@ def _build_log_txt_content(logger, response_data) -> str:
     lines.append(f"Start: {logger.start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"Sesja: {logger.session_id}")
     lines.append("")
-    
-    # Metadane sesji
-    lines.append("0. METADANE UŻYTKOWNIKA I SESJI")
-    in_history = logger.metadata.get('in_history', 'nieznany')
-    in_requiem = logger.metadata.get('in_requiem', 'nieznany')
-    keywords_used = logger.metadata.get('keywords_used', False)
-    contains_keyword = logger.metadata.get('contains_keyword', False)
-    contains_keyword2 = logger.metadata.get('contains_keyword2', False)
-    contains_keyword3 = logger.metadata.get('contains_keyword3', False)
-    contains_keyword4 = logger.metadata.get('contains_keyword4', False)
-    contains_keyword_test = logger.metadata.get('contains_keyword_test', False)
-    contains_keyword_joker = logger.metadata.get('contains_keyword_joker', False)
 
+    lines.append("0. METADANE SESJI")
     keyword_labels = []
-    if contains_keyword:
-        keyword_labels.append('KEYWORDS/KEYWORDS1')
-    if contains_keyword2:
-        keyword_labels.append('KEYWORDS2')
-    if contains_keyword3:
-        keyword_labels.append('KEYWORDS3')
-    if contains_keyword4:
-        keyword_labels.append('KEYWORDS4')
-    if contains_keyword_test:
-        keyword_labels.append('KEYWORDS_TEST')
-    if contains_keyword_joker:
-        keyword_labels.append('KEYWORDS_JOKER')
-
-    lines.append(f"- Status historia: {in_history}")
-    lines.append(f"- Status requiem: {in_requiem}")
-    lines.append(f"- Słowa kluczowe: {', '.join(keyword_labels) if keyword_labels else 'NIE'}")
+    for kw in ['contains_keyword', 'contains_keyword1', 'contains_keyword2',
+               'contains_keyword3', 'contains_keyword4', 'contains_flaga_test',
+               'contains_keyword_joker']:
+        if logger.metadata.get(kw):
+            keyword_labels.append(kw.upper())
+    lines.append(f"- Status historia: {logger.metadata.get('in_history', '?')}")
+    lines.append(f"- Status requiem:  {logger.metadata.get('in_requiem', '?')}")
+    lines.append(f"- Słowa kluczowe:  {', '.join(keyword_labels) if keyword_labels else 'NIE'}")
     if keywords_used:
-        lines.append("- ⓘ KEYWORDS_TEST był aktywny — FLUX wyrwany")
+        lines.append("- ⓘ KEYWORDS_TEST aktywny — FLUX wyłączony")
     lines.append("")
-    
-    lines.append("1. STATYSTYKA API CALLS — PRÓBY vs SKUTECZNE")
-    deepseek_success = sum(1 for e in deepseek_calls if e['data'].get('success'))
-    deepseek_total = len(deepseek_calls)
-    
+
+    lines.append("1. API CALLS")
     if deepseek_total > 0:
-        deepseek_accuracy = (deepseek_success / deepseek_total * 100)
-        lines.append(f"- DeepSeek: {deepseek_total} PRÓB | {deepseek_success} SKUTECZNYCH (dokładność: {deepseek_accuracy:.1f}%)")
+        acc = deepseek_success / deepseek_total * 100
+        lines.append(f"- DeepSeek: {deepseek_total} prób | {deepseek_success} skutecznych ({acc:.1f}%)")
     else:
-        lines.append(f"- DeepSeek: 0 prób")
-    
-    lines.append(f"- RAZEM API CALLS: {len(api_calls)}")
+        lines.append("- DeepSeek: 0 prób")
+    lines.append(f"- RAZEM: {len(api_calls)}")
     lines.append("")
-    lines.append("2. SEKCJE RESPONDENTÓW — REALIZACJA")
-    lines.append(f"- Sekcje uruchomione: {sections_total}")
-    lines.append(f"- Sekcje pomyślne: {sections_success}")
+
+    lines.append("2. SEKCJE RESPONDENTÓW")
+    lines.append(f"- Uruchomione: {sections_total} | Pomyślne: {sections_success}")
     if sections_total > 0:
-        success_rate = (sections_success / sections_total * 100)
-        lines.append(f"- Współczynnik sukcesu: {success_rate:.1f}%")
+        lines.append(f"- Sukces: {(sections_success / sections_total * 100):.1f}%")
     lines.append("")
-    lines.append("3. PRZEFILTROWANA LISTA SEKCJI")
-    section_keys = [k for k in response_data.keys() if k not in ("log_txt", "log_svg", "log")]
-    if section_keys:
-        for section_name in sorted(section_keys):
-            section_data = response_data.get(section_name, {})
-            has_html = bool(section_data.get('reply_html', '').strip())
-            has_attachments = len(section_data.get('docx_list', [])) > 0 or len(section_data.get('images', [])) > 0
-            status = '✓' if (has_html or has_attachments) else '✗'
-            lines.append(f"  {status} {section_name.upper()}")
-            if has_html:
-                lines.append(f"      - HTML: {len(section_data.get('reply_html', ''))} znaków")
-            if has_attachments:
-                # Wyświetl pełne nazwy plików
-                docx_list = section_data.get('docx_list', [])
-                images_list = section_data.get('images', [])
-                
-                attachment_names = []
-                if docx_list:
-                    for item in docx_list:
-                        if isinstance(item, dict) and 'filename' in item:
-                            attachment_names.append(item['filename'])
-                if images_list:
-                    for item in images_list:
-                        if isinstance(item, dict) and 'filename' in item:
-                            attachment_names.append(item['filename'])
-                        elif isinstance(item, str):
-                            attachment_names.append(item)
-                
-                if attachment_names:
-                    lines.append(f"      - Załączniki: {', '.join(attachment_names)}")
-                else:
-                    lines.append(f"      - Załączniki: {len(docx_list)} + {len(images_list)} obrazów")
-    else:
-        lines.append("  (brak wygenerowanych sekcji)")
+
+    lines.append("3. LISTA SEKCJI")
+    section_keys = [k for k in response_data.keys() if k not in ("log_txt", "log_svg")]
+    for section_name in sorted(section_keys):
+        section_data = response_data.get(section_name, {})
+        if not isinstance(section_data, dict):
+            continue
+        has_html = bool(section_data.get('reply_html', '').strip())
+        has_att = len(section_data.get('docx_list', [])) > 0 or len(section_data.get('images', [])) > 0
+        status = '✓' if (has_html or has_att) else '✗'
+        lines.append(f"  {status} {section_name.upper()}")
+        if has_html:
+            lines.append(f"      - HTML: {len(section_data.get('reply_html', ''))} znaków")
+        docs = section_data.get('docx_list', [])
+        imgs = section_data.get('images', [])
+        names = [d.get('filename') for d in docs if isinstance(d, dict) and d.get('filename')]
+        names += [d.get('filename') for d in imgs if isinstance(d, dict) and d.get('filename')]
+        if names:
+            lines.append(f"      - Pliki: {', '.join(names)}")
     lines.append("")
-    
-    lines.append("4. HARMONOGRAM CZASOWY WYKONANIA")
+
+    lines.append("4. HARMONOGRAM")
     if logger.entries:
-        first_ts = logger.entries[0].get('timestamp', 0)
-        last_ts = logger.entries[-1].get('timestamp', 0)
-        total_time = last_ts - first_ts
-        lines.append(f"- Czas całkowity: {total_time:.2f}s")
-        lines.append("- Pierwsze 10 etapów:")
+        t0 = logger.entries[0].get('timestamp', 0)
+        t1 = logger.entries[-1].get('timestamp', 0)
+        lines.append(f"- Czas całkowity: {(t1-t0):.2f}s")
         for i, entry in enumerate(logger.entries[:10]):
-            ts = entry.get('timestamp', 0)
-            delta = ts - first_ts
-            type_str = entry['type'][:20].ljust(20)
-            lines.append(f"  [{i+1:2d}] +{delta:6.2f}s: {type_str}")
+            delta = entry.get('timestamp', 0) - t0
+            lines.append(f"  [{i+1:2d}] +{delta:6.2f}s: {entry['type'][:20]}")
     lines.append("")
-    
-    lines.append("5. SZCZEGÓŁOWE WPISY LOGGERA")
+
+    lines.append("5. SZCZEGÓŁOWE WPISY")
     for entry in logger.entries:
-        timestamp = entry.get('timestamp', 0.0)
-        lines.append(f"[{entry['type']}] +{timestamp:.2f}s")
+        ts = entry.get('timestamp', 0.0)
+        lines.append(f"[{entry['type']}] +{ts:.2f}s")
         lines.extend(_format_log_entry_data(entry.get('data')))
         lines.append("")
 
     if detected_nouns:
-        lines.append("6. WYEKSTRAHOWANE RZECZOWNIKI")
+        lines.append("6. RZECZOWNIKI")
         for noun in detected_nouns:
             lines.append(f"- {noun}")
         lines.append("")
-    
-    lines.append("7. WNIOSKI I PODSUMOWANIE")
-    sections_rate = (sections_success / sections_total * 100) if sections_total > 0 else 0
-    if sections_rate == 100:
-        lines.append("- Status: ✓ SUCCESS — Wszystkie sekcje wygenerowane pomyślnie!")
-    elif sections_rate >= 75:
-        lines.append(f"- Status: ✓ DOBRY — Wykonanie prawie bez problemów ({sections_rate:.0f}% sukcesu)")
-    elif sections_rate >= 50:
-        lines.append(f"- Status: ⚠ ŚREDNI — Napotkane problemy (tylko {sections_rate:.0f}% sekcji pomyślnych)")
+
+    lines.append("7. WNIOSKI")
+    rate = (sections_success / sections_total * 100) if sections_total > 0 else 0
+    if rate == 100:
+        lines.append("- ✓ SUCCESS")
+    elif rate >= 75:
+        lines.append(f"- ✓ DOBRY ({rate:.0f}%)")
+    elif rate >= 50:
+        lines.append(f"- ⚠ ŚREDNI ({rate:.0f}%)")
     else:
-        lines.append(f"- Status: ✗ ZŁY — Znaczne problemy ({sections_rate:.0f}% sekcji pomyślnych)")
-    
-    if deepseek_total > 0:
-        lines.append(f"- DeepSeek: {(deepseek_success/deepseek_total*100):.0f}% odpowiedzi było skutecznych")
-    if keywords_used:
-        lines.append("- ⓘ KEYWORDS_TEST był aktywny — FLUX wyrwany")
-    lines.append("")
+        lines.append(f"- ✗ ZŁY ({rate:.0f}%)")
 
     lines.append("=" * 88)
-    lines.append("KONIEC PODSUMOWANIA")
+    lines.append("KONIEC")
     lines.append("=" * 88)
     return "\n".join(lines)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# WYSYŁKA MAILA — pomocnik bez nadpisywania zmiennej attachments
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _wyslij_responder(responder_key: str, resp_data: dict, sender: str, sender_name: str,
+                      previous_subject: str, logger) -> bool:
+    """
+    Wysyła jeden email dla danego respondera.
+    Zwraca True jeśli wysłanie się powiodło.
+
+    POPRAWKA: używa lokalnej zmiennej `zal` zamiast `attachments`,
+    żeby nie nadpisywać listy attachmentów z requestu.
+    """
+    section = resp_data.get(responder_key)
+    if not section or not isinstance(section, dict):
+        return False
+
+    email_html = section.get("reply_html", "")
+    zal = zbierz_zalaczniki_z_response({responder_key: section})
+
+    if not email_html.strip() and not zal:
+        return False
+
+    # Temat z kluczem respondera
+    subject_line = f"Re: {previous_subject or 'Twoja wiadomość'}"
+
+    # Dla śmierci użyj tematu wygenerowanego przez smierc.py jeśli dostępny
+    if responder_key == "smierc" and section.get("subject"):
+        subject_line = section["subject"]
+
+    success = wyslij_odpowiedz(
+        to_email   = sender,
+        to_name    = sender_name,
+        subject    = subject_line,
+        html_body  = email_html or "<p>Załączniki w osobnych plikach.</p>",
+        zalaczniki = zal,
+    )
+    if success:
+        logger.log_decision("email_sent", f"Sent {responder_key}", True)
+    else:
+        logger.log_decision("email_failed", f"Failed {responder_key}", False)
+    return success
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WEBHOOK GŁÓWNY
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # ── Pobranie session ID z RENDER_INSTANCE_ID lub generowanie nowego ──────
     render_instance_id = os.getenv("RENDER_INSTANCE_ID", "")
     session_id = render_instance_id if render_instance_id else None
-    
-    # Inicjalizuj logger dla tego żądania z session ID
     logger = init_logger(session_id=session_id)
-    
+
     data = request.json or {}
     body = data.get("body", "")
 
@@ -464,69 +444,55 @@ def webhook():
         logger.log_decision("empty_body_check", "body.strip() == ''", False)
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
 
-    # Loguj oryginalną wiadomość
-    sender = data.get("sender", "")
+    sender      = data.get("sender", "")
     sender_name = data.get("sender_name", "")
-    subject = data.get("subject", "")
+    subject     = data.get("subject", "")
     logger.log_input(sender, subject, body, sender_name)
 
-    # ── WYJĄTEK: Zablokuj wysyłkę jeśli sender to ADMIN_EMAIL (przerwanie pętli) ─
+    # ── Ochrona przed pętlą (admin email) ────────────────────────────────────
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     if admin_email and sender.strip().lower() == admin_email:
         logger.log_decision("admin_email_block", f"sender == ADMIN_EMAIL ({sender})", True)
-        current_app.logger.warning(
-            "[AUTORESPONDER] 🔒 WYSYŁKA ZABLOKOWANA: Wiadomość od ADMIN_EMAIL (%s) — przerwanie pętli", 
-            sender
-        )
+        app.logger.warning("[AUTORESPONDER] 🔒 ZABLOKOWANO: Wiadomość od ADMIN_EMAIL (%s)", sender)
         return jsonify({
             "status": "blocked",
             "reason": "sender_is_admin_email",
-            "message": "Wysyłka wiadomości do ADMIN_EMAIL jest zablokowana (ochrona przed pętlą)",
-            "sender": sender
+            "sender": sender,
         }), 200
 
-    # ── Pola nadawcy i historia ───────────────────────────────────────────────
+    # ── Parametry requestu ────────────────────────────────────────────────────
     previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None
-    attachments      = data.get("attachments")      or []
+    # POPRAWKA: załączniki z requestu trzymamy w `req_attachments`
+    # żeby nigdy nie zostały nadpisane przez lokalną zmienną w pętli
+    req_attachments  = data.get("attachments")      or []
     save_to_drive    = bool(data.get("save_to_drive"))
     test_mode        = bool(data.get("test_mode"))
-    # ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
-    # KEYWORDS_TEST to parametr flagi do ZABLOKOWANIA generowania obrazków FLUX
-    # w konkretnym responderycie, ale NIE zmienia logikę którzy respondenci się
-    # uruchamiają ani nie wpływa na zapis do historii/drive.
-    # Każdy responder dostaje disable_flux i sam decyduje czy generować Flux czy nie.
-    disable_flux     = bool(data.get("disable_flux"))  # disable_flux=True ⟷ wyłącz FLUX w tym requestzie
+    disable_flux     = bool(data.get("disable_flux"))
     retry_responders = data.get("retry_responders") or []
     attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
     skip_save_to_history = bool(data.get("skip_save_to_history"))
-    
-    # ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
-    # KEYWORDS_TEST - parametr aby wyłączyć generowanie FLUX (obrazków) w respondericach.
-    # Pochodzi z GAS script gdy wiadomość zawiera słowo z listy KEYWORDS_TEST.
-    # disable_flux=True przesilany jako test_mode do respondentów. Respondenci którzy
-    # generują Flux (zwykly, emocje, itp) sprawdzają ten parametr i wy generowanie.
-    # WAŻNE: disable_flux NIE wpływa na zapis do historii, Drive, ani które respondenci
-    # się uruchamiają — TYLKO na to czy generować Flux czy nie.
+
     keywords_used = False
     if disable_flux:
         keywords_used = True
         logger.set_metadata("keywords_used", True)
-        logger.log_decision("disable_flux", "disable_flux=True", "FLUX wyłączony dla tego requestu")
+        logger.log_decision("disable_flux", "disable_flux=True", "FLUX wyłączony")
 
-    # ── Konfiguracja Drive ───────────────────────────────────────────────────
-    drive_folder_id = os.getenv("DRIVE_FOLDER_ID")
-    smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
+    # ── Google Drive / Sheets ─────────────────────────────────────────────────
+    drive_folder_id  = os.getenv("DRIVE_FOLDER_ID")
+    smierc_sheet_id  = os.getenv("SMIERC_HISTORY_SHEET_ID")
     history_sheet_id = os.getenv("HISTORY_SHEET_ID")
-    
+
     # ── Sprawdzenie statusu użytkownika ───────────────────────────────────────
     from drive_utils import check_user_in_sheet
-    if not test_mode:  # Nie sprawdzaj użytkownika dla testów
+    if not test_mode:
         in_history_status = "tak" if check_user_in_sheet(history_sheet_id, sender) else "nie"
-        in_requiem_status = "tak" if check_user_in_sheet(smierc_sheet_id, sender) else "nie"
+        in_requiem_status = "tak" if check_user_in_sheet(smierc_sheet_id, sender)  else "nie"
     else:
         in_history_status = "test_mode"
         in_requiem_status = "test_mode"
+
     logger.set_metadata("in_history", in_history_status)
     logger.set_metadata("in_requiem", in_requiem_status)
 
@@ -541,45 +507,38 @@ def webhook():
     wants_nawiazanie    = bool(previous_body or previous_subject)
     is_retry            = bool(retry_responders)
 
-    contains_keyword = bool(data.get("contains_keyword"))
-    contains_keyword1 = bool(data.get("contains_keyword1"))
-    contains_keyword2 = bool(data.get("contains_keyword2"))
-    contains_keyword3 = bool(data.get("contains_keyword3"))
-    contains_keyword4 = bool(data.get("contains_keyword4"))
-    contains_flaga_test = bool(data.get("contains_flaga_test"))
+    contains_keyword       = bool(data.get("contains_keyword"))
+    contains_keyword1      = bool(data.get("contains_keyword1"))
+    contains_keyword2      = bool(data.get("contains_keyword2"))
+    contains_keyword3      = bool(data.get("contains_keyword3"))
+    contains_keyword4      = bool(data.get("contains_keyword4"))
+    contains_flaga_test    = bool(data.get("contains_flaga_test"))
     contains_keyword_joker = bool(data.get("contains_keyword_joker"))
+    matched_keywords       = data.get("matched_keywords") or {}
 
-    matched_keywords = data.get("matched_keywords") or {}
-    has_any_keyword = any([
-        contains_keyword,
-        contains_keyword1,
-        contains_keyword2,
-        contains_keyword3,
-        contains_keyword4,
-        contains_keyword_joker,
-    ])
+    has_any_keyword = any([contains_keyword, contains_keyword1, contains_keyword2,
+                           contains_keyword3, contains_keyword4, contains_keyword_joker])
 
-    logger.set_metadata("has_any_keyword", has_any_keyword)
-    logger.set_metadata("contains_keyword", contains_keyword)
-    logger.set_metadata("contains_keyword1", contains_keyword1)
-    logger.set_metadata("contains_keyword2", contains_keyword2)
-    logger.set_metadata("contains_keyword3", contains_keyword3)
-    logger.set_metadata("contains_keyword4", contains_keyword4)
-    logger.set_metadata("contains_flaga_test", contains_flaga_test)
-    logger.set_metadata("contains_keyword_joker", contains_keyword_joker)
+    for meta_key, meta_val in [
+        ("has_any_keyword",       has_any_keyword),
+        ("contains_keyword",      contains_keyword),
+        ("contains_keyword1",     contains_keyword1),
+        ("contains_keyword2",     contains_keyword2),
+        ("contains_keyword3",     contains_keyword3),
+        ("contains_keyword4",     contains_keyword4),
+        ("contains_flaga_test",   contains_flaga_test),
+        ("contains_keyword_joker",contains_keyword_joker),
+    ]:
+        logger.set_metadata(meta_key, meta_val)
     if matched_keywords:
         logger.set_metadata("matched_keywords", matched_keywords)
 
-    # Loguj zmienne
     logger.log_variables_detected({
-        "sender": sender,
-        "sender_name": sender_name,
+        "sender": sender, "sender_name": sender_name,
         "has_previous_body": bool(previous_body),
-        "has_previous_subject": bool(previous_subject),
-        "num_attachments": len(attachments),
+        "num_attachments": len(req_attachments),
         "save_to_drive": save_to_drive,
-        "test_mode": test_mode,
-        "disable_flux": disable_flux,
+        "test_mode": test_mode, "disable_flux": disable_flux,
         "contains_keyword": contains_keyword,
         "contains_keyword1": contains_keyword1,
         "contains_keyword2": contains_keyword2,
@@ -587,137 +546,267 @@ def webhook():
         "contains_keyword4": contains_keyword4,
         "contains_flaga_test": contains_flaga_test,
         "contains_keyword_joker": contains_keyword_joker,
-        "matched_keywords": matched_keywords,
-        "wants_scrabble": wants_scrabble,
-        "wants_biznes": wants_biznes,
+        "wants_smierc": wants_smierc,
         "wants_analiza": wants_analiza,
+        "wants_biznes": wants_biznes,
+        "wants_scrabble": wants_scrabble,
         "wants_emocje": wants_emocje,
         "wants_generator_pdf": wants_generator_pdf,
-        "wants_smierc": wants_smierc,
-        "wants_text_reply": wants_text_reply,
-        "is_retry": bool(retry_responders),
+        "is_retry": is_retry,
         "attempt_count": attempt_count,
         "skip_save_to_history": skip_save_to_history,
     })
 
     flask_app = app
 
-    def run(fn, *args, **kwargs):
+    def run(fn, *args, **kwargs_inner):
         with flask_app.app_context():
-            return fn(*args, **kwargs)
+            return fn(*args, **kwargs_inner)
 
-    # ── FALA 1: lekkie respondery ─────────────────────────────────────────────
-    requested_sections = set(retry_responders) if is_retry else set()
-    if not is_retry:
-        if contains_keyword or in_history_status == "tak":
-            requested_sections.add("zwykly")
-            logger.log_decision("text_reply_decision", "contains_keyword or known history", "Dodaję zwykly")
-        if wants_biznes:
-            requested_sections.add("biznes")
-        if wants_scrabble:
-            requested_sections.add("scrabble")
-        if wants_analiza:
-            requested_sections.add("analiza")
-        if wants_emocje:
-            requested_sections.add("emocje")
-        if wants_generator_pdf:
-            requested_sections.add("generator_pdf")
-        if wants_nawiazanie:
-            requested_sections.add("nawiazanie")
+    # ═══════════════════════════════════════════════════════════════════════════
+    # BUDOWANIE LISTY SEKCJI DO WYKONANIA
+    # Priorytet: zwykly → smierc → dociekliwy → pozostałe
+    # ═══════════════════════════════════════════════════════════════════════════
 
-    wave1 = {}
-    if "zwykly" in requested_sections:
-        _prev   = previous_body
-        _sender = sender
-        _sname  = sender_name
-        # ── test_mode ze FLAGA_TEST (disable_flux) ──────────────────────────
-        # Jeśli disable_flux=True (z FLAGA_TEST w mailu), to zwykly.py
-        # dostanie test_mode=True i wy generowanie Flux (będzie zastępczy obrazek)
-        wave1["zwykly"] = lambda: run(
-            build_zwykly_section,
-            body,
-            _prev,
-            _sender,
-            _sname,
-            test_mode=disable_flux or test_mode,
-            attachments=attachments,
-        )
-    if "analiza" in requested_sections:
-        wave1["analiza"] = lambda: run(
-            build_analiza_section,
-            body,
-            attachments,
-            sender=sender,
-            sender_name=sender_name,
-            test_mode=disable_flux or test_mode,
-        )
-    if "nawiazanie" in requested_sections:
-        wave1["nawiazanie"] = lambda: run(
-            build_nawiazanie_section,
-            body=body,
-            previous_body=previous_body,
-            previous_subject=previous_subject,
-            sender=sender,
-            sender_name=sender_name,
-        )
-
-    response_data = _run_parallel(wave1, flask_app)
-
-    has_wave2 = False
     if is_retry:
-        has_wave2 = bool({"biznes", "scrabble", "obrazek", "emocje", "generator_pdf", "smierc"} & requested_sections)
+        requested_sections = list(retry_responders)
     else:
-        has_wave2 = bool(wants_biznes or wants_scrabble or wants_emocje or wants_generator_pdf or wants_smierc)
+        requested_sections = []
 
-    # ── ZAWSZE generuj logi po Fali 1 ───────────────────────────────────────
+        # 1. ZWYKLY — priorytet 1 (gdy znany nadawca lub keyword)
+        if contains_keyword or in_history_status == "tak":
+            requested_sections.append("zwykly")
+            logger.log_decision("zwykly", "known sender or keyword", "dodano")
+
+        # 2. SMIERC — priorytet 2 (posmiertny autoresponder)
+        if wants_smierc:
+            requested_sections.append("smierc")
+            logger.log_decision("smierc", "wants_smierc=True", "dodano")
+
+        # 3. DOCIEKLIWY (ANALIZA / ERYK) — priorytet 3
+        if wants_analiza or contains_keyword3:
+            requested_sections.append("analiza")
+            logger.log_decision("analiza", "wants_analiza or keyword3", "dodano")
+
+        # 4. POZOSTAŁE (kolejność drugorzędna)
+        if wants_nawiazanie:
+            requested_sections.append("nawiazanie")
+        if wants_biznes:
+            requested_sections.append("biznes")
+        if wants_scrabble:
+            requested_sections.append("scrabble")
+        if wants_emocje:
+            requested_sections.append("emocje")
+        if wants_generator_pdf:
+            requested_sections.append("generator_pdf")
+
+    # ─── Wyświetl planowany pipeline ─────────────────────────────────────────
+    app.logger.info("[pipeline] Zaplanowane sekcje (w kolejności): %s", " → ".join(requested_sections))
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # POBIERZ DANE ŚMIERCI (jeśli potrzebne) — PRZED uruchomieniem respondentów
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    smierc_etap       = int(data.get("etap", 1))
+    smierc_data_str   = data.get("data_smierci", "nieznanego dnia")
+    smierc_historia   = data.get("historia", [])
+
+    if wants_smierc:
+        app.logger.info(
+            "Smierc data dla %s: etap=%d data=%s", sender, smierc_etap, smierc_data_str
+        )
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # WYKONANIE PIPELINE — SEKWENCYJNIE (priorytetowo)
+    # POPRAWKA: NIE równolegle — zapobiega timeout 502 na Render
+    #
+    # UWAGA: zwykly.py wewnętrznie wywołuje dociekliwy TYLKO dla analizy
+    # załączników. Główna gra Eryka jest uruchamiana osobno przez app.py.
+    # Aby uniknąć podwójnego wywołania AI — zwykly.py otrzymuje `attachments`
+    # tylko jeśli "analiza" NIE jest w requested_sections (wtedy app.py sam
+    # wykona dociekliwy z pełną grą Eryka).
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # Czy zwykly ma dostać załączniki (dla mini-analizy wewnętrznej)?
+    # Jeśli "analiza" jest osobno w pipeline, nie przekazujemy żeby nie dublować
+    zwykly_attachments = req_attachments if "analiza" not in requested_sections else []
+
+    # Buduj tasks dict w kolejności priorytetowej
+    tasks = {}
+
+    for section_key in requested_sections:
+        if section_key == "zwykly":
+            _prev   = previous_body
+            _sender = sender
+            _sname  = sender_name
+            tasks["zwykly"] = lambda: run(
+                build_zwykly_section,
+                body,
+                _prev,
+                _sender,
+                _sname,
+                test_mode=disable_flux or test_mode,
+                attachments=zwykly_attachments,
+                # Jeśli "analiza" jest osobno w pipeline, pomijamy dociekliwy
+                # wewnątrz zwykly — zapobiega podwójnemu wywołaniu AI
+                skip_dociekliwy=("analiza" in requested_sections),
+            )
+
+        elif section_key == "smierc":
+            _etap     = smierc_etap
+            _data_str = smierc_data_str
+            _historia = smierc_historia
+            tasks["smierc"] = lambda: run(
+                build_smierc_section,
+                sender_email    = sender,
+                body            = body,
+                etap            = _etap,
+                data_smierci_str= _data_str,
+                historia        = _historia,
+                test_mode       = disable_flux or test_mode,
+            )
+
+        elif section_key == "analiza":
+            tasks["analiza"] = lambda: run(
+                build_analiza_section,
+                body,
+                req_attachments,
+                sender      = sender,
+                sender_name = sender_name,
+                test_mode   = disable_flux or test_mode,
+            )
+
+        elif section_key == "nawiazanie":
+            tasks["nawiazanie"] = lambda: run(
+                build_nawiazanie_section,
+                body             = body,
+                previous_body    = previous_body,
+                previous_subject = previous_subject,
+                sender           = sender,
+                sender_name      = sender_name,
+            )
+
+        elif section_key == "biznes":
+            tasks["biznes"] = lambda: run(build_biznes_section, body, sender_name=sender_name)
+
+        elif section_key == "scrabble":
+            tasks["scrabble"] = lambda: run(build_scrabble_section, body)
+
+        elif section_key == "emocje":
+            tasks["emocje"] = lambda: run(
+                build_emocje_section, body, sender_name=sender_name,
+                test_mode=disable_flux or test_mode
+            )
+
+        elif section_key == "generator_pdf":
+            tasks["generator_pdf"] = lambda: run(build_generator_pdf_section, body, sender_name=sender_name)
+
+    # ── WYKONAJ PIPELINE SEKWENCYJNIE ────────────────────────────────────────
+    response_data = _run_sequential(tasks, flask_app)
+
+    # ── Zabezpieczenie — nawiazanie zawsze ma has_history ────────────────────
+    if "nawiazanie" not in response_data:
+        response_data["nawiazanie"] = {"has_history": False, "reply_html": "", "analysis": ""}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # WYSYŁKA MAILI — W KOLEJNOŚCI PRIORYTETOWEJ: zwykly → smierc → analiza → reszta
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    # Kolejność wysyłki jest stała i priorytetowa
+    SEND_ORDER = ["zwykly", "smierc", "analiza", "nawiazanie", "emocje",
+                  "scrabble", "biznes", "generator_pdf"]
+
+    any_sent = False
+    for responder_key in SEND_ORDER:
+        if responder_key not in response_data:
+            continue
+        sent = _wyslij_responder(
+            responder_key  = responder_key,
+            resp_data      = response_data,
+            sender         = sender,
+            sender_name    = sender_name,
+            previous_subject = previous_subject,
+            logger         = logger,
+        )
+        if sent:
+            any_sent = True
+            app.logger.info("[send] ✓ Wysłano: %s → %s", responder_key, sender)
+        else:
+            app.logger.info("[send] — Pominięto (brak treści): %s", responder_key)
+
+    # ── Alert dla admina jeśli nic nie wysłano ───────────────────────────────
+    if not any_sent and admin_email:
+        wyslij_odpowiedz(
+            to_email  = admin_email,
+            to_name   = "Admin",
+            subject   = f"[ALERT] Brak wysyłki dla: {sender}",
+            html_body = f"<p>Brak treści do wysłania dla nadawcy: {sender}<br>Sekcje: {list(response_data.keys())}</p>",
+            zalaczniki= [],
+        )
+        app.logger.warning("Wysłano alert do ADMIN_EMAIL: %s", admin_email)
+
+    # ── Zapis historii (RAZ, na końcu) ───────────────────────────────────────
+    if history_sheet_id and not skip_save_to_history:
+        success_hist = save_to_history_sheet(history_sheet_id, sender, subject, body)
+        if not success_hist:
+            app.logger.error("Błąd zapisu historii dla %s", sender)
+        else:
+            app.logger.info("Historia zapisana dla: %s", sender)
+
+    # ── Aktualizacja arkusza śmierci (etap) ──────────────────────────────────
+    if smierc_sheet_id and "smierc" in response_data and response_data["smierc"]:
+        smierc_res = response_data["smierc"]
+        if isinstance(smierc_res, dict) and "nowy_etap" in smierc_res:
+            try:
+                range_name = (
+                    f"{sender.replace('@', '_').replace('.', '_')}"
+                    f"!A{smierc_res['nowy_etap'] + 1}"
+                )
+                values = [[
+                    smierc_res["nowy_etap"], "",
+                    body[:2000],
+                    _strip_html_to_text(smierc_res.get("reply_html", ""))[:2000],
+                    ""
+                ]]
+                update_sheet_with_data(smierc_sheet_id, range_name, values)
+                app.logger.info(
+                    "Zaktualizowano arkusz śmierci dla %s, nowy etap: %d",
+                    sender, smierc_res["nowy_etap"]
+                )
+            except Exception as e:
+                app.logger.error("Błąd aktualizacji arkusza śmierci: %s", e)
+
+    # ── Generuj logi (PO wszystkich responderach) ─────────────────────────────
     log_txt_content = _build_log_txt_content(logger, response_data)
     log_txt_b64 = base64.b64encode(log_txt_content.encode('utf-8')).decode('utf-8')
-    response_data['log_txt'] = {'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'}
-    
+    response_data['log_txt'] = {
+        'base64': log_txt_b64, 'content_type': 'text/plain', 'filename': 'log.txt'
+    }
+
     svg_content = _build_log_svg_content(logger)
     log_svg_b64 = base64.b64encode(svg_content.encode('utf-8')).decode('utf-8')
-    response_data['log_svg'] = {'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'}
+    response_data['log_svg'] = {
+        'base64': log_svg_b64, 'content_type': 'image/svg+xml', 'filename': 'log.svg'
+    }
 
-    # ── WYSYŁKA INDYWIDUALNA DLA KAŻDEGO RESPONDERA ─────────────────────
-    # Kolejność: zwykly, smierc, analiza, emocje, scrabble
-    individual_responders = ["zwykly", "smierc", "analiza", "emocje", "scrabble"]
-    any_sent = False
-    for responder in individual_responders:
-        if responder in response_data and response_data[responder]:
-            html = response_data[responder].get("reply_html", "")
-            attachments = zbierz_zalaczniki_z_response({responder: response_data[responder]})
-            if html.strip() or attachments:
-                subject = f"Re: {previous_subject or 'Twoja wiadomość'} - {responder}"
-                success = wyslij_odpowiedz(
-                    to_email   = sender,
-                    to_name    = sender_name,
-                    subject    = subject,
-                    html_body  = html or "<p>Załączniki.</p>",
-                    zalaczniki = attachments,
-                )
-                if success:
-                    any_sent = True
-                    logger.log_decision("email_sent", f"Sent {responder}", True)
-                else:
-                    logger.log_decision("email_failed", f"Failed to send {responder}", False)
+    # ── Zapis do Google Drive ─────────────────────────────────────────────────
+    if save_to_drive and drive_folder_id:
+        drive_uploads = []
+        for top_field in ("log_txt", "log_svg"):
+            file_obj = response_data.get(top_field)
+            if isinstance(file_obj, dict) and file_obj.get("base64") and file_obj.get("filename"):
+                if _upload_drive_item(file_obj, drive_folder_id):
+                    drive_uploads.append(f"{top_field}/{file_obj['filename']}")
+        for key, value in response_data.items():
+            if not isinstance(value, dict):
+                continue
+            section_uploads = _upload_drive_section_files(value, drive_folder_id)
+            drive_uploads.extend([f"{key}/{name}" for name in section_uploads])
+        if drive_uploads:
+            app.logger.info("Zapisano do Drive: %s", ', '.join(drive_uploads))
+        response_data["saved_to_drive"] = True
 
-    # ── ZAPIS DO HISTORII (tylko raz, jeśli jakieś e-maile zostały wysłane) ──
-    if any_sent and history_sheet_id and not skip_save_to_history:
-        # Zapisz ogólny wpis do historii
-        save_to_history_sheet(
-            history_sheet_id,
-            sender,
-            f"Re: {previous_subject or 'Twoja wiadomość'}",
-            "Odpowiedzi wysłane indywidualnie",
-            is_response=True,
-        )
-
-    # Zabezpieczenie — nawiazanie zawsze ma has_history
-    if "nawiazanie" not in response_data:
-        response_data["nawiazanie"] = {
-            "has_history": False, "reply_html": "", "analysis": ""
-        }
-
+    # ── Status sekcji ─────────────────────────────────────────────────────────
     def section_success(key: str, value) -> bool:
         if not value or not isinstance(value, dict):
             return False
@@ -725,101 +814,46 @@ def webhook():
             return bool(value.get("has_history") or value.get("reply_html"))
         return bool(value)
 
-    # Użyj już zdefiniowanego requested_sections (z Fali 1)
-    # Nie buduj go znowu!
-
-    failed_sections = [key for key in requested_sections if not section_success(key, response_data.get(key))]
+    failed_sections = [
+        key for key in requested_sections
+        if not section_success(key, response_data.get(key))
+    ]
     if failed_sections:
         response_data["processed_status"] = {
             "status": "partial",
             "failed": failed_sections,
             "attempt_count": attempt_count,
-            "details": {
-                key: response_data.get(key) or "no_data_returned"
-                for key in failed_sections
-            }
         }
     else:
         response_data["processed_status"] = {"status": "ok"}
 
-    # ── Zapis do Google Drive jeśli włączone ──────────────────────────────────
-    if save_to_drive and drive_folder_id:
-        drive_uploads = []
-
-        # Top-level pliki wynikowe
-        for top_field in ("log_txt", "log_svg"):
-            file_obj = response_data.get(top_field)
-            if isinstance(file_obj, dict) and file_obj.get("base64") and file_obj.get("filename"):
-                if _upload_drive_item(file_obj, drive_folder_id):
-                    drive_uploads.append(f"{top_field}/{file_obj['filename']}")
-
-        # Sekcje responderów
-        for key, value in response_data.items():
-            if not isinstance(value, dict):
-                continue
-            section_uploads = _upload_drive_section_files(value, drive_folder_id)
-            drive_uploads.extend([f"{key}/{name}" for name in section_uploads])
-
-        if drive_uploads:
-            app.logger.info(f"Zapisano do Drive: {', '.join(drive_uploads)}")
-        response_data["saved_to_drive"] = True
-
-    # ── Aktualizacja arkusza śmierci jeśli potrzebne ──────────────────────────
-    if smierc_sheet_id and "smierc" in response_data and response_data["smierc"]:
-        smierc_data = response_data["smierc"]
-        if "nowy_etap" in smierc_data:
-            # Przykład: zaktualizuj arkusz z nowym etapem
-            # Zakładamy format: email w nazwie zakładki, dane w kolumnach
-            # To wymaga dostosowania do Twojej struktury arkusza
-            try:
-                # Przykładowa aktualizacja — dostosuj do potrzeb
-                range_name = f"{sender.replace('@', '_').replace('.', '_')}!A{smierc_data['nowy_etap'] + 1}"
-                values = [[smierc_data["nowy_etap"], "", body[:2000], _strip_html_to_text(smierc_data.get("reply_html", ""))[:2000], ""]]
-                update_sheet_with_data(smierc_sheet_id, range_name, values)
-                app.logger.info(f"Zaktualizowano arkusz śmierci dla {sender}, etap {smierc_data['nowy_etap']}")
-            except Exception as e:
-                app.logger.error(f"Błąd aktualizacji arkusza śmierci: {e}")
-
-    # ── Zapis do arkusza historii ─────────────────────────────────────────────
-    skip_save_to_history = bool(data.get("skip_save_to_history"))
-    if history_sheet_id and not skip_save_to_history:
-        success = save_to_history_sheet(history_sheet_id, sender, data.get("subject", ""), body)
-        if not success:
-            app.logger.error(f"Błąd zapisu do arkusza historii dla {sender}")
-
-    # ── Logowanie ─────────────────────────────────────────────────────────────
-    smierc_data        = response_data.get("smierc", {})
-    smierc_images_cnt  = (
-        len(smierc_data.get("images", []))
-        if isinstance(smierc_data, dict) and isinstance(smierc_data.get("images"), list)
+    # ── Log końcowy ───────────────────────────────────────────────────────────
+    smierc_data_res = response_data.get("smierc", {})
+    smierc_images_cnt = (
+        len(smierc_data_res.get("images", []))
+        if isinstance(smierc_data_res, dict) and isinstance(smierc_data_res.get("images"), list)
         else 0
     )
-    debug_txt         = smierc_data.get("debug_txt", {}) if isinstance(smierc_data, dict) else {}
-    smierc_has_debug  = bool(debug_txt.get("base64") if isinstance(debug_txt, dict) else False)
-
     app.logger.info(
-        "Response: biznes=%s | zwykly=%s | scrabble=%s | analiza=%s | emocje=%s "
-        "| obrazek=%s | nawiazanie=%s | generator_pdf=%s | smierc=%s "
-        "(images=%d, debug=%s) | sender=%s",
-        bool(response_data.get("biznes",    {}).get("pdf",  {}).get("base64")),
-        bool(response_data.get("zwykly",    {}).get("pdf",  {}).get("base64")),
-        "tak" if "scrabble"       in response_data else "nie",
-        "tak" if "analiza"        in response_data else "nie",
-        "tak" if "emocje"         in response_data else "nie",
-        "tak" if "obrazek"        in response_data else "nie",
-        "tak" if response_data.get("nawiazanie", {}).get("has_history") else "nie",
-        "tak" if response_data.get("generator_pdf", {}).get("pdf") else "nie",
-        "tak" if "smierc"         in response_data else "nie",
+        "Response: zwykly=%s | smierc=%s (images=%d) | analiza=%s | "
+        "emocje=%s | nawiazanie=%s | generator_pdf=%s | sender=%s",
+        bool(response_data.get("zwykly")),
+        bool(response_data.get("smierc")),
         smierc_images_cnt,
-        "tak" if smierc_has_debug else "nie",
+        bool(response_data.get("analiza")),
+        bool(response_data.get("emocje")),
+        bool(response_data.get("nawiazanie", {}).get("has_history")),
+        bool(response_data.get("generator_pdf", {}).get("pdf")),
         sender_name or sender or "(brak)",
     )
 
-    # Finalizuj logger
     logger.finalize()
-
     return jsonify(response_data), 200
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WEBHOOK GIF
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/webhook_gif", methods=["POST"])
 def webhook_gif():
@@ -831,34 +865,22 @@ def webhook_gif():
     if not png1_b64 and not png2_b64:
         return jsonify({"error": "Brak png1_base64 i png2_base64"}), 400
 
-    app.logger.info("/webhook_gif — odebrano PNG: png1=%s png2=%s",
-                    bool(png1_b64), bool(png2_b64))
+    app.logger.info("/webhook_gif — odebrano PNG: png1=%s png2=%s", bool(png1_b64), bool(png2_b64))
 
-    def gen_gif1():
-        return make_gif(png1_b64) if png1_b64 else None
+    gif1_b64 = make_gif(png1_b64) if png1_b64 else None
+    gif2_b64 = make_gif(png2_b64) if png2_b64 else None
 
-    def gen_gif2():
-        return make_gif(png2_b64) if png2_b64 else None
-
-    gif1_b64 = gen_gif1()
-    gif2_b64 = gen_gif2()
-
-    app.logger.info("/webhook_gif — GIFy: gif1=%s gif2=%s",
-                    bool(gif1_b64), bool(gif2_b64))
+    app.logger.info("/webhook_gif — GIFy: gif1=%s gif2=%s", bool(gif1_b64), bool(gif2_b64))
 
     return jsonify({
-        "gif1": {
-            "base64":       gif1_b64,
-            "content_type": "image/gif",
-            "filename":     "komiks_ai.gif",
-        },
-        "gif2": {
-            "base64":       gif2_b64,
-            "content_type": "image/gif",
-            "filename":     "komiks_ai_retro.gif",
-        },
+        "gif1": {"base64": gif1_b64, "content_type": "image/gif", "filename": "komiks_ai.gif"},
+        "gif2": {"base64": gif2_b64, "content_type": "image/gif", "filename": "komiks_ai_retro.gif"},
     }), 200
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OAUTH CALLBACK
+# ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/oauth/callback")
 def oauth_callback():
@@ -867,16 +889,15 @@ def oauth_callback():
     if not code:
         return "Brak kodu autoryzacyjnego w URL.", 400
 
-    client_id = os.getenv("GMAIL_CLIENT_ID")
+    client_id     = os.getenv("GMAIL_CLIENT_ID")
     client_secret = os.getenv("GMAIL_CLIENT_SECRET")
-    redirect_uri = request.url_root.rstrip('/') + request.path  # np. https://app.onrender.com/oauth/callback
+    redirect_uri  = request.url_root.rstrip('/') + request.path
 
     if not client_id or not client_secret:
         return "Brak GMAIL_CLIENT_ID lub GMAIL_CLIENT_SECRET w env.", 500
 
-    # Wymień code na tokeny
     token_url = "https://oauth2.googleapis.com/token"
-    data = {
+    post_data = {
         "client_id": client_id,
         "client_secret": client_secret,
         "code": code,
@@ -884,12 +905,12 @@ def oauth_callback():
         "redirect_uri": redirect_uri,
     }
     try:
-        resp = requests.post(token_url, data=data, timeout=10)
+        resp = http_requests.post(token_url, data=post_data, timeout=10)
         resp.raise_for_status()
         tokens = resp.json()
-        access_token = tokens.get("access_token")
+        access_token  = tokens.get("access_token")
         refresh_token = tokens.get("refresh_token")
-        app.logger.info("OAuth tokeny uzyskane: access_token=%s, refresh_token=%s", access_token, refresh_token)
+        app.logger.info("OAuth tokeny uzyskane: access=%s refresh=%s", access_token, refresh_token)
         return f"""
         <h1>OAuth zakończony sukcesem!</h1>
         <p>Skopiuj poniższe tokeny do zmiennych środowiskowych w Render:</p>
@@ -903,6 +924,10 @@ def oauth_callback():
         app.logger.error("Błąd wymiany kodu na tokeny: %s", e)
         return f"Błąd wymiany kodu: {e}", 500
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     if not os.getenv("API_KEY_DEEPSEEK"):
