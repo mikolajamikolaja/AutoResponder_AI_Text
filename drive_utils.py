@@ -14,22 +14,72 @@ Autoryzacja przez Service Account z osobnych zmiennych środowiskowych Render:
   GOOGLE_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL
   GOOGLE_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL
 
+Alternatywnie: OAuth 2.0 z refresh token (dla osobistego dysku Google):
+  GMAIL_CLIENT_ID (lub DRIVE_CLIENT_ID)
+  GMAIL_CLIENT_SECRET (lub DRIVE_CLIENT_SECRET)
+  GMAIL_REFRESH_TOKEN (lub DRIVE_REFRESH_TOKEN)
+
 Render → Environment → dodaj powyższe zmienne, a także DRIVE_FOLDER_ID / HISTORY_SHEET_ID / SMIERC_HISTORY_SHEET_ID.
 """
 import os
 import io
 import base64
+import requests
+import logging
 from datetime import datetime
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseUpload
 from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuthCredentials
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 # Scopes dla Google Drive i Sheets API
-SCOPES = [
+DRIVE_SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ]
+
+# OAuth 2.0 zmienne środowiskowe (te same co dla Gmail API)
+DRIVE_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID", "")
+DRIVE_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET", "")
+DRIVE_REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN", "")
+
+
+def _load_oauth_credentials():
+    """Tworzy OAuth credentials z refresh token."""
+    if not DRIVE_CLIENT_ID or not DRIVE_CLIENT_SECRET or not DRIVE_REFRESH_TOKEN:
+        return None
+    try:
+        # Pobierz access token przez refresh token
+        resp = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": DRIVE_CLIENT_ID,
+                "client_secret": DRIVE_CLIENT_SECRET,
+                "refresh_token": DRIVE_REFRESH_TOKEN,
+                "grant_type": "refresh_token",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        token_info = resp.json()
+        access_token = token_info["access_token"]
+        # OAuthCredentials może być utworzony z access token
+        credentials = OAuthCredentials(
+            access_token,
+            refresh_token=DRIVE_REFRESH_TOKEN,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=DRIVE_CLIENT_ID,
+            client_secret=DRIVE_CLIENT_SECRET,
+            scopes=DRIVE_SCOPES,
+        )
+        return credentials
+    except Exception as e:
+        print(f"Błąd OAuth credentials: {e}")
+        return None
 
 
 def _load_google_service_account_info():
@@ -54,15 +104,25 @@ def _load_google_service_account_info():
 
 
 def _get_credentials():
-    """Ładuje credentials z osobnych zmiennych środowiskowych Render."""
+    """Ładuje credentials — najpierw próbuje OAuth, potem Service Account."""
+    # Najpierw spróbuj OAuth 2.0 (dla osobistego dysku)
+    oauth_creds = _load_oauth_credentials()
+    if oauth_creds:
+        print("Używam OAuth 2.0 credentials dla Google Drive")
+        return oauth_creds
+    
+    # Jeśli nie ma OAuth, spróbuj Service Account
     sa_info = _load_google_service_account_info()
-    if not sa_info:
-        raise RuntimeError(
-            "Brak konfiguracji Google Service Account. "
-            "Ustaw zmienne środowiskowe Render: GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY, GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL, "
-            "oraz inne powiązane klucze Service Account."
-        )
-    return service_account.Credentials.from_service_account_info(sa_info, scopes=SCOPES)
+    if sa_info:
+        print("Używam Service Account credentials dla Google Drive")
+        return service_account.Credentials.from_service_account_info(sa_info, scopes=DRIVE_SCOPES)
+    
+    raise RuntimeError(
+        "Brak konfiguracji Google Drive. "
+        "Ustaw zmienne środowiskowe Render: "
+        "GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN (OAuth) LUB "
+        "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY, GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL (Service Account)."
+    )
 
 
 def get_drive_service():

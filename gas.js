@@ -40,8 +40,13 @@ function _wordRegex(word) {
   if (!word) return null;
   var normalizedWord = _normalize(word);
   if (!normalizedWord) return null;
-  // Szuka podciągu (substring match), nie whole word
-  return new RegExp(escapeRegExp(normalizedWord), "i");
+  // Szuka całego wyrazu, nie podciągu
+  // Używa (^|[^\w]) zamiast \b, aby uniknąć dopasowania części słowa
+  // np. "ania" NIE pasuje do "śpiewania"
+  var escaped = escapeRegExp(normalizedWord);
+  // (?<!\w) i (?!\w) są lookbehind/lookahead, ale GAS może nie obsługiwać
+  // Używamy (^|[^\w]) dla początku i ([^\w]|$) dla końca
+  return new RegExp('(^|[^\\w])' + escaped + '([^\\w]|$)', "i");
 }
 
 function _containsAny(haystack, keywords) {
@@ -81,7 +86,7 @@ function removeKeywordsFromText(text, keywords, maskMode) {
   var sorted    = keywords.slice().filter(Boolean).sort(function(a, b){ return b.length - a.length; });
   sorted.forEach(function(k) {
     if (!k) return;
-    var re = new RegExp(escapeRegExp(k), "gi");
+    var re = new RegExp('\\b' + escapeRegExp(k) + '\\b', "gi");
     sanitized = sanitized.replace(re, maskMode ? "[REDACTED]" : "");
   });
   sanitized = sanitized.replace(/[ \t]{2,}/g, " ").replace(/\n{3,}/g, "\n\n");
@@ -90,7 +95,7 @@ function removeKeywordsFromText(text, keywords, maskMode) {
 
 function removeGeneratorPdfKeyword(text, keyword) {
   if (!text || !keyword) return text;
-  var re = new RegExp(escapeRegExp(keyword), "gi");
+  var re = new RegExp('\\b' + escapeRegExp(keyword) + '\\b', "gi");
   return text.replace(re, keyword.slice(0, -1));
 }
 
@@ -1310,6 +1315,27 @@ function _stripQuotedText(body) {
   return result.join("\n").trim();
 }
 
+// ── Etykiety zamiast oznaczania jako przeczytane ──────────────────────────────
+function _getProcessedLabel() {
+  return GmailApp.getUserLabelByName("autoresponder-processed") || 
+         GmailApp.createLabel("autoresponder-processed");
+}
+
+function _hasProcessedLabel(thread) {
+  var labels = thread.getLabels();
+  var target = _getProcessedLabel();
+  for (var i = 0; i < labels.length; i++) {
+    if (labels[i].getId() === target.getId()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function _markAsProcessed(thread) {
+  thread.addLabel(_getProcessedLabel());
+}
+
 function __AAA_processEmails() {
   var props      = PropertiesService.getScriptProperties();
   var webhookUrl = props.getProperty("WEBHOOK_URL");
@@ -1349,7 +1375,8 @@ function __AAA_processEmails() {
   var threads = GmailApp.getInboxThreads(0, 80).reverse();
   for (var i = 0; i < threads.length; i++) {
     var thread = threads[i];
-    if (!thread.isUnread()) continue;
+    // Pomijaj wątki już przetworzone (oznaczone etykietą)
+    if (_hasProcessedLabel(thread)) continue;
 
     var webhookCalled = false;  // reset dla każdego wątku — każdy mail może wywołać backend
     var messages   = thread.getMessages();
@@ -1360,7 +1387,7 @@ function __AAA_processEmails() {
     // Blokada admin email - nie przetwarzamy wiadomości od admina
     if (ADMIN_EMAIL && fromEmail === ADMIN_EMAIL.toLowerCase()) {
         console.log("🔒 BLOKADA ADMIN_EMAIL: Wiadomość od admina (" + fromEmail + ") — pomijanie");
-        thread.markRead();
+        _markAsProcessed(thread);
         continue;
     }
     var senderName = "";
@@ -1373,7 +1400,7 @@ function __AAA_processEmails() {
     // Sprawdź czy wiadomość już była przetworzona
     if (_isAlreadyProcessed(msgId)) {
       console.log("Wiadomość już przetworzona, pomijam: " + msgId + " | " + subject);
-      thread.markRead();
+      _markAsProcessed(thread);
       continue;
     }
 
@@ -1423,9 +1450,9 @@ function __AAA_processEmails() {
       console.log("Odpowiedź (RE:/FWD:) od: " + fromEmail);
 
       if (shouldSendSmierc || shouldSendZwykly) {
-        thread.markRead();
+        _markAsProcessed(thread);
         var previousDataReply = findLastMessageBySender(fromEmail);
-        if (webhookCalled) { thread.markRead(); continue; }
+        if (webhookCalled) { _markAsProcessed(thread); continue; }
         webhookCalled = true;
 
         var responseReply = _callBackend(
@@ -1462,9 +1489,7 @@ function __AAA_processEmails() {
         break; // obsłużono — przerywamy, następny mail przy kolejnym triggerze
 
       } else {
-        var labelRe = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
-        thread.addLabel(labelRe);
-        thread.markRead();
+        _markAsProcessed(thread);
       }
       continue; // RE/FWD bez flagi — tylko oznacz i idź dalej
     }
@@ -1489,8 +1514,8 @@ function __AAA_processEmails() {
       }
       // JOKER zawsze wysyła wszystko — w tym zwykly jeśli znamy osobę
       // (po JOKER osoba trafia do historii, więc przy kolejnym mailu shouldSendZwykly=true)
-      thread.markRead();
-      if (webhookCalled) { thread.markRead(); continue; }
+      _markAsProcessed(thread);
+      if (webhookCalled) { _markAsProcessed(thread); continue; }
       webhookCalled = true;
 
       var responseJoker = _callBackend(
@@ -1535,10 +1560,10 @@ function __AAA_processEmails() {
     // ── SMIERC kontynuacja (nowa wiadomość od osoby z arkuszem śmierci) ──────
     if (shouldSendSmierc) {
       console.log("SMIERC kontynuacja: " + fromEmail + " etap=" + smircData.etap);
-      thread.markRead();
+      _markAsProcessed(thread);
 
       var previousData2 = findLastMessageBySender(fromEmail);
-      if (webhookCalled) { thread.markRead(); continue; }
+      if (webhookCalled) { _markAsProcessed(thread); continue; }
       webhookCalled = true;
 
       var response2 = _callBackend(
@@ -1644,9 +1669,7 @@ function __AAA_processEmails() {
       flowRow.action = "POMINIETO";
       flowRow.notes = "brak warunków wysyłki";
       _appendPrzeplywSheetRow(flowRow);
-      var labelSkip = GmailApp.getUserLabelByName("processed") || GmailApp.createLabel("processed");
-      thread.addLabel(labelSkip);
-      thread.markRead();
+      _markAsProcessed(thread);
       continue;
     } else {
       flowRow.wysylka = true;
@@ -1688,7 +1711,7 @@ function __AAA_processEmails() {
       smircData = { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
     }
 
-    thread.markRead();
+    _markAsProcessed(thread);
     if (webhookCalled) { continue; }
     webhookCalled = true;
 
