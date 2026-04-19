@@ -37,9 +37,11 @@ from google.oauth2.credentials import Credentials as OAuthCredentials
 logger = logging.getLogger(__name__)
 
 # Scopes dla Google Drive i Sheets API
+# UWAGA: drive.file daje dostęp tylko do plików stworzonych przez tę aplikację.
+# drive (pełny) potrzebny, żeby czytać/pisać do istniejących arkuszy i folderów.
 DRIVE_SCOPES = [
-    'https://www.googleapis.com/auth/drive.file',
-    'https://www.googleapis.com/auth/spreadsheets'
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/spreadsheets',
 ]
 
 # OAuth 2.0 zmienne środowiskowe (te same co dla Gmail API)
