@@ -61,9 +61,6 @@ app = Flask(__name__)
 
 REQUIRED_OAUTH_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 
