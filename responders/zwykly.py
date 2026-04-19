@@ -144,6 +144,23 @@ from core.config import (
 # ŁADOWANIE prompt.json
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _strip_json_markdown(raw: str) -> str:
+    """
+    Usuwa opakowanie ```json ... ``` lub ``` ... ``` z odpowiedzi AI.
+    Wyciąga pierwszy blok { ... } z tekstu.
+    Zwraca czysty string gotowy do json.loads().
+    """
+    clean = raw.strip()
+    # Usuń znaczniki ```json lub ``` (z dowolnym językiem)
+    clean = re.sub(r'```[a-zA-Z]*', '', clean)
+    clean = re.sub(r'```', '', clean)
+    # Wyciągnij pierwszy blok { ... }
+    m = re.search(r'\{.*\}', clean, re.DOTALL)
+    if m:
+        return m.group(0).strip()
+    return clean.strip()
+
+
 def _load_prompt_json() -> dict:
     """
     Wczytuje prompt.json z katalogu prompts/.
@@ -394,11 +411,7 @@ def _parse_response(raw: str) -> tuple[str, str]:
     if not raw:
         return "", FALLBACK_EMOT
 
-    json_str = raw.strip()
-    # Wytnij blok JSON jeśli model owinął w ```json ... ```
-    m = re.search(r'\{.*\}', json_str, re.DOTALL)
-    if m:
-        json_str = m.group(0)
+    json_str = _strip_json_markdown(raw)
 
     try:
         data = json.loads(json_str)
@@ -598,17 +611,8 @@ def _extract_nouns_deepseek(body: str) -> dict:
 
     # Parsuj JSON — obsługa ```json...``` wszędzie w tekście
     try:
-        clean = raw.strip()
-        block = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean, re.DOTALL)
-        if block:
-            clean = block.group(1)
-        else:
-            clean = re.sub(r'```[a-zA-Z]*', '', clean)
-            clean = re.sub(r'```', '', clean)
-            m = re.search(r'\{.*\}', clean, re.DOTALL)
-            if m:
-                clean = m.group(0)
-        result = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        result = json.loads(clean)
         if not isinstance(result, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
         nouns_dict = {k: v for k, v in result.items() if re.match(r'^rzecz\d+$', k) and isinstance(v, str)}
@@ -1576,13 +1580,8 @@ def _generate_triptych_prompts_batch(
         return [""] * 7
 
     try:
-        clean = raw.strip()
-        clean = re.sub(r'```[a-zA-Z]*', '', clean)
-        clean = re.sub(r'```', '', clean)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
-        data = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
         prompts = data.get("prompts", [])
         if isinstance(prompts, list) and len(prompts) >= 1:
             # Uzupełnij do 7 jeśli model zwrócił mniej
@@ -1995,10 +1994,8 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
         return None
 
     try:
-        clean = raw.strip()
-        clean = re.sub(r'```[a-zA-Z]*', '', clean)
-        clean = re.sub(r'```', '', clean)
-        cv_data = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        cv_data = json.loads(clean)
         if not isinstance(cv_data, dict):
             raise ValueError(f"[cv] Oczekiwano dict, dostałem {type(cv_data).__name__}")
         logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
@@ -2457,19 +2454,10 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     logger.info("[ankieta] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = raw.strip()
-        block = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean, re.DOTALL)
-        if block:
-            clean = block.group(1)
-        else:
-            clean = re.sub(r'```[a-zA-Z]*', '', clean)
-            clean = re.sub(r'```', '', clean)
-            m = re.search(r'\{.*\}', clean, re.DOTALL)
-            if m:
-                clean = m.group(0)
+        clean = _strip_json_markdown(raw)
         # Próba naprawy uciętego JSON — obetnij do ostatniego kompletnego ]
         try:
-            data = json.loads(clean.strip())
+            data = json.loads(clean)
         except json.JSONDecodeError:
             last_bracket = clean.rfind('"}')
             if last_bracket > 0:
@@ -2808,13 +2796,8 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
     logger.info("[horoskop] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = raw.strip()
-        clean = re.sub(r'```[a-zA-Z]*', '', clean)
-        clean = re.sub(r'```', '', clean)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
-        data = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
         if not isinstance(data, dict):
             raise ValueError(f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}")
         KEY_MAP_HOROSKOP = {
@@ -3002,13 +2985,8 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     logger.info("[karta-rpg] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = raw.strip()
-        clean = re.sub(r'```[a-zA-Z]*', '', clean)
-        clean = re.sub(r'```', '', clean)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
-        data = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
         if not isinstance(data, dict):
             raise ValueError(f"[karta-rpg] Oczekiwano dict, dostałem {type(data).__name__}")
         KEY_MAP_RPG = {
@@ -3360,13 +3338,8 @@ def _build_raport_psychiatryczny(
     logger.info("[raport] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = raw.strip()
-        clean = re.sub(r'```[a-zA-Z]*', '', clean)
-        clean = re.sub(r'```', '', clean)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
-        data = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
         if not isinstance(data, dict):
             raise ValueError(f"[raport] Oczekiwano dict, dostałem {type(data).__name__}")
         KEY_MAP_RAPORT = {
@@ -3631,13 +3604,8 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     logger.info("[plakat] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = raw.strip()
-        clean = re.sub(r'```[a-zA-Z]*', '', clean)
-        clean = re.sub(r'```', '', clean)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
-        data = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
         if not isinstance(data, dict):
             raise ValueError(f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("glowne_zdanie") and isinstance(data.get("plakat"), dict):
@@ -3921,13 +3889,8 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
     logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = raw.strip()
-        clean = re.sub(r'```[a-zA-Z]*', '', clean)
-        clean = re.sub(r'```', '', clean)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
-        data = json.loads(clean.strip())
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
         if not isinstance(data, dict):
             raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
