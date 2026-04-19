@@ -361,8 +361,7 @@ def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> t
     ))
     prompt = call_deepseek(groq_system, source_text, MODEL_TYLER)
     if not prompt:
-        current_app.logger.warning("[flux] Groq zawiodl — probuje DeepSeek")
-        from core.ai_client import call_deepseek, MODEL_TYLER
+        current_app.logger.warning("[flux] Groq zawiodl — probuje DeepSeek (ponownie)")
         deepseek_prompt = call_deepseek(groq_system, source_text, MODEL_TYLER)
         if deepseek_prompt:
             prompt = deepseek_prompt
