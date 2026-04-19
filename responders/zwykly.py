@@ -596,13 +596,18 @@ def _extract_nouns_deepseek(body: str) -> dict:
         logger.error("[rzeczowniki] Brak odpowiedzi od AI")
         return {}
 
-    # Parsuj JSON
+    # Parsuj JSON — obsługa ```json...``` wszędzie w tekście
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
+        clean = raw.strip()
+        block = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean, re.DOTALL)
+        if block:
+            clean = block.group(1)
+        else:
+            clean = re.sub(r'```[a-zA-Z]*', '', clean)
+            clean = re.sub(r'```', '', clean)
+            m = re.search(r'\{.*\}', clean, re.DOTALL)
+            if m:
+                clean = m.group(0)
         result = json.loads(clean.strip())
         if not isinstance(result, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
@@ -1571,8 +1576,9 @@ def _generate_triptych_prompts_batch(
         return [""] * 7
 
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        clean = raw.strip()
+        clean = re.sub(r'```[a-zA-Z]*', '', clean)
+        clean = re.sub(r'```', '', clean)
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
@@ -1990,8 +1996,8 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
 
     try:
         clean = raw.strip()
-        clean = re.sub(r'^```[a-z]*', '', clean, flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        clean = re.sub(r'```[a-zA-Z]*', '', clean)
+        clean = re.sub(r'```', '', clean)
         cv_data = json.loads(clean.strip())
         if not isinstance(cv_data, dict):
             raise ValueError(f"[cv] Oczekiwano dict, dostałem {type(cv_data).__name__}")
@@ -2451,11 +2457,16 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     logger.info("[ankieta] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'\{.*\}', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
+        clean = raw.strip()
+        block = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', clean, re.DOTALL)
+        if block:
+            clean = block.group(1)
+        else:
+            clean = re.sub(r'```[a-zA-Z]*', '', clean)
+            clean = re.sub(r'```', '', clean)
+            m = re.search(r'\{.*\}', clean, re.DOTALL)
+            if m:
+                clean = m.group(0)
         # Próba naprawy uciętego JSON — obetnij do ostatniego kompletnego ]
         try:
             data = json.loads(clean.strip())
@@ -2797,8 +2808,9 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
     logger.info("[horoskop] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        clean = raw.strip()
+        clean = re.sub(r'```[a-zA-Z]*', '', clean)
+        clean = re.sub(r'```', '', clean)
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
@@ -2990,8 +3002,9 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     logger.info("[karta-rpg] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        clean = raw.strip()
+        clean = re.sub(r'```[a-zA-Z]*', '', clean)
+        clean = re.sub(r'```', '', clean)
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
@@ -3347,8 +3360,9 @@ def _build_raport_psychiatryczny(
     logger.info("[raport] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        clean = raw.strip()
+        clean = re.sub(r'```[a-zA-Z]*', '', clean)
+        clean = re.sub(r'```', '', clean)
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
@@ -3617,8 +3631,9 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     logger.info("[plakat] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        clean = raw.strip()
+        clean = re.sub(r'```[a-zA-Z]*', '', clean)
+        clean = re.sub(r'```', '', clean)
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
@@ -3906,8 +3921,9 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
     logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
+        clean = raw.strip()
+        clean = re.sub(r'```[a-zA-Z]*', '', clean)
+        clean = re.sub(r'```', '', clean)
         m = re.search(r'\{.*\}', clean, re.DOTALL)
         if m:
             clean = m.group(0)
