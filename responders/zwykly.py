@@ -139,6 +139,8 @@ from core.config import (
     HF_TOKEN_BLACKLIST,
 )
 
+from core.hf_token_manager import get_active_tokens, mark_dead, mark_remaining, hf_tokens
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ŁADOWANIE prompt.json
@@ -1294,21 +1296,21 @@ def _render_template(text: str, vars_dict: dict) -> tuple:
 
 # Globalny set tokenów HF trwale wyczerpanych (402/401/403) w tej sesji serwera.
 # Raz dodany token nigdy nie jest próbowany ponownie — oszczędność czasu.
-_HF_DEAD_TOKENS: set = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
+# _HF_DEAD_TOKENS: set = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist — ZASTĄPIONE przez core/hf_token_manager
 
 
-def _get_hf_tokens() -> list:
-    """
-    Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKENxx).
-    Pomija tokeny które już w tej sesji zwróciły 402/401/403.
-    """
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(40)]
-    all_tokens = [(n, v) for n in names if (v := os.getenv(n, "").strip())]
-    active = [(n, v) for n, v in all_tokens if n not in _HF_DEAD_TOKENS]
-    dead_count = len(all_tokens) - len(active)
-    if dead_count:
-        logger.debug("[flux-tyler] Pomijam %d martwych tokenów HF (402/401/403)", dead_count)
-    return active
+# def _get_hf_tokens() -> list:
+#     """
+#     Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKENxx).
+#     Pomija tokeny które już w tej sesji zwróciły 402/401/403.
+#     """
+#     names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(40)]
+#     all_tokens = [(n, v) for n in names if (v := os.getenv(n, "").strip())]
+#     active = [(n, v) for n, v in all_tokens if n not in _HF_DEAD_TOKENS]
+#     dead_count = len(all_tokens) - len(active)
+#     if dead_count:
+#         logger.debug("[flux-tyler] Pomijam %d martwych tokenów HF (402/401/403)", dead_count)
+#     return active
 
 
 def _png_to_jpg(image_obj: dict, panel_index: int) -> dict:
@@ -1396,16 +1398,15 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
             image = dict(image)
             image["filename"] = f"tyler_panel{panel_index}_zastepczy.jpg"
         return image
-    tokens = _get_hf_tokens()
+    tokens = get_active_tokens()
     if tokens and panel_index > 0:
         offset = (panel_index - 1) % len(tokens)
         tokens = tokens[offset:] + tokens[:offset]
     if not tokens:
-        if _HF_DEAD_TOKENS:
+        if hf_tokens.all_dead():
             logger.warning(
-                "[flux-tyler] Wszystkie %d tokenów HF na czarnej liście (402/401/403) — "
-                "pomijam generowanie obrazka",
-                len(_HF_DEAD_TOKENS)
+                "[flux-tyler] Wszystkie tokenów HF na czarnej liście (402/401/403) — "
+                "pomijam generowanie obrazka"
             )
         else:
             logger.error("[flux-tyler] Brak tokenów HF w zmiennych środowiskowych!")

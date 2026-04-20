@@ -41,8 +41,7 @@ from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
 from core.config import HF_TOKEN_BLACKLIST
-
-_HF_DEAD_TOKENS: set[str] = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
+from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens, is_dead
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
@@ -384,7 +383,7 @@ def _get_hf_tokens() -> list:
     return [
         (n, v)
         for n in names
-        if n not in _HF_DEAD_TOKENS and (v := os.getenv(n, "").strip())
+        if not is_dead(n) and (v := os.getenv(n, "").strip())
     ]
 
 
@@ -506,7 +505,7 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
                 return result
 
             elif resp.status_code in (401, 403):
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 attempt["status"] = "INVALID_TOKEN"
                 attempt["error"] = f"Nieautoryzowany ({resp.status_code})"
                 current_app.logger.warning(
@@ -515,7 +514,7 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
                 )
 
             elif resp.status_code == 402:
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 attempt["status"] = "CREDITS_EXHAUSTED"
                 attempt["error"] = resp.text[:100]
                 current_app.logger.warning(

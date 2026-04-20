@@ -52,7 +52,13 @@ from responders.generator_pdf import build_generator_pdf_section
 from responders.smierc        import build_smierc_section
 from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
+from core.hf_token_manager import hf_tokens
+
 app = Flask(__name__)
+
+# Warm-up tokenów HF przy starcie serwera (nie czekaj na pierwsze żądanie)
+with app.app_context():
+    hf_tokens.warmup()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -428,8 +434,28 @@ def oauth_status():
     </table>
     <hr>
     <p><a href="/oauth/init">➜ Autoryzuj ponownie</a></p>
+    <p><a href="/admin/hf-status">➜ Stan tokenów HF (FLUX)</a></p>
     </body></html>
     """, 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIAGNOSTYKA TOKENÓW HF (FLUX)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/hf-status")
+def hf_status():
+    """Diagnostyka stanu tokenów HF — tylko do debugowania."""
+    return jsonify({
+        "warmed_up": hf_tokens._warmed_up,
+        "tokens":    hf_tokens.status_report(),
+    })
+
+@app.route("/admin/hf-reset", methods=["POST"])
+def hf_reset():
+    """Resetuje cache tokenów — ponowny warm-up przy następnym żądaniu."""
+    hf_tokens.reset()
+    return jsonify({"status": "ok", "message": "Warm-up zostanie powtórzony przy następnym żądaniu"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
