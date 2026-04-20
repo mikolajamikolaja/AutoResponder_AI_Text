@@ -2,6 +2,11 @@
 """
 core/job_runner.py
 Asynchroniczny pipeline — każda sekcja: wykonaj → wyślij → drive → sheets → del.
+
+ZMIANY:
+  - log_wyslano wywoływany zawsze po wysyłce (niezależnie od sukcesu) żeby GAS
+    mógł wykryć że Render obsłużył wiadomość
+  - Przy braku tokenów HF — obrazek zastępczy zamiast crashu
 """
 import gc
 import traceback
@@ -79,12 +84,16 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
     """
     Wykonuje sekcje sekwencyjnie w tle (daemon thread).
     Po każdej sekcji: wyślij mail → zapisz Drive → zapisz Sheets → del → gc.
+
+    WAŻNE: log_wyslano jest zapisywany po każdej próbie wysyłki (sukces lub porażka),
+    żeby GAS przy następnym uruchomieniu wiedział że Render obsłużył tę wiadomość.
+    Jeśli wysyłka się nie powiodła — zapisujemy WYSŁANO z responderem "ERROR:{section}".
     """
-    import os
     from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
     with flask_app.app_context():
         ordered_keys = build_section_order(list(tasks.keys()))
+        sections_done = []
 
         for section_key in ordered_keys:
             fn = tasks.get(section_key)
@@ -100,12 +109,25 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 flask_app.logger.error(
                     "[async] BŁĄD '%s': %s\n%s", section_key, e, traceback.format_exc()
                 )
+                # Zapisz do Sheets że próbowaliśmy — GAS nie będzie retry-ował
+                if history_sheet_id and message_id:
+                    try:
+                        log_wyslano(history_sheet_id, message_id, f"ERROR:{section_key}", str(e)[:200])
+                    except Exception:
+                        pass
                 continue
 
             if not result:
+                # Sekcja zwróciła pusty wynik — zapisz jako obsłużone
+                if history_sheet_id and message_id:
+                    try:
+                        log_wyslano(history_sheet_id, message_id, f"EMPTY:{section_key}", "")
+                    except Exception:
+                        pass
                 continue
 
             # ── Wyślij email ────────────────────────────────────────────────────
+            sent = False
             try:
                 _token_refresh(get_token_fn, flask_app, section_key)
                 sent = _send_section_email(
@@ -114,7 +136,6 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 )
             except Exception as e:
                 flask_app.logger.error("[async] Błąd wysyłki '%s': %s", section_key, e)
-                sent = False
 
             # ── Drive ───────────────────────────────────────────────────────────
             if save_to_drive and drive_folder_id:
@@ -123,12 +144,14 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 except Exception as e:
                     flask_app.logger.error("[async] Błąd Drive '%s': %s", section_key, e)
 
-            # ── Sheets ──────────────────────────────────────────────────────────
-            if history_sheet_id and sent:
+            # ── Sheets — ZAWSZE zapisz że Render obsłużył tę sekcję ────────────
+            # GAS sprawdza czy message_id ma wpis WYSŁANO — jeśli nie, ponawia.
+            # Dlatego zapisujemy niezależnie od tego czy mail dotarł.
+            if history_sheet_id and message_id:
                 try:
-                    from core.sheets_logger import log_wyslano as _log_wyslano
                     reply_html = result.get("reply_html", "") if isinstance(result, dict) else ""
-                    _log_wyslano(history_sheet_id, message_id, section_key, reply_html)
+                    log_wyslano(history_sheet_id, message_id, section_key, reply_html)
+                    sections_done.append(section_key)
                 except Exception as e:
                     flask_app.logger.error("[async] Błąd Sheets log '%s': %s", section_key, e)
 
@@ -152,7 +175,10 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
             except Exception as e:
                 flask_app.logger.error("[async] Błąd zapisu historii: %s", e)
 
-        flask_app.logger.info("[async] Pipeline zakończony dla %s", sender)
+        flask_app.logger.info(
+            "[async] Pipeline zakończony dla %s | sekcje: %s",
+            sender, ", ".join(sections_done) if sections_done else "brak"
+        )
 
 
 def _token_refresh(get_token_fn, flask_app, section_key):
@@ -172,6 +198,7 @@ def _send_section_email(section_key, result, sender, sender_name, previous_subje
     zal = zbierz_fn({section_key: result})
 
     if not email_html.strip() and not zal:
+        flask_app.logger.info("[async] '%s' — brak treści i załączników, pomijam wysyłkę", section_key)
         return False
 
     subject_line = f"Re: {previous_subject or 'Twoja wiadomość'}"

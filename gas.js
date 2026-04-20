@@ -997,7 +997,8 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
     payload:            JSON.stringify(payload),
     muteHttpExceptions: true,
     headers:            secret ? { "X-Webhook-Secret": secret } : {},
-    // Nie potrzeba długiego timeout — backend odpowiada w < 1s
+    // Render może mieć cold start — dajemy 25 sekund na przyjęcie żądania
+    deadline:           25,
   };
 
   try {
@@ -1083,8 +1084,12 @@ function __AAA_processEmails() {
   var webhookUrl = props.getProperty("WEBHOOK_URL");
   if (!webhookUrl) { console.error("Brak WEBHOOK_URL!"); return; }
 
-  // Najpierw przetwórz oczekujące retry
+  // Najpierw przetwórz oczekujące retry (lokalna kolejka PropertiesService)
   _processPendingRetries(webhookUrl);
+
+  // Sprawdź Sheets — które wiadomości Render jeszcze nie obsłużył
+  // (ODEBRANO bez odpowiadającego WYSŁANO w ciągu ostatnich 24h)
+  _checkUnprocessedMessages(webhookUrl);
 
   var BIZ_LIST                   = _getListFromProps("BIZ_LIST");
   var ALLOWED_LIST               = _getListFromProps("ALLOWED_LIST");
@@ -1474,6 +1479,153 @@ function extractEmail(fromHeader) {
     return match[1];
   }
   return fromHeader.split(" ")[0] || "";
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WERYFIKACJA — sprawdza czy Render obsłużył wszystkie odebrane wiadomości
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * _checkUnprocessedMessages
+ *
+ * Czyta zakładkę "Historia" w HISTORY_SHEET_ID.
+ * Szuka wierszy ze statusem ODEBRANO (kol. E) które NIE mają odpowiadającego
+ * wiersza ze statusem WYSŁANO (kol. F) dla tego samego message_id.
+ * Ogranicza się do wierszy nie starszych niż MAX_AGE_HOURS godzin.
+ *
+ * Dla każdego nieobsłużonego message_id — próbuje ponownie przez _callBackend.
+ * Render sam zadecyduje co zrobić z retry (sekcje które nie zostały wysłane).
+ *
+ * WYWOŁANIE: na początku __AAA_processEmails, przed główną pętlą.
+ */
+function _checkUnprocessedMessages(webhookUrl) {
+  var MAX_AGE_HOURS = 24;
+  var props   = PropertiesService.getScriptProperties();
+  var sheetId = props.getProperty("HISTORY_SHEET_ID");
+  if (!sheetId) { console.warn("[check] Brak HISTORY_SHEET_ID — pomijam weryfikację"); return; }
+
+  var sheet;
+  try {
+    var ss    = SpreadsheetApp.openById(sheetId);
+    sheet     = ss.getSheetByName("Historia");
+    if (!sheet) { sheet = ss.getSheets()[0]; }
+  } catch(e) { console.error("[check] Błąd otwarcia Sheets: " + e.message); return; }
+
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) { console.log("[check] Historia pusta — brak do weryfikacji"); return; }
+
+  // Pobierz wszystkie wiersze (A:H) — pomijamy nagłówek
+  var allData;
+  try {
+    allData = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  } catch(e) { console.error("[check] Błąd odczytu Sheets: " + e.message); return; }
+
+  var now         = new Date();
+  var cutoffMs    = now.getTime() - MAX_AGE_HOURS * 3600 * 1000;
+
+  // Zbierz message_id → dane ODEBRANO
+  var odebrano = {};   // msg_id → { sender, subject, ts }
+  var wyslanoIds = {}; // msg_id → true
+
+  for (var i = 0; i < allData.length; i++) {
+    var row         = allData[i];
+    var msgId       = (row[0] || "").toString().trim();
+    var sender      = (row[1] || "").toString().trim();
+    var tsRaw       = row[2];
+    var subject     = (row[3] || "").toString().trim();
+    var statusGas   = (row[4] || "").toString().trim().toUpperCase();
+    var statusRend  = (row[5] || "").toString().trim().toUpperCase();
+
+    if (!msgId) continue;
+
+    // Sprawdź wiek
+    var tsMs = 0;
+    if (tsRaw instanceof Date) {
+      tsMs = tsRaw.getTime();
+    } else if (typeof tsRaw === "string" && tsRaw) {
+      try { tsMs = new Date(tsRaw).getTime(); } catch(e) {}
+    }
+    if (tsMs > 0 && tsMs < cutoffMs) continue; // za stary — pomiń
+
+    if (statusGas === "ODEBRANO" && !odebrano[msgId]) {
+      odebrano[msgId] = { sender: sender, subject: subject, ts: tsRaw };
+    }
+    if (statusRend === "WYSŁANO") {
+      wyslanoIds[msgId] = true;
+    }
+  }
+
+  // Wyfiltruj nieobsłużone
+  var unprocessed = [];
+  for (var id in odebrano) {
+    if (!wyslanoIds[id]) {
+      unprocessed.push({ message_id: id, sender: odebrano[id].sender, subject: odebrano[id].subject });
+    }
+  }
+
+  if (!unprocessed.length) {
+    console.log("[check] Wszystkie odebrane wiadomości obsłużone przez Render ✓");
+    return;
+  }
+
+  console.warn("[check] Nieobsłużone przez Render: " + unprocessed.length + " wiadomości");
+
+  var secret  = props.getProperty("WEBHOOK_SECRET");
+  var adminEmail = props.getProperty("ADMIN_EMAIL");
+
+  for (var j = 0; j < unprocessed.length; j++) {
+    var item = unprocessed[j];
+    console.log("[check] Retry dla: " + item.sender + " msg_id=" + item.message_id);
+
+    // Wyślij do Render endpoint /webhook_retry z samym message_id i danymi nadawcy
+    // Render może sprawdzić u siebie historię i powtórzyć pipeline.
+    // Jeśli nie ma takiego endpointa — używamy głównego /webhook z flagą is_retry=true.
+    try {
+      var retryPayload = {
+        msg_id:      item.message_id,
+        message_id:  item.message_id,
+        sender:      item.sender,
+        subject:     item.subject || "",
+        body:        "",
+        is_retry:    true,
+        retry_responders: [],
+        attempt_count: 1,
+      };
+      var retryOptions = {
+        method:             "post",
+        contentType:        "application/json",
+        payload:            JSON.stringify(retryPayload),
+        muteHttpExceptions: true,
+        headers:            secret ? { "X-Webhook-Secret": secret } : {},
+        deadline:           25,
+      };
+      var retryResp = UrlFetchApp.fetch(webhookUrl, retryOptions);
+      var retryCode = retryResp.getResponseCode();
+      if (retryCode === 200) {
+        console.log("[check] ✓ Retry zaakceptowany dla: " + item.sender);
+      } else {
+        console.error("[check] ✗ Retry odrzucony (" + retryCode + ") dla: " + item.sender);
+        // Alert do admina jeśli retry też się nie powiódł
+        if (adminEmail) {
+          try {
+            MailApp.sendEmail({
+              to:      adminEmail,
+              subject: "[AUTORESPONDER] Retry nieudany dla: " + item.sender,
+              body:    "message_id: " + item.message_id + "\n" +
+                       "sender: " + item.sender + "\n" +
+                       "Render zwrócił kod: " + retryCode + "\n" +
+                       "Timestamp: " + new Date().toISOString()
+            });
+          } catch(mailErr) { console.error("[check] Błąd wysyłki alertu: " + mailErr.message); }
+        }
+      }
+    } catch(fetchErr) {
+      console.error("[check] Błąd połączenia przy retry dla " + item.sender + ": " + fetchErr.message);
+    }
+
+    // Mała przerwa żeby nie floodować Render
+    Utilities.sleep(500);
+  }
 }
 
 function keepAlive() {
