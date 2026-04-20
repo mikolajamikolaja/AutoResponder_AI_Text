@@ -1025,7 +1025,7 @@ def webhook():
     t = threading.Thread(
         target=run_pipeline_async,
         args=(
-            app._get_current_object(),
+            app,
             data,
             message_id,
             tasks,
