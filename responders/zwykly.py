@@ -4168,15 +4168,17 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
 
     reply_html = build_html_reply(res_text)
     analiza_docx_list = []
-    # POPRAWKA: wywołuj dociekliwy TYLKO gdy są załączniki i app.py
-    # nie zaplanował osobnego wywołania (skip_dociekliwy=True).
-    # Zapobiega podwójnemu wywołaniu AI i timeoutowi 502.
-    if bool(attachments) and not skip_dociekliwy:
+
+    # Dociekliwy działa na podstawie body + opcjonalnych zalacznikow.
+    # NIE wymaga zalacznikow — analizuje tresc emaila nadawcy.
+    # Pomijamy tylko gdy app.py zaplanowal osobne wywolanie (skip_dociekliwy=True).
+    if not skip_dociekliwy:
         try:
-            analiza_res = build_dociekliwy_section(body, attachments, sender=sender_email, sender_name=sender_name)
+            analiza_res = build_dociekliwy_section(body, attachments or [], sender=sender_email, sender_name=sender_name)
             if isinstance(analiza_res, dict):
                 diagram_jpg_b64 = None
                 interactive_html_b64 = None
+
                 for doc in analiza_res.get("docx_list", []):
                     if not isinstance(doc, dict) or not doc.get("base64"):
                         continue
@@ -4185,18 +4187,44 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
                         diagram_jpg_b64 = doc["base64"]
                     elif content_type == "text/html" and not interactive_html_b64:
                         interactive_html_b64 = doc["base64"]
+
+                # Dolacz HTML z dociekliwego jako zalacznik
                 if interactive_html_b64:
                     analiza_docx_list.append({
                         "base64":       interactive_html_b64,
                         "content_type": "text/html",
                         "filename":     "eryk_diagram_interaktywny.html"
                     })
+
+                # Wstaw obrazek JPG (diagram) inline do tresci maila
                 if diagram_jpg_b64:
                     reply_html = _build_html_reply_with_image(res_text, diagram_jpg_b64)
+
+                # Dolacz pierwsza odpowiedz tekstowa dociekliwego na koncu tresci maila
+                dociekliwy_reply = analiza_res.get("reply_html", "")
+                if dociekliwy_reply and dociekliwy_reply.strip():
+                    separator = (
+                        '<hr style="border:none;border-top:2px solid #ccc;margin:32px 0;" />'
+                        '<div style="background:#f5f5f5;border-left:4px solid #888;'
+                        'padding:16px 20px;margin:0;font-size:14px;color:#333;">'
+                        '<strong style="display:block;margin-bottom:8px;color:#555;">'
+                        u'\U0001f50d Dociekliwy:</strong>'
+                        + dociekliwy_reply +
+                        '</div>'
+                    )
+                    if '<div class="footer">' in reply_html:
+                        reply_html = reply_html.replace(
+                            '<div class="footer">',
+                            separator + '<div class="footer">',
+                            1
+                        )
+                    else:
+                        reply_html = reply_html + separator
+
         except Exception as e:
-            logger.warning("[zwykly] analiza attachment failed: %s", e)
-    elif skip_dociekliwy:
-        logger.info("[zwykly] Pomijam dociekliwy — app.py wywoła go osobno")
+            logger.warning("[zwykly] dociekliwy failed: %s", e)
+    else:
+        logger.info("[zwykly] Pomijam dociekliwy — app.py wywola go osobno")
 
     # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
     # Uruchamiamy po KROK 2, żeby nie rywalizować o klucze Groq z tryptyk/ankieta/horo/rpg/gra
@@ -4217,6 +4245,10 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
 
     # ── FINALIZACJA ───────────────────────────────────────────────────────────
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', sender_name)[:30] or "Pacjent"
+
+    # Raport psychiatryczny (DOCX) dodaj do docx_list zeby smtp_wysylka go wyslal jako zalacznik
+    if raport_pdf and isinstance(raport_pdf, dict) and raport_pdf.get("base64"):
+        analiza_docx_list.append(raport_pdf)
 
     return {
         "reply_html": reply_html,

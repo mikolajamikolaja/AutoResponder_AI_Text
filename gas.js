@@ -1618,7 +1618,7 @@ function _checkUnprocessedMessages(webhookUrl) {
     if (tsMs > 0 && tsMs < cutoffMs) continue;
 
     if (statusGas === "ODEBRANO" && !odebrano[msgId]) {
-      odebrano[msgId] = { sender: sender, subject: subject };
+      odebrano[msgId] = { sender: sender, subject: subject, ts: tsMs };
     }
 
     // Obsłużone = Render podjął próbę (sukces lub błąd — nie ponawiamy)
@@ -1642,7 +1642,8 @@ function _checkUnprocessedMessages(webhookUrl) {
     unprocessed.push({
       message_id: id,
       sender:     senderAddr,
-      subject:    odebrano[id].subject
+      subject:    odebrano[id].subject,
+      ts:         odebrano[id].ts
     });
   }
 
@@ -1651,13 +1652,16 @@ function _checkUnprocessedMessages(webhookUrl) {
     return;
   }
 
-  console.warn("[check] Nieobsłużone przez Render: " + unprocessed.length + " wiadomości");
+  // Sortuj od najstarszej i weź tylko JEDNĄ — żeby nie przeciążać Render
+  unprocessed.sort(function(a, b) { return (a.ts || 0) - (b.ts || 0); });
+  var oldest = [unprocessed[0]];
+  console.warn("[check] Nieobsłużone przez Render: " + unprocessed.length + " wiadomości — wysyłam tylko najstarszą");
 
   var secret     = props.getProperty("WEBHOOK_SECRET");
   var adminEmail = props.getProperty("ADMIN_EMAIL");
 
-  for (var j = 0; j < unprocessed.length; j++) {
-    var item = unprocessed[j];
+  for (var j = 0; j < oldest.length; j++) {
+    var item = oldest[j];
     console.log("[check] Retry dla: " + item.sender + " msg_id=" + item.message_id);
 
     try {
