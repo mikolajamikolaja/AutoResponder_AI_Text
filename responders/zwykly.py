@@ -136,10 +136,9 @@ from core.config import (
     TYLER_JPG_QUALITY,
     EMOCJA_MAP,
     FALLBACK_EMOT,
-    HF_TOKEN_BLACKLIST,
 )
 
-from core.hf_token_manager import get_active_tokens, mark_dead, mark_remaining, hf_tokens
+from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1294,23 +1293,7 @@ def _render_template(text: str, vars_dict: dict) -> tuple:
 # _generate_panel_prompt usunięta — zastąpiona przez _generate_triptych_prompts_batch
 
 
-# Globalny set tokenów HF trwale wyczerpanych (402/401/403) w tej sesji serwera.
-# Raz dodany token nigdy nie jest próbowany ponownie — oszczędność czasu.
-# _HF_DEAD_TOKENS: set = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist — ZASTĄPIONE przez core/hf_token_manager
-
-
-# def _get_hf_tokens() -> list:
-#     """
-#     Pobiera listę tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKENxx).
-#     Pomija tokeny które już w tej sesji zwróciły 402/401/403.
-#     """
-#     names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(40)]
-#     all_tokens = [(n, v) for n in names if (v := os.getenv(n, "").strip())]
-#     active = [(n, v) for n, v in all_tokens if n not in _HF_DEAD_TOKENS]
-#     dead_count = len(all_tokens) - len(active)
-#     if dead_count:
-#         logger.debug("[flux-tyler] Pomijam %d martwych tokenów HF (402/401/403)", dead_count)
-#     return active
+# Zarządzanie tokenami HF jest teraz w core/hf_token_manager
 
 
 def _png_to_jpg(image_obj: dict, panel_index: int) -> dict:
@@ -1452,15 +1435,15 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
 
             elif resp.status_code == 402:
                 # Wyczerpane kredyty — dodaj do czarnej listy na całą sesję
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 logger.warning(
                     "[flux-tyler] ✗ Token %s: wyczerpane kredyty (402) — "
-                    "dodano do czarnej listy sesji (%d martwych łącznie)",
-                    name, len(_HF_DEAD_TOKENS)
+                    "dodano do czarnej listy sesji",
+                    name
                 )
             elif resp.status_code in (401, 403):
                 # Nieważny token — też na czarną listę
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 logger.warning(
                     "[flux-tyler] ✗ Token %s: nieważny (HTTP %d) — "
                     "dodano do czarnej listy sesji",
@@ -3227,7 +3210,7 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
     )
 
     # ── Wywołaj FLUX z parametrami z JSON ────────────────────────────────────
-    tokens = _get_hf_tokens()
+    tokens = get_active_tokens()
     if not tokens:
         logger.error("[psych-photo] Brak tokenów HF")
         return None
@@ -3257,10 +3240,10 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
                 logger.info("[psych-photo] FLUX OK token=%s (%d B)", name, len(raw_img))
                 break
             elif resp.status_code == 402:
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 logger.warning("[psych-photo] 402 token=%s — wyczerpane kredyty, dodano do czarnej listy", name)
             elif resp.status_code in (401, 403):
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 logger.warning("[psych-photo] HTTP %d token=%s — nieważny, dodano do czarnej listy", resp.status_code, name)
             elif resp.status_code == 429:
                 logger.warning("[psych-photo] 429 token=%s → następny", name)

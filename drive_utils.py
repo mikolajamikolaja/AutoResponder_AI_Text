@@ -37,8 +37,6 @@ from google.oauth2.credentials import Credentials as OAuthCredentials
 logger = logging.getLogger(__name__)
 
 # Scopes dla Google Drive i Sheets API
-# UWAGA: drive.file daje dostęp tylko do plików stworzonych przez tę aplikację.
-# drive (pełny) potrzebny, żeby czytać/pisać do istniejących arkuszy i folderów.
 DRIVE_SCOPES = [
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/spreadsheets',
@@ -55,7 +53,6 @@ def _load_oauth_credentials():
     if not DRIVE_CLIENT_ID or not DRIVE_CLIENT_SECRET or not DRIVE_REFRESH_TOKEN:
         return None
     try:
-        # Pobierz access token przez refresh token
         resp = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
@@ -69,7 +66,6 @@ def _load_oauth_credentials():
         resp.raise_for_status()
         token_info = resp.json()
         access_token = token_info["access_token"]
-        # OAuthCredentials może być utworzony z access token
         credentials = OAuthCredentials(
             access_token,
             refresh_token=DRIVE_REFRESH_TOKEN,
@@ -107,18 +103,16 @@ def _load_google_service_account_info():
 
 def _get_credentials():
     """Ładuje credentials — najpierw próbuje OAuth, potem Service Account."""
-    # Najpierw spróbuj OAuth 2.0 (dla osobistego dysku)
     oauth_creds = _load_oauth_credentials()
     if oauth_creds:
         print("Używam OAuth 2.0 credentials dla Google Drive")
         return oauth_creds
-    
-    # Jeśli nie ma OAuth, spróbuj Service Account
+
     sa_info = _load_google_service_account_info()
     if sa_info:
         print("Używam Service Account credentials dla Google Drive")
         return service_account.Credentials.from_service_account_info(sa_info, scopes=DRIVE_SCOPES)
-    
+
     raise RuntimeError(
         "Brak konfiguracji Google Drive. "
         "Ustaw zmienne środowiskowe Render: "
@@ -156,19 +150,15 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
         return None
 
     try:
-        # Jeśli file_data jest base64, dekoduj
         if isinstance(file_data, str):
             file_data = base64.b64decode(file_data)
 
-        # Przygotuj media
         media = MediaIoBaseUpload(io.BytesIO(file_data), mimetype=mime_type, resumable=True)
 
-        # Metadata pliku
         file_metadata = {'name': filename}
         if folder_id:
             file_metadata['parents'] = [folder_id]
 
-        # Upload - support shared drives (Team Drives)
         file = service.files().create(
             body=file_metadata,
             media_body=media,
@@ -178,8 +168,6 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
         ).execute()
 
         try:
-            # Ustaw uprawnienia write dla service account (owner już ma)
-            # Dodaj również uprawnienia anyone z rolą writer dla łatwego dostępu
             service.permissions().create(
                 fileId=file['id'],
                 body={'type': 'anyone', 'role': 'writer'},
@@ -188,7 +176,7 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
             ).execute()
         except HttpError as e:
             if e.resp.status == 403:
-                print(f"Błąd ustawiania uprawnień Drive (403) dla pliku {file['id']} — ignoruję, używam istniejącego linku")
+                print(f"Błąd ustawiania uprawnień Drive (403) dla pliku {file['id']} — ignoruję")
             else:
                 raise
 
@@ -229,23 +217,59 @@ def update_sheet_with_data(sheet_id, range_name, values):
         return False
 
 
+def update_message_status(sheet_id: str, message_id: str, responder: str,
+                          status: str, tresc: str) -> bool:
+    """
+    Dopisuje wiersz statusu dla danego message_id i respondera.
+
+    Args:
+        sheet_id: ID arkusza historii
+        message_id: Gmail message.getId()
+        responder: nazwa sekcji np. 'zwykly', 'smierc'
+        status: 'ODEBRANO' lub 'WYSŁANO'
+        tresc: treść emaila wejściowego lub odpowiedzi
+
+    Returns:
+        bool: True jeśli sukces
+    """
+    if not sheet_id:
+        return False
+    try:
+        from datetime import datetime, timezone, timedelta
+        credentials = _get_credentials()
+        sheets_service = build('sheets', 'v4', credentials=credentials)
+
+        warsaw_tz = timezone(timedelta(hours=2))
+        timestamp = datetime.now(tz=warsaw_tz).isoformat()
+
+        clean_tresc = _strip_html_to_text_sheets(tresc or "")[:1000]
+        values = [[message_id, "", timestamp, "", "", status, responder, clean_tresc]]
+
+        sheets_service.spreadsheets().values().append(
+            spreadsheetId=sheet_id,
+            range='Historia',
+            valueInputOption='RAW',
+            insertDataOption='INSERT_ROWS',
+            body={'values': values}
+        ).execute()
+
+        print(f"[drive_utils] update_message_status: {status} / {responder} / {message_id}")
+        return True
+    except Exception as e:
+        print(f"Błąd update_message_status: {e}")
+        return False
+
+
 def _strip_html_to_text_sheets(html_text: str) -> str:
-    """
-    Konwertuje HTML na zwykły tekst, usuwając tagi i CSS.
-    """
+    """Konwertuje HTML na zwykły tekst, usuwając tagi i CSS."""
     import re
     if not html_text:
         return ""
-    # Usuń tagi style
     text = re.sub(r'<style[^>]*>.*?</style>', '', html_text, flags=re.DOTALL | re.IGNORECASE)
-    # Usuń tagi script
     text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    # Usuń pozostałe tagi HTML
     text = re.sub(r'<[^>]+>', ' ', text)
-    # Usuń HTML entity
     text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<')
     text = text.replace('&gt;', '>').replace('&quot;', '"').replace('&#39;', "'")
-    # Zmniejsz wielokrotne białe znaki
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
@@ -273,13 +297,10 @@ def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
         credentials = _get_credentials()
         sheets_service = build('sheets', 'v4', credentials=credentials)
 
-        # Użyj UTC+2 (polska letnia) zamiast UTC - bardziej czytelne dla użytkownika
-        warsaw_tz = timezone(timedelta(hours=2))  # UTC+2 CEST (letnia)
+        warsaw_tz = timezone(timedelta(hours=2))
         timestamp = datetime.now(tz=warsaw_tz).isoformat()
-        
-        # Użyj append() aby uniknąć problemów z parsowaniem zakresu
+
         msg_type = "ODPOWIEDŹ" if is_response else "WEJŚCIE"
-        # Stripuj HTML ze wspisu
         clean_body = _strip_html_to_text_sheets(body or "")[:1000]
         values = [[timestamp, sender, msg_type, subject or "", clean_body]]
 
@@ -317,14 +338,12 @@ def check_user_in_sheet(sheet_id, email, sheet_name='Historia'):
         credentials = _get_credentials()
         sheets_service = build('sheets', 'v4', credentials=credentials)
 
-        # Najpierw spróbuj z podaną nazwą arkusza
         try:
             result = sheets_service.spreadsheets().values().get(
                 spreadsheetId=sheet_id,
                 range=f'{sheet_name}!B1:B10000'
             ).execute()
         except Exception:
-            # Jeśli nie uda się, spróbuj z pierwszym arkuszem
             spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
             first_sheet = spreadsheet['sheets'][0]['properties']['title']
             result = sheets_service.spreadsheets().values().get(
@@ -336,7 +355,6 @@ def check_user_in_sheet(sheet_id, email, sheet_name='Historia'):
         if not values:
             return False
 
-        # Sprawdź czy email występuje w kolumnie
         for row in values:
             if row and row[0].strip().lower() == email.strip().lower():
                 return True

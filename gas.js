@@ -1,34 +1,18 @@
 /**
  * __AAA_processEmails - Google Apps Script
- * WERSJA 8 - ZUNIFIKOWANA LOGIKA WYSYŁKI:
+ * WERSJA 9 - ASYNC PIPELINE:
  *
- * Dwie globalne flagi obliczane RAZ na początku pętli dla każdej osoby:
+ * Zmiany względem v8:
+ *   - Przed callем do Render: zapisuje wiersz ODEBRANO do Sheets z message_id
+ *   - _callBackend: nie czeka na wyniki sekcji — tylko przyjmuje 200 accepted
+ *   - msg_id dodany do każdego payloadu
+ *   - Wysyłka maili przeniesiona do Render (backend) — GAS już NIE wywołuje executeMailSend dla zwykly/smierc/etc
+ *   - Retry queue uproszczona — status "accepted" = sukces
+ *   - Timeout skrócony: backend odpowiada < 1s
  *
- *   shouldSendZwykly = isAllowed || isKnownSender
- *     → osoba jest na ALLOWED_LIST LUB ma historię w HISTORY_SHEET_ID
- *     → zawsze dostaje odpowiedź zwykly.py
- *
- *   shouldSendSmierc = smircData !== null
- *     → osoba ma arkusz w SMIERC_HISTORY_SHEET_ID
- *     → zawsze dostaje odpowiedź smierc.py
- *
- * Obie flagi są niezależne — można dostać oba respondery równocześnie.
- * Flagi są używane konsekwentnie we WSZYSTKICH blokach (RE/FWD, JOKER,
- * SMIERC kontynuacja, nowa wiadomość).
- *
- * Pozostałe zmiany względem v7:
- *   - smircData obliczany RAZ na górze pętli (nie powtarzany w blokach)
- *   - wants_text_reply = shouldSendZwykly (nie zależy od bloku)
- *   - po każdej odpowiedzi backendu zawsze sprawdzane oba: zwykly i smierc
- *
- * Struktura SMIERC arkusza:
- * - Każda zakładka = email osoby (nazwa: email_z_underscore)
- * - Kolumna A: nr etapu | B: data_smierci | C: mail_od_osoby
- * - Kolumna D: odpowiedz_pawla | E: last_msg_id
+ * UWAGA: Backend (Render) sam wysyła wszystkie maile w daemon thread.
+ * GAS tylko: odebrano → Sheets ODEBRANO → POST → sprawdź 200 → koniec.
  */
-
-// ── Stałe ─────────────────────────────────────────────────────────────────────
-// (inne ID są w PropertiesService.getScriptProperties())
 
 // ── Normalizacja tekstu ───────────────────────────────────────────────────────
 function _normalize(text) {
@@ -40,12 +24,7 @@ function _wordRegex(word) {
   if (!word) return null;
   var normalizedWord = _normalize(word);
   if (!normalizedWord) return null;
-  // Szuka całego wyrazu, nie podciągu
-  // Używa (^|[^\w]) zamiast \b, aby uniknąć dopasowania części słowa
-  // np. "ania" NIE pasuje do "śpiewania"
   var escaped = escapeRegExp(normalizedWord);
-  // (?<!\w) i (?!\w) są lookbehind/lookahead, ale GAS może nie obsługiwać
-  // Używamy (^|[^\w]) dla początku i ([^\w]|$) dla końca
   return new RegExp('(^|[^\\w])' + escaped + '([^\\w]|$)', "i");
 }
 
@@ -125,11 +104,28 @@ function _getHistorySheet() {
   return sheet;
 }
 
+/**
+ * Zapisuje wiersz ODEBRANO do arkusza historii PRZED wysłaniem do backendu.
+ * Nowa struktura kolumn:
+ *   message_id | sender | data | temat | status_gas | status_render | responder | treść
+ */
+function _saveOdebranoToHistory(messageId, senderEmail, subject, body) {
+  try {
+    var sheet = _getHistorySheet();
+    if (!sheet) return;
+    var ts = new Date().toISOString();
+    var cleanBody = (body || "").substring(0, 1000);
+    var rowData = [messageId, senderEmail, ts, subject || "", "ODEBRANO", "", "", cleanBody];
+    sheet.appendRow(rowData);
+    console.log("ODEBRANO zapisano dla: " + senderEmail + " msg_id=" + messageId);
+  } catch (e) { console.error("Błąd _saveOdebranoToHistory: " + e.message); }
+}
+
 function saveToHistory(senderEmail, subject, body) {
   try {
     var sheet = _getHistorySheet();
     if (!sheet) return;
-    var rowData = [new Date(), senderEmail, "WEJ\u015aCIE", subject || "", (body || "").substring(0, 1000)];
+    var rowData = [new Date(), senderEmail, "WEJŚCIE", subject || "", (body || "").substring(0, 1000)];
     sheet.appendRow(rowData);
     console.log("Historia zapisana dla: " + senderEmail);
   } catch (e) { console.error("Błąd zapisu historii: " + e.message); }
@@ -140,9 +136,9 @@ function saveResponseToHistory(senderEmail, subject, body) {
     var sheet = _getHistorySheet();
     if (!sheet) return;
     var plainText = extractPlainTextFromHtml(body || "");
-    var rowData = [new Date(), senderEmail, "ODPOWIED\u017a", subject || "", plainText.substring(0, 1000)];
+    var rowData = [new Date(), senderEmail, "ODPOWIEDŹ", subject || "", plainText.substring(0, 1000)];
     sheet.appendRow(rowData);
-    console.log("Odpowied\u017a zapisana dla: " + senderEmail);
+    console.log("Odpowiedź zapisana dla: " + senderEmail);
   } catch (e) { console.error("Błąd zapisu odpowiedzi: " + e.message); }
 }
 
@@ -154,12 +150,11 @@ function findLastMessageBySender(senderEmail) {
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) return null;
     var emailCol = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
-    // Szukaj od końca ostatniego WEJŚCIA (nie ODPOWIEDZI)
     for (var i = emailCol.length - 1; i >= 0; i--) {
       if ((emailCol[i][0] || "").toString().toLowerCase().trim() === senderEmail.toLowerCase().trim()) {
-        var typeCell = sheet.getRange(i + 2, 3, 1, 1).getValues()[0][0];  // Kolumna 3 = typ
-        if (typeCell === "WEJŚCIE") {  // Szukaj tylko WEJŚCIA, nie ODPOWIEDZI
-          var row = sheet.getRange(i + 2, 4, 1, 2).getValues()[0];  // Kolumny 4-5 (subject, body)
+        var typeCell = sheet.getRange(i + 2, 3, 1, 1).getValues()[0][0];
+        if (typeCell === "WEJŚCIE") {
+          var row = sheet.getRange(i + 2, 4, 1, 2).getValues()[0];
           return { subject: (row[0] || "").toString(), body: (row[1] || "").toString() };
         }
       }
@@ -412,8 +407,7 @@ function _processPendingRetries(webhookUrl) {
       entry.attempt_count + 1
     );
 
-    if (!response || !response.json) {
-      entry.attempt_count += 1;
+    if (!response || !response.accepted) {
       _reportRetryFailure(entry, "Backend nieodpowiedział podczas próby retry.");
       if (entry.attempt_count >= 2) {
         updated = updated.filter(function(item) { return item.id !== entry.id; });
@@ -421,20 +415,9 @@ function _processPendingRetries(webhookUrl) {
       continue;
     }
 
-    var status = response.json.processed_status || {};
-    if (status.status === "ok") {
-      updated = updated.filter(function(item) { return item.id !== entry.id; });
-      continue;
-    }
-
-    entry.retry_responders = status.failed || entry.retry_responders;
-    entry.details = status.details || entry.details;
-    entry.attempt_count = status.attempt_count || entry.attempt_count + 1;
-    entry.last_attempt_at = new Date().toISOString();
-    _reportRetryFailure(entry, "Częściowy błąd podczas próby retry.");
-    if (entry.attempt_count >= 2) {
-      updated = updated.filter(function(item) { return item.id !== entry.id; });
-    }
+    // Nowy backend zwraca "accepted" — usuwamy z kolejki po akceptacji
+    updated = updated.filter(function(item) { return item.id !== entry.id; });
+    console.log("Retry zaakceptowany: " + entry.sender);
   }
 
   _savePendingRetries(updated);
@@ -574,11 +557,8 @@ function getAllAttachments(msg) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// GOOGLE DRIVE — zapis wszystkich plików
+// GOOGLE DRIVE — zapis plików (nadal dostępny jako helper)
 // ════════════════════════════════════════════════════════════════════════════
-// DRIVE_FOLDER_ID jest dostępny w GAS jako opcjonalna konfiguracja.
-// Funkcje zapisu do Drive istnieją, ale teraz nie są automatycznie wywoływane
-// podczas głównej ścieżki przetwarzania wiadomości.
 
 function _getDriveFolder() {
   var folderId = PropertiesService.getScriptProperties().getProperty("DRIVE_FOLDER_ID");
@@ -589,18 +569,7 @@ function _getDriveFolder() {
   return it.hasNext() ? it.next() : rootFolder.createFolder(today);
 }
 
-function _csvQuote(value) {
-  var text = value == null ? "" : value.toString();
-  return '"' + text.replace(/"/g, '""') + '"';
-}
-
-function _getPrzeplywCsvFile(folder) {
-  var it = folder.getFilesByName("przeplyw.csv");
-  return it.hasNext() ? it.next() : null;
-}
-
 function _appendPrzeplywSheetRow(row) {
-  // Dopisuj tylko skuteczne wysyłki
   if (!row.wysylka) {
     console.log("[Flow] Pominieto — wysylka === false");
     return;
@@ -610,35 +579,29 @@ function _appendPrzeplywSheetRow(row) {
     var sheetId = PropertiesService.getScriptProperties().getProperty("DECYZJA_WYSYLKI_SHEET_ID");
     if (!sheetId) { console.warn("[Flow] Brak DECYZJA_WYSYLKI_SHEET_ID"); return; }
     var sheet = SpreadsheetApp.openById(sheetId).getSheets()[0];
-    
-    // Nagłówki
+
     var headers = [
-      "ts", "from", "subject", "isNewMsg", "KEYWORDS", "KEYWORDS1", "KEYWORDS2", "KEYWORDS3", 
-      "KEYWORDS4", "KEYWORDS_GENERATOR_PDF", "KEYWORDS_SMIERC", "JOKER", 
+      "ts", "from", "subject", "isNewMsg", "KEYWORDS", "KEYWORDS1", "KEYWORDS2", "KEYWORDS3",
+      "KEYWORDS4", "KEYWORDS_GENERATOR_PDF", "KEYWORDS_SMIERC", "JOKER",
       "lista_smiert", "lista_historia", "flaga_test", "wysylka", "action", "notes"
     ];
-    
-    // Sprawdź czy arkusz ma nagłówki
+
     var lastRow = sheet.getLastRow();
     var needsHeaders = true;
-    
+
     if (lastRow > 0) {
       var firstRow = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
-      // Sprawdź czy pierwszy wiersz zawiera nagłówiki (kolumna "ts" i "wysylka")
       if (firstRow[0] === "ts" && firstRow[15] === "wysylka") {
         needsHeaders = false;
       }
     }
-    
-    // Dodaj nagłówki jeśli ich brakuje
+
     if (needsHeaders) {
-      // Wyczyść arkusz i dodaj nagłówki
       sheet.clearContents();
       sheet.appendRow(headers);
       console.log("[Flow] Dodano nagłówki do arkusza");
     }
-    
-    // Przygotuj dane wiersza
+
     var values = [
       row.ts || Utilities.formatDate(new Date(), "GMT+1", "yyyy-MM-dd HH:mm:ss"),
       row.fromEmail,
@@ -659,153 +622,34 @@ function _appendPrzeplywSheetRow(row) {
       row.action || "",
       row.notes || ""
     ];
-    
-    // Dodaj wiersz
+
     sheet.appendRow(values);
     var newRowNum = sheet.getLastRow();
-    
-    // Zabarwij komórki z "tak" na zielono
+
     for (var i = 0; i < values.length; i++) {
       if (values[i] === "tak") {
         sheet.getRange(newRowNum, i + 1).setBackground("#90EE90");
       }
     }
-    
+
     console.log("[Flow] Dodano wiersz #" + newRowNum + " (wysylka OK)");
   } catch (e) {
     console.error("[Flow] Błąd zapisu do arkusza: " + e.message);
   }
 }
 
-function _saveFileToDriveNow(fileObj) {
-  if (!fileObj || !fileObj.base64) return;
-  try {
-    var folder   = _getDriveFolder();
-    if (!folder) return;
-    var filename = fileObj.filename || "plik.bin";
-    var existing = folder.getFilesByName(filename);
-    if (existing.hasNext()) { console.log("[Drive] Duplikat — pomijam: " + filename); return; }
-    folder.createFile(Utilities.newBlob(
-      Utilities.base64Decode(fileObj.base64),
-      fileObj.content_type || "application/octet-stream",
-      filename
-    ));
-    console.log("[Drive] Zapisano sync: " + filename);
-  } catch(e) { console.error("[Drive] Błąd sync zapisu: " + e.message); }
-}
-
-function _queueDriveFile(key, fileObj) {
-  if (!fileObj || !fileObj.base64) return;
-  var serialized = JSON.stringify({
-    base64:       fileObj.base64,
-    content_type: fileObj.content_type || "application/octet-stream",
-    filename:     fileObj.filename     || key + ".bin"
-  });
-  if (serialized.length > 90000) {
-    console.warn("[DriveQ] Duży plik (" + (fileObj.filename || key) + ") — zapisuję sync");
-    _saveFileToDriveNow(fileObj);
-    return;
-  }
-  try {
-    var cache    = CacheService.getScriptCache();
-    var existing = cache.get("driveq_keys") || "";
-    var keys     = existing ? existing.split(",") : [];
-    var cacheKey = "driveq_" + key + "_" + Date.now();
-    cache.put(cacheKey, serialized, 21600);
-    keys.push(cacheKey);
-    cache.put("driveq_keys", keys.join(","), 21600);
-    console.log("[DriveQ] Kolejka: " + (fileObj.filename || key));
-  } catch(e) {
-    console.error("[DriveQ] Błąd kolejkowania: " + e.message);
-    _saveFileToDriveNow(fileObj);
-  }
-}
-
-function _queueAllFromSection(sectionData) {
-  if (!sectionData || typeof sectionData !== "object") return;
-  var SINGLE_FIELDS = [
-    "pdf", "emoticon", "cv_pdf", "log_psych",
-    "ankieta_html", "ankieta_pdf", "horoskop_pdf",
-    "karta_rpg_pdf", "raport_pdf", "debug_txt",
-    "explanation_txt", "plakat_svg", "gra_html",
-    "image", "image2", "prompt1_txt", "prompt2_txt",
-  ];
-  var LIST_FIELDS = [
-    "triptych", "images", "videos", "docs", "docx_list",
-  ];
-  SINGLE_FIELDS.forEach(function(field) {
-    _queueDriveFile(field, sectionData[field]);
-  });
-  LIST_FIELDS.forEach(function(field) {
-    var arr = sectionData[field];
-    if (!Array.isArray(arr)) return;
-    arr.forEach(function(item, idx) {
-      _queueDriveFile(field + "_" + idx, item);
-    });
-  });
-}
-
-function _scheduleDriveFlush() {
-  try {
-    ScriptApp.getProjectTriggers().forEach(function(t) {
-      if (t.getHandlerFunction() === "__AAA_driveFlush") ScriptApp.deleteTrigger(t);
-    });
-    ScriptApp.newTrigger("__AAA_driveFlush").timeBased().after(2 * 60 * 1000).create();
-    console.log("[DriveQ] Trigger driveFlush zaplanowany za 2 min");
-  } catch(e) { console.error("[DriveQ] Błąd tworzenia triggera: " + e.message); }
-}
-
-function __AAA_driveFlush() {
-  var cache    = CacheService.getScriptCache();
-  var existing = cache.get("driveq_keys");
-  if (!existing) { console.log("[DriveFlush] Kolejka pusta"); return; }
-  var folder = _getDriveFolder();
-  if (!folder) return;
-  var keys   = existing.split(",").filter(Boolean);
-  var saved  = 0;
-  var failed = 0;
-  keys.forEach(function(cacheKey) {
-    try {
-      var raw = cache.get(cacheKey);
-      if (!raw) { failed++; return; }
-      var obj = JSON.parse(raw);
-      if (!obj.base64) { failed++; return; }
-      var filename  = obj.filename || "plik.bin";
-      var dupCheck = folder.getFilesByName(filename);
-      if (dupCheck.hasNext()) {
-        console.log("[DriveFlush] Duplikat — pomijam: " + filename);
-        cache.remove(cacheKey);
-        return;
-      }
-      folder.createFile(Utilities.newBlob(
-        Utilities.base64Decode(obj.base64),
-        obj.content_type || "application/octet-stream",
-        filename
-      ));
-      console.log("[DriveFlush] Zapisano: " + filename);
-      cache.remove(cacheKey);
-      saved++;
-    } catch(e) {
-      console.error("[DriveFlush] Błąd " + cacheKey + ": " + e.message);
-      failed++;
-    }
-  });
-  cache.remove("driveq_keys");
-  console.log("[DriveFlush] DONE: zapisano=" + saved + " błędów=" + failed);
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === "__AAA_driveFlush") ScriptApp.deleteTrigger(t);
-  });
-}
-
 // ════════════════════════════════════════════════════════════════════════════
-// WYSYŁKA
+// WYSYŁKA — funkcje pomocnicze (używane tylko przez stare ścieżki / fallback)
+// UWAGA: W nowej architekturze Render sam wysyła maile. Poniższe funkcje
+// zachowane dla kompatybilności (np. executeSmircMailSend wymagana lokalnie
+// jeśli chcemy fallback GAS-side dla śmierci).
 // ════════════════════════════════════════════════════════════════════════════
 
 function executeMailSend(data, recipient, subject, msg, senderName) {
   if (!data) { console.warn("Brak danych dla " + recipient); return; }
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
   if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
-    console.log("[zwykly] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
+    console.log("[zwykly] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ")");
     return;
   }
   var inlineImages = {};
@@ -828,56 +672,6 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
         data.cv_pdf.filename || "CV_Tyler.pdf"
       ));
     } catch (e) { console.error("[zwykly] Błąd CV PDF: " + e.message); }
-  }
-  if (data.log_psych && data.log_psych.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.log_psych.base64),
-        data.log_psych.content_type || "text/plain",
-        data.log_psych.filename     || "log_psych.txt"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd log_psych: " + e.message); }
-  }
-  if (data.ankieta_html && data.ankieta_html.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.ankieta_html.base64), "text/html",
-        data.ankieta_html.filename || "ankieta.html"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd ankieta HTML: " + e.message); }
-  }
-  if (data.ankieta_pdf && data.ankieta_pdf.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.ankieta_pdf.base64), "application/pdf",
-        data.ankieta_pdf.filename || "ankieta.pdf"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd ankieta PDF: " + e.message); }
-  }
-  if (data.horoskop_pdf && data.horoskop_pdf.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.horoskop_pdf.base64), "application/pdf",
-        data.horoskop_pdf.filename || "horoskop.pdf"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd horoskop PDF: " + e.message); }
-  }
-  if (data.karta_rpg_pdf && data.karta_rpg_pdf.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.karta_rpg_pdf.base64), "application/pdf",
-        data.karta_rpg_pdf.filename || "karta_rpg.pdf"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd karta RPG: " + e.message); }
-  }
-  if (data.raport_pdf && data.raport_pdf.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.raport_pdf.base64),
-        data.raport_pdf.content_type || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        data.raport_pdf.filename     || "raport_psychiatryczny.docx"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd raport: " + e.message); }
   }
 
   var triptychHtml   = "";
@@ -902,41 +696,13 @@ function executeMailSend(data, recipient, subject, msg, senderName) {
     triptychHtml += '</tr></table>';
   }
 
-  if (data.explanation_txt && data.explanation_txt.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.explanation_txt.base64), "text/plain",
-        data.explanation_txt.filename || "wyjasnienie.txt"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd wyjaśnienia TXT: " + e.message); }
-  }
-  if (data.plakat_svg && data.plakat_svg.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.plakat_svg.base64), "image/svg+xml",
-        data.plakat_svg.filename || "plakat.svg"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd plakat SVG: " + e.message); }
-  }
-  if (data.gra_html && data.gra_html.base64) {
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(data.gra_html.base64), "text/html",
-        data.gra_html.filename || "gra.html"
-      ));
-    } catch (e) { console.error("[zwykly] Błąd gra HTML: " + e.message); }
-  }
-
-  attachLogFiles(data, attachments, attachedNames);
-
   var htmlBody = (data.reply_html || "<p>(Brak treści)</p>") + triptychHtml;
   try {
     msg.reply("", { htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: senderName });
-    console.log("[zwykly] Wysłano: " + senderName + " → " + recipient + " | att=" + attachments.length);
+    console.log("[zwykly] Wysłano: " + senderName + " → " + recipient);
   } catch (e) {
     try {
       MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: senderName });
-      console.log("[zwykly] sendEmail() fallback OK → " + recipient);
     } catch (e2) { console.error("[zwykly] sendEmail() zawiódł: " + e2.message); }
   }
 }
@@ -972,46 +738,40 @@ function sectionWithLogs(sectionData, rootJson) {
 function executeGeneratorPdfMailSend(data, recipient, subject, msg) {
   if (!data) { console.warn("Brak danych generator_pdf dla " + recipient); return; }
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
-  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
-    console.log("[generator_pdf] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
-    return;
-  }
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) { return; }
   var attachments = [];
   var attachedNames = {};
   if (data.pdf && data.pdf.base64) {
     try {
       attachments.push(Utilities.newBlob(
         Utilities.base64Decode(data.pdf.base64), "application/pdf",
-        data.pdf.filename || "egzamin.pdf"
+        data.pdf.filename || "dokument.pdf"
       ));
-    } catch (e) { console.error("Błąd PDF egzaminu: " + e.message); }
+    } catch (e) { console.error("[gen_pdf] Błąd PDF: " + e.message); }
   }
   attachLogFiles(data, attachments, attachedNames);
-  var htmlBody = data.reply_html || "<p>Oto PDF aktywny.</p>";
+  var htmlBody = data.reply_html || "<p>Dokument w załączniku.</p>";
   try {
-    msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Generator Egzaminów – Autoresponder" });
+    msg.reply("", { htmlBody: htmlBody, attachments: attachments, name: "Generator PDF – Autoresponder" });
   } catch (e) {
-    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject + " [egzamin PDF]", htmlBody: htmlBody, attachments: attachments, name: "Generator Egzaminów – Autoresponder" });
+    MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, attachments: attachments });
   }
 }
 
 function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
   if (!data) { console.warn("Brak danych smierc dla " + recipient); return; }
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
-  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
-    console.log("[smierc] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
-    return;
-  }
-  var attachments  = [];
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) { return; }
   var inlineImages = {};
-  var imagesHtml   = "";
+  var attachments  = [];
   var attachedNames = {};
+  var imagesHtml = "";
 
   if (data.images && Array.isArray(data.images)) {
     data.images.forEach(function(imgObj, index) {
       try {
-        if (imgObj.base64) {
-          var cid     = "smirc_img_" + index;
+        if (imgObj && imgObj.base64) {
+          var cid = "smierc_" + index;
           var imgBlob = Utilities.newBlob(
             Utilities.base64Decode(imgObj.base64),
             imgObj.content_type || "image/png",
@@ -1019,9 +779,9 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
           );
           inlineImages[cid] = imgBlob;
           attachments.push(imgBlob);
-          imagesHtml += '<p><img src="cid:' + cid + '" alt="Zaswiety" style="max-width:100%;border-radius:8px;margin-bottom:10px;"></p>';
+          imagesHtml += '<p><img src="cid:' + cid + '" alt="Zaświaty" style="max-width:100%;border-radius:8px;margin-bottom:10px;"></p>';
         }
-      } catch(e) { console.error("Blad obrazka " + index + ": " + e.message); }
+      } catch(e) { console.error("Błąd obrazka " + index + ": " + e.message); }
     });
   }
   if (data.videos && Array.isArray(data.videos)) {
@@ -1034,7 +794,7 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
             vidObj.filename     || ("niebo_" + index + ".mp4")
           ));
         }
-      } catch(e) { console.error("Blad wideo " + index + ": " + e.message); }
+      } catch(e) { console.error("Błąd wideo " + index + ": " + e.message); }
     });
   }
   if (data.debug_txt && data.debug_txt.base64) {
@@ -1044,28 +804,25 @@ function executeSmircMailSend(data, recipient, subject, msg, newEtap) {
         data.debug_txt.content_type || "text/plain",
         data.debug_txt.filename     || "_.txt"
       ));
-    } catch(e) { console.error("Blad debug TXT: " + e.message); }
+    } catch(e) { console.error("Błąd debug TXT: " + e.message); }
   }
 
   attachLogFiles(data, attachments, attachedNames);
 
-  var htmlBody = "<div>" + (data.reply_html || "<p>(Brak tresci)</p>") + imagesHtml + "</div>";
+  var htmlBody = "<div>" + (data.reply_html || "<p>(Brak treści)</p>") + imagesHtml + "</div>";
   try {
-    msg.reply("", { htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Autoresponder zza swiatowy" });
-    console.log("Wyslano smierc (etap " + newEtap + ") do " + recipient + ". Zalacznikow: " + attachments.length);
+    msg.reply("", { htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Autoresponder zza światowy" });
+    console.log("Wysłano smierc (etap " + newEtap + ") do " + recipient);
   } catch(e) {
     try {
-      MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Autoresponder zza swiatowy" });
-    } catch(e2) { console.error("sendEmail() tez fail: " + e2.message); }
+      MailApp.sendEmail({ to: recipient, subject: "RE: " + subject, htmlBody: htmlBody, inlineImages: inlineImages, attachments: attachments, name: "Autoresponder zza światowy" });
+    } catch(e2) { console.error("sendEmail() też fail: " + e2.message); }
   }
 }
 
 function executeScrabbleMailSend(data, recipient, subject, msg) {
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
-  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
-    console.log("[scrabble] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
-    return;
-  }
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) { return; }
   var inlineImages = {};
   var attachments  = [];
   var attachedNames = {};
@@ -1091,37 +848,16 @@ function executeScrabbleMailSend(data, recipient, subject, msg) {
 }
 
 function executeDociekliwyMailSend(data, recipient, subject, msg) {
-  if (!data) { console.warn("Brak danych analizy dla " + recipient); return; }
+  if (!data) return;
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
-  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
-    console.log("[analiza] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
-    return;
-  }
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) { return; }
   var attachments = [];
   var attachedNames = {};
-
-  function addAttachment(d, defaultName) {
-    if (!d || !d.base64) return;
-    var filename = d.filename || defaultName;
-    if (attachedNames[filename]) return;
-    attachedNames[filename] = true;
-    try {
-      attachments.push(Utilities.newBlob(
-        Utilities.base64Decode(d.base64),
-        d.content_type || "text/html",
-        filename
-      ));
-    } catch (e) {
-      console.error("Błąd HTML: " + e.message);
-    }
-  }
-
   var docxList = data.docx_list || [];
   for (var i = 0; i < docxList.length; i++) {
-    addAttachment(docxList[i], "analiza_" + (i + 1) + ".html");
+    addBase64Attachment(attachments, attachedNames, docxList[i], "analiza_" + (i + 1) + ".html", "text/html");
   }
-  addAttachment(data.gra_html, "analiza.html");
-
+  addBase64Attachment(attachments, attachedNames, data.gra_html, "analiza.html", "text/html");
   attachLogFiles(data, attachments, attachedNames);
   var htmlBody = data.reply_html || "<p>Dociekliwy powtórzeń w załączniku.</p>";
   try {
@@ -1132,12 +868,9 @@ function executeDociekliwyMailSend(data, recipient, subject, msg) {
 }
 
 function executeEmocjeMailSend(data, recipient, subject, msg) {
-  if (!data) { console.warn("Brak danych emocji dla " + recipient); return; }
+  if (!data) return;
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
-  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
-    console.log("[emocje] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
-    return;
-  }
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) { return; }
   var attachments = [];
   var attachedNames = {};
   (data.images || []).forEach(function(img, i) {
@@ -1167,33 +900,11 @@ function executeEmocjeMailSend(data, recipient, subject, msg) {
   }
 }
 
-function _callWebhookGif(png1Base64, png2Base64, webhookUrl) {
-  var gifUrl  = webhookUrl.replace("/webhook", "/webhook_gif");
-  var options = {
-    method: "post", contentType: "application/json",
-    payload: JSON.stringify({ png1_base64: png1Base64 || null, png2_base64: png2Base64 || null }),
-    muteHttpExceptions: true
-  };
-  try {
-    var resp = UrlFetchApp.fetch(gifUrl, options);
-    if (resp.getResponseCode() === 200) {
-      return JSON.parse(resp.getContentText());
-    }
-    console.error("webhook_gif błąd: " + resp.getResponseCode());
-    return null;
-  } catch(e) { console.error("webhook_gif wyjątek: " + e.message); return null; }
-}
-
 function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
   if (!data || !data.has_history || !data.reply_html) return;
   var adminEmail = PropertiesService.getScriptProperties().getProperty("ADMIN_EMAIL");
-  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) {
-    console.log("[nawiazanie] BLOKADA: Nie wysyłam do ADMIN_EMAIL (" + recipient + ") — przerwanie pętli");
-    return;
-  }
+  if (adminEmail && recipient.toLowerCase() === adminEmail.toLowerCase()) { return; }
   var attachments = [];
-  var attachedNames = {};
-  // nawiazanie: już ma walidację powyżej
   try {
     msg.reply("", { htmlBody: data.reply_html, name: senderName || "Nawiązanie – Autoresponder", attachments: attachments });
     console.log("Wysłano nawiązanie -> " + recipient);
@@ -1203,6 +914,13 @@ function executeNawiazanieMailSend(data, recipient, subject, msg, senderName) {
 }
 
 // ── Wywołanie backendu ────────────────────────────────────────────────────────
+/**
+ * _callBackend — wysyła POST do Render i NATYCHMIAST zwraca { accepted: true }
+ * jeśli backend odpowiedział 200.
+ *
+ * Nowy backend zwraca: {"status": "accepted", "message_id": "...", "sections": [...]}
+ * GAS nie czeka na wyniki sekcji — backend sam wyśle maile w tle.
+ */
 function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
                       wantsScrabble, wantsDociekliwy, wantsEmocje,
                       wantsGeneratorPdf, wantsSmierc, smircData,
@@ -1222,14 +940,16 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
   var KEYWORDS_SMIERC = _getListFromProps("KEYWORDS_SMIERC");
   var FLAGA_TEST = _getListFromProps("FLAGA_TEST");
   var secret  = PropertiesService.getScriptProperties().getProperty("WEBHOOK_SECRET");
+
   var payload = {
     msg_id:              msgId            || "",
+    message_id:          msgId            || "",
     sender:              sender,
     sender_name:         senderName        || "",
     subject:             subject,
     body:                body,
     wants_scrabble:      wantsScrabble      ? true : false,
-    wants_dociekliwy:   wantsDociekliwy   ? true : false,
+    wants_analiza:       wantsDociekliwy   ? true : false,
     wants_emocje:        wantsEmocje        ? true : false,
     wants_generator_pdf: wantsGeneratorPdf  ? true : false,
     wants_smierc:        wantsSmierc        ? true : false,
@@ -1262,39 +982,57 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
     retry_responders:    retryResponders  || [],
     attempt_count:       attemptCount     || 1,
     skip_save_to_history: (!isAllowed && !isKnownSender && !containsKeyword && !containsKeyword1 && !containsKeyword2 && !containsKeyword3 && !containsKeyword4 && !containsKeywordGeneratorPdf && !containsJoker && !containsKeywordSmierc && !shouldSendSmierc) ? true : false,
-    headers:            secret ? { "X-Webhook-Secret": secret } : {}
   };
+
+  // Dodaj dane śmierci do payload
+  if (smircData) {
+    payload.etap         = smircData.etap         || 1;
+    payload.data_smierci = smircData.data_smierci || "nieznanego dnia";
+    payload.historia     = smircData.historia     || [];
+  }
+
   var options = {
     method:             "post",
     contentType:        "application/json",
     payload:            JSON.stringify(payload),
     muteHttpExceptions: true,
-    headers:            secret ? { "X-Webhook-Secret": secret } : {}
+    headers:            secret ? { "X-Webhook-Secret": secret } : {},
+    // Nie potrzeba długiego timeout — backend odpowiada w < 1s
   };
+
   try {
     var resp = UrlFetchApp.fetch(url, options);
-    if (resp.getResponseCode() === 200) {
+    var code = resp.getResponseCode();
+
+    if (code === 200) {
       var text = resp.getContentText();
       try {
         var json = JSON.parse(text);
-        console.log("Webhook — odpowiedź OK (200)");
+        // Nowy backend: status = "accepted" — nie zwraca wyników sekcji
+        if (json.status === "accepted") {
+          console.log("Webhook — ACCEPTED message_id=" + json.message_id + " sections=" + (json.sections || []).join(","));
+          _recordProcessedStatus(payload.msg_id, { status: "ok" });
+          return { accepted: true, message_id: json.message_id };
+        }
+        // Stary backend (fallback) — zwraca pełny JSON z sekcjami
+        console.log("Webhook — odpowiedź OK (200) [legacy mode]");
         if (json && json.processed_status) {
           _recordProcessedStatus(payload.msg_id, json.processed_status);
         }
-        return { json: json };
+        return { accepted: true, json: json };
       } catch (e) {
         console.error("Błąd parsowania JSON z backendu: " + e.message);
         _reportBackendError(payload.sender, payload.subject, "Błąd parsowania JSON: " + e.message + " | odpowiedź: " + text);
         return null;
       }
     }
-    var errMsg = "Backend zwrócił kod " + resp.getResponseCode();
+    var errMsg = "Backend zwrócił kod " + code;
     console.error(errMsg);
     _reportBackendError(payload.sender, payload.subject, errMsg + " | body: " + resp.getContentText());
   } catch (e) {
-    var errMsg = "Błąd połączenia z backendem: " + e.message;
-    console.error(errMsg);
-    _reportBackendError(payload.sender, payload.subject, errMsg);
+    var errMsg2 = "Błąd połączenia z backendem: " + e.message;
+    console.error(errMsg2);
+    _reportBackendError(payload.sender, payload.subject, errMsg2);
   }
   return null;
 }
@@ -1317,7 +1055,7 @@ function _stripQuotedText(body) {
 
 // ── Etykiety zamiast oznaczania jako przeczytane ──────────────────────────────
 function _getProcessedLabel() {
-  return GmailApp.getUserLabelByName("autoresponder-processed") || 
+  return GmailApp.getUserLabelByName("autoresponder-processed") ||
          GmailApp.createLabel("autoresponder-processed");
 }
 
@@ -1335,6 +1073,10 @@ function _hasProcessedLabel(thread) {
 function _markAsProcessed(thread) {
   thread.addLabel(_getProcessedLabel());
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// GŁÓWNA PĘTLA
+// ════════════════════════════════════════════════════════════════════════════
 
 function __AAA_processEmails() {
   var props      = PropertiesService.getScriptProperties();
@@ -1355,41 +1097,33 @@ function __AAA_processEmails() {
   var KEYWORDS_JOKER             = _getListFromProps("KEYWORDS_JOKER");
   var KEYWORDS_GENERATOR_PDF     = _getListFromProps("KEYWORDS_GENERATOR_PDF");
   var KEYWORDS_SMIERC            = _getListFromProps("KEYWORDS_SMIERC");
-  // ── FLAGA_TEST ──────────────────────────────────────────────────────────
-  // FLAGA_TEST - lista słów kluczowych aby wyłączyć FLUX w respondericach
-  // Gdy wiadomość zawiera słowo z FLAGA_TEST, zostaje wysłany disable_flux=true
-  // do backend. Respondenci którzy generują obrazki (zwykly, emocje, itp) sprawdzą
-  // ten parametr i wyłączą generowanie FLUX, ale ODRAŻĄ!
-  // FLAGA_TEST NIE wpływa na rzeczy które respondenci będą uruchomieni, tylko
-  // że w nich czegoś można wyłączyć.
   var FLAGA_TEST                 = _getListFromProps("FLAGA_TEST");
   var DATA_SMIERCI               = props.getProperty("DATA_SMIERCI") || "nieznanego dnia";
-  var ADMIN_EMAIL               = props.getProperty("ADMIN_EMAIL");
+  var ADMIN_EMAIL                = props.getProperty("ADMIN_EMAIL");
 
   var maskMode      = false;
   var knownSenders  = _getKnownSenders();
 
   console.log("Znani nadawcy: " + knownSenders.length);
 
-  // Pobierz wątki i odwróć kolejność — zaczynamy od najstarszego
   var threads = GmailApp.getInboxThreads(0, 80).reverse();
   for (var i = 0; i < threads.length; i++) {
     var thread = threads[i];
-    // Pomijaj wątki już przetworzone (oznaczone etykietą)
     if (_hasProcessedLabel(thread)) continue;
 
-    var webhookCalled = false;  // reset dla każdego wątku — każdy mail może wywołać backend
+    var webhookCalled = false;
     var messages   = thread.getMessages();
     var msg        = messages[messages.length - 1];
     var msgId      = msg.getId();
     var fromRaw    = msg.getFrom();
     var fromEmail  = extractEmail(fromRaw).toLowerCase();
-    // Blokada admin email - nie przetwarzamy wiadomości od admina
+
     if (ADMIN_EMAIL && fromEmail === ADMIN_EMAIL.toLowerCase()) {
-        console.log("🔒 BLOKADA ADMIN_EMAIL: Wiadomość od admina (" + fromEmail + ") — pomijanie");
-        _markAsProcessed(thread);
-        continue;
+      console.log("🔒 BLOKADA ADMIN_EMAIL: " + fromEmail);
+      _markAsProcessed(thread);
+      continue;
     }
+
     var senderName = "";
     var nameMatch  = fromRaw.match(/^"?([^"<]+)"?\s*</);
     if (nameMatch) senderName = nameMatch[1].trim();
@@ -1397,25 +1131,19 @@ function __AAA_processEmails() {
     var plainBody  = _stripQuotedText(msg.getPlainBody());
     var searchText = plainBody + " " + subject;
 
-    // Sprawdź czy wiadomość już była przetworzona
     if (_isAlreadyProcessed(msgId)) {
-      console.log("Wiadomość już przetworzona, pomijam: " + msgId + " | " + subject);
+      console.log("Wiadomość już przetworzona, pomijam: " + msgId);
       _markAsProcessed(thread);
       continue;
     }
 
-    // ── FLAGI GLOBALNE — obliczane RAZ dla każdej osoby ──────────────────────
+    // ── FLAGI GLOBALNE ────────────────────────────────────────────────────────
     var isBiz         = BIZ_LIST.indexOf(fromEmail) !== -1;
     var isAllowed     = ALLOWED_LIST.indexOf(fromEmail) !== -1;
     var isKnownSender = knownSenders.indexOf(fromEmail) !== -1;
 
-    // smircData obliczany raz — używany we wszystkich blokach
     var smircData      = _getSmircData(fromEmail);
     var isSmierc       = smircData !== null;
-
-    // Dwie główne flagi decydujące o wysyłce:
-    // shouldSendZwykly: znam tę osobę (allowed LUB ma historię)
-    // shouldSendSmierc: osoba ma arkusz śmierci
     var shouldSendZwykly = isAllowed || isKnownSender;
     var shouldSendSmierc = isSmierc;
     var containsFlagaTest = _containsAny(searchText, FLAGA_TEST);
@@ -1424,22 +1152,14 @@ function __AAA_processEmails() {
     console.log("DEBUG: isNewMsg=" + isNewMsg + " from=" + fromEmail +
                 " | zwykly=" + shouldSendZwykly + " | smierc=" + shouldSendSmierc);
 
-    // Zapis sytuacji w pliku przeplyw.csv dla wiadomości RE/FWD
+    // ── RE/FWD ────────────────────────────────────────────────────────────────
     if (!isNewMsg) {
       var flowRow = {
-        fromEmail: fromEmail,
-        subject: subject,
-        isNewMsg: isNewMsg,
-        KEYWORDS: false,
-        KEYWORDS1: false,
-        KEYWORDS2: false,
-        KEYWORDS3: false,
-        KEYWORDS4: false,
-        KEYWORDS_GENERATOR_PDF: false,
-        KEYWORDS_SMIERC: false,
+        fromEmail: fromEmail, subject: subject, isNewMsg: isNewMsg,
+        KEYWORDS: false, KEYWORDS1: false, KEYWORDS2: false, KEYWORDS3: false,
+        KEYWORDS4: false, KEYWORDS_GENERATOR_PDF: false, KEYWORDS_SMIERC: false,
         JOKER: false,
-        lista_smiert: isSmierc,
-        lista_historia: shouldSendZwykly,
+        lista_smiert: isSmierc, lista_historia: shouldSendZwykly,
         flaga_test: containsFlagaTest,
         wysylka: shouldSendSmierc || shouldSendZwykly,
         action: (shouldSendSmierc || shouldSendZwykly) ? "RE_WYSYLKA" : "RE_POMINIETO",
@@ -1451,9 +1171,13 @@ function __AAA_processEmails() {
 
       if (shouldSendSmierc || shouldSendZwykly) {
         _markAsProcessed(thread);
-        var previousDataReply = findLastMessageBySender(fromEmail);
-        if (webhookCalled) { _markAsProcessed(thread); continue; }
+        if (webhookCalled) { continue; }
         webhookCalled = true;
+
+        var previousDataReply = findLastMessageBySender(fromEmail);
+
+        // ── Zapisz ODEBRANO przed callем ──────────────────────────────────────
+        _saveOdebranoToHistory(msgId, fromEmail, subject, plainBody);
 
         var responseReply = _callBackend(
           fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
@@ -1464,34 +1188,33 @@ function __AAA_processEmails() {
           isBiz, isAllowed, isKnownSender,
           shouldSendZwykly, false, false, false, false,
           containsFlagaTest, false, false,
-          false,
-          shouldSendSmierc,
-          containsFlagaTest,
-          null,
-          [],
-          1
+          false, shouldSendSmierc, containsFlagaTest,
+          null, [], 1
         );
 
-        if (responseReply && responseReply.json) {
-          if (shouldSendSmierc && responseReply.json.smierc) {
-            var newEtapReply = responseReply.json.smierc.nowy_etap || smircData.etap;
-            executeSmircMailSend(sectionWithLogs(responseReply.json.smierc, responseReply.json), fromEmail, subject, msg, newEtapReply);
-            saveResponseToHistory(fromEmail, subject, responseReply.json.smierc.reply_html || "");
-            _updateSmircData(fromEmail, newEtapReply, plainBody, responseReply.json.smierc.reply_html, msg.getId());
+        if (responseReply && responseReply.accepted) {
+          console.log("RE/FWD zaakceptowany przez backend — maile wyśle Render");
+          // Jeśli backend ma legacy json (stary tryb) — wyślij sami
+          if (responseReply.json) {
+            var rj = responseReply.json;
+            if (shouldSendSmierc && rj.smierc) {
+              var newEtapReply = rj.smierc.nowy_etap || smircData.etap;
+              executeSmircMailSend(sectionWithLogs(rj.smierc, rj), fromEmail, subject, msg, newEtapReply);
+              _updateSmircData(fromEmail, newEtapReply, plainBody, rj.smierc.reply_html, msg.getId());
+            }
+            if (shouldSendZwykly && rj.zwykly) {
+              executeMailSend(rj.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+            }
           }
-          // Nie wysyłaj lokalnego maila z Tyler Durden - odpowiedź dostarczy backend.
-          if (shouldSendZwykly && responseReply.json.zwykly) {
-            executeMailSend(responseReply.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-            saveResponseToHistory(fromEmail, subject, responseReply.json.zwykly.reply_html || "");
-          }
+        } else if (responseReply === null) {
+          console.warn("Backend nie odpowiedział dla: " + fromEmail);
         }
         saveToHistory(fromEmail, subject, plainBody);
-        break; // obsłużono — przerywamy, następny mail przy kolejnym triggerze
-
+        break;
       } else {
         _markAsProcessed(thread);
       }
-      continue; // RE/FWD bez flagi — tylko oznacz i idź dalej
+      continue;
     }
 
     // ── NOWA WIADOMOŚĆ ────────────────────────────────────────────────────────
@@ -1504,19 +1227,19 @@ function __AAA_processEmails() {
     if (containsJoker) {
       console.log("🃏 JOKER! Aktywacja dla: " + fromEmail);
 
-      // Jeśli nie ma jeszcze arkusza śmierci — utwórz i ustaw flagę
       if (!isSmierc) {
         if (_createSmircSheetForEmail(fromEmail, DATA_SMIERCI)) {
-          smircData      = _getSmircData(fromEmail) || { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
-          isSmierc       = true;
+          smircData        = _getSmircData(fromEmail) || { etap: 1, data_smierci: DATA_SMIERCI, historia: [] };
+          isSmierc         = true;
           shouldSendSmierc = true;
         }
       }
-      // JOKER zawsze wysyła wszystko — w tym zwykly jeśli znamy osobę
-      // (po JOKER osoba trafia do historii, więc przy kolejnym mailu shouldSendZwykly=true)
       _markAsProcessed(thread);
-      if (webhookCalled) { _markAsProcessed(thread); continue; }
+      if (webhookCalled) { continue; }
       webhookCalled = true;
+
+      // ── Zapisz ODEBRANO przed callем ──────────────────────────────────────
+      _saveOdebranoToHistory(msgId, fromEmail, subject, plainBody);
 
       var responseJoker = _callBackend(
         fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
@@ -1527,44 +1250,44 @@ function __AAA_processEmails() {
         isBiz, isAllowed, isKnownSender,
         false, false, false, false, false,
         containsFlagaTest, false, false,
-        true,
-        shouldSendSmierc,
-        containsFlagaTest,
-        null,
-        [],
-        1
+        true, shouldSendSmierc, containsFlagaTest,
+        null, [], 1
       );
 
-      if (responseJoker && responseJoker.json) {
-        var jj = responseJoker.json;
-        if (jj.biznes)        { executeMailSend(sectionWithLogs(jj.biznes, jj), fromEmail, subject, msg, "Notariusz – Informacja"); saveResponseToHistory(fromEmail, subject, jj.biznes.reply_html || ""); }
-        if (jj.zwykly)        { executeMailSend(sectionWithLogs(jj.zwykly, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.zwykly.reply_html || ""); }
-        if (jj.scrabble)      { executeScrabbleMailSend(sectionWithLogs(jj.scrabble, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.scrabble.reply_html || ""); }
-        if (jj.dociekliwy)     { executeDociekliwyMailSend(sectionWithLogs(jj.dociekliwy, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.dociekliwy.reply_html || ""); }
-        if (jj.emocje)        { executeEmocjeMailSend(sectionWithLogs(jj.emocje, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.emocje.reply_html || ""); }
-        // Wysyłaj nawiazanie z nazwą Bot Tylera (zawiera pełną historię + zdania AI)
-        if (jj.nawiazanie)    { executeNawiazanieMailSend(sectionWithLogs(jj.nawiazanie, jj), fromEmail, subject, msg, "Bot Tylera"); saveResponseToHistory(fromEmail, subject, jj.nawiazanie.reply_html || ""); }
-        if (jj.generator_pdf) { executeGeneratorPdfMailSend(sectionWithLogs(jj.generator_pdf, jj), fromEmail, subject, msg); saveResponseToHistory(fromEmail, subject, jj.generator_pdf.reply_html || ""); }
-        if (shouldSendSmierc && jj.smierc) {
-          var newEtapJoker = jj.smierc.nowy_etap || smircData.etap;
-          executeSmircMailSend(sectionWithLogs(jj.smierc, jj), fromEmail, subject, msg, newEtapJoker);
-          saveResponseToHistory(fromEmail, subject, jj.smierc.reply_html || "");
-          _updateSmircData(fromEmail, newEtapJoker, plainBody, jj.smierc.reply_html, msg.getId());
+      if (responseJoker && responseJoker.accepted) {
+        console.log("🃏 JOKER: zaakceptowany przez backend — maile wyśle Render");
+        // Legacy fallback
+        if (responseJoker.json) {
+          var jj = responseJoker.json;
+          if (jj.biznes)        { executeMailSend(sectionWithLogs(jj.biznes, jj), fromEmail, subject, msg, "Notariusz – Informacja"); }
+          if (jj.zwykly)        { executeMailSend(sectionWithLogs(jj.zwykly, jj), fromEmail, subject, msg, "Bot Tylera"); }
+          if (jj.scrabble)      { executeScrabbleMailSend(sectionWithLogs(jj.scrabble, jj), fromEmail, subject, msg); }
+          if (jj.dociekliwy)    { executeDociekliwyMailSend(sectionWithLogs(jj.dociekliwy, jj), fromEmail, subject, msg); }
+          if (jj.emocje)        { executeEmocjeMailSend(sectionWithLogs(jj.emocje, jj), fromEmail, subject, msg); }
+          if (jj.nawiazanie)    { executeNawiazanieMailSend(sectionWithLogs(jj.nawiazanie, jj), fromEmail, subject, msg, "Bot Tylera"); }
+          if (jj.generator_pdf) { executeGeneratorPdfMailSend(sectionWithLogs(jj.generator_pdf, jj), fromEmail, subject, msg); }
+          if (shouldSendSmierc && jj.smierc) {
+            var newEtapJoker = jj.smierc.nowy_etap || smircData.etap;
+            executeSmircMailSend(sectionWithLogs(jj.smierc, jj), fromEmail, subject, msg, newEtapJoker);
+            _updateSmircData(fromEmail, newEtapJoker, plainBody, jj.smierc.reply_html, msg.getId());
+          }
         }
-        console.log("🃏 JOKER: wszystkie respondery obsłużone");
       }
       saveToHistory(fromEmail, subject, plainBody);
-      break; // JOKER obsłużony — przerywamy
+      break;
     }
 
-    // ── SMIERC kontynuacja (nowa wiadomość od osoby z arkuszem śmierci) ──────
+    // ── SMIERC kontynuacja ────────────────────────────────────────────────────
     if (shouldSendSmierc) {
       console.log("SMIERC kontynuacja: " + fromEmail + " etap=" + smircData.etap);
       _markAsProcessed(thread);
 
       var previousData2 = findLastMessageBySender(fromEmail);
-      if (webhookCalled) { _markAsProcessed(thread); continue; }
+      if (webhookCalled) { continue; }
       webhookCalled = true;
+
+      // ── Zapisz ODEBRANO przed callем ──────────────────────────────────────
+      _saveOdebranoToHistory(msgId, fromEmail, subject, plainBody);
 
       var response2 = _callBackend(
         fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
@@ -1575,52 +1298,37 @@ function __AAA_processEmails() {
         isBiz, isAllowed, isKnownSender,
         false, false, false, false, false,
         containsFlagaTest, false, false,
-        false,
-        true,
-        containsFlagaTest,
-        null,
-        [],
-        1
+        false, true, containsFlagaTest,
+        null, [], 1
       );
 
-      if (response2 && response2.json) {
-        if (response2.json.smierc) {
-          var newEtap2 = response2.json.smierc.nowy_etap || smircData.etap;
-          executeSmircMailSend(sectionWithLogs(response2.json.smierc, response2.json), fromEmail, subject, msg, newEtap2);
-          saveResponseToHistory(fromEmail, subject, response2.json.smierc.reply_html || "");
-          _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
-        }
-        // shouldSendZwykly — niezależna flaga, działa równocześnie ze śmiercią
-        // Lokalny mail Tyler Durden wyłączony; odpowiedź dostarczy backend.
-        if (shouldSendZwykly && response2.json.zwykly) {
-          executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-          saveResponseToHistory(fromEmail, subject, response2.json.zwykly.reply_html || "");
+      if (response2 && response2.accepted) {
+        console.log("SMIERC kontynuacja: zaakceptowany przez backend");
+        // Legacy fallback
+        if (response2.json) {
+          if (response2.json.smierc) {
+            var newEtap2 = response2.json.smierc.nowy_etap || smircData.etap;
+            executeSmircMailSend(sectionWithLogs(response2.json.smierc, response2.json), fromEmail, subject, msg, newEtap2);
+            _updateSmircData(fromEmail, newEtap2, plainBody, response2.json.smierc.reply_html, msg.getId());
+          }
+          if (shouldSendZwykly && response2.json.zwykly) {
+            executeMailSend(response2.json.zwykly, fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+          }
         }
       }
       saveToHistory(fromEmail, subject, plainBody);
-      break; // SMIERC kontynuacja obsłużona — przerywamy
+      break;
     }
 
-    // ── SMIERC start (nowe słowo kluczowe SMIERC, brak arkusza) ──────────────
+    // ── SMIERC start ──────────────────────────────────────────────────────────
     var containsKeywordSmierc = _containsAny(searchText, KEYWORDS_SMIERC);
-    var flowRow = {
-      fromEmail: fromEmail,
-      subject: subject,
-      isNewMsg: isNewMsg,
-      KEYWORDS: false,
-      KEYWORDS1: false,
-      KEYWORDS2: false,
-      KEYWORDS3: false,
-      KEYWORDS4: false,
-      KEYWORDS_GENERATOR_PDF: false,
-      KEYWORDS_SMIERC: false,
-      JOKER: false,
-      lista_smiert: isSmierc,
-      lista_historia: shouldSendZwykly,
-      flaga_test: containsFlagaTest,
-      wysylka: false,
-      action: "",
-      notes: ""
+    var flowRow2 = {
+      fromEmail: fromEmail, subject: subject, isNewMsg: isNewMsg,
+      KEYWORDS: false, KEYWORDS1: false, KEYWORDS2: false, KEYWORDS3: false,
+      KEYWORDS4: false, KEYWORDS_GENERATOR_PDF: false,
+      KEYWORDS_SMIERC: false, JOKER: false,
+      lista_smiert: isSmierc, lista_historia: shouldSendZwykly,
+      flaga_test: containsFlagaTest, wysylka: false, action: "", notes: ""
     };
 
     if (containsKeywordSmierc) {
@@ -1628,7 +1336,7 @@ function __AAA_processEmails() {
         smircData        = _getSmircData(fromEmail);
         isSmierc         = true;
         shouldSendSmierc = true;
-        flowRow.lista_smiert = true;
+        flowRow2.lista_smiert = true;
         console.log("SMIERC start: " + fromEmail);
       }
     }
@@ -1638,53 +1346,37 @@ function __AAA_processEmails() {
     var containsKeyword2       = _containsAny(searchText, KEYWORDS2);
     var containsKeyword3       = _containsAny(searchText, KEYWORDS3);
     var containsKeyword4       = _containsAny(searchText, KEYWORDS4);
-    var containsFlagaTest      = _containsAny(searchText, FLAGA_TEST);
-    var containsKeywordGeneratorPdf = _containsAny(searchText, KEYWORDS_GENERATOR_PDF);
+    containsFlagaTest          = _containsAny(searchText, FLAGA_TEST);
 
-    flowRow.KEYWORDS = containsKeyword;
-    flowRow.KEYWORDS1 = containsKeyword1;
-    flowRow.KEYWORDS2 = containsKeyword2;
-    flowRow.KEYWORDS3 = containsKeyword3;
-    flowRow.KEYWORDS4 = containsKeyword4;
-    flowRow.KEYWORDS_GENERATOR_PDF = containsKeywordGeneratorPdf;
-    flowRow.KEYWORDS_SMIERC = containsKeywordSmierc;
-    flowRow.JOKER = containsJoker;
-    flowRow.flaga_test = containsFlagaTest;
+    flowRow2.KEYWORDS = containsKeyword;
+    flowRow2.KEYWORDS1 = containsKeyword1;
+    flowRow2.KEYWORDS2 = containsKeyword2;
+    flowRow2.KEYWORDS3 = containsKeyword3;
+    flowRow2.KEYWORDS4 = containsKeyword4;
+    flowRow2.KEYWORDS_GENERATOR_PDF = containsKeywordGeneratorPdf;
+    flowRow2.KEYWORDS_SMIERC = containsKeywordSmierc;
+    flowRow2.JOKER = containsJoker;
+    flowRow2.flaga_test = containsFlagaTest;
 
-    // Aktualizuj shouldSendZwykly jeśli zawiera słowo kluczowe
     if (containsKeyword) shouldSendZwykly = true;
-    flowRow.lista_historia = shouldSendZwykly;
+    flowRow2.lista_historia = shouldSendZwykly;
 
     if (containsJoker) {
-      flowRow.wysylka = true;
-      flowRow.action = "JOKER_WYSYLKA";
-      flowRow.notes = "JOKER";
+      flowRow2.wysylka = true; flowRow2.action = "JOKER_WYSYLKA"; flowRow2.notes = "JOKER";
     } else if (shouldSendSmierc) {
-      flowRow.wysylka = true;
-      flowRow.action = "SMIERC_WYSYLKA";
-      flowRow.notes = "SMIERC";
+      flowRow2.wysylka = true; flowRow2.action = "SMIERC_WYSYLKA"; flowRow2.notes = "SMIERC";
     } else if (!isBiz && !shouldSendZwykly && !containsKeyword1 && !containsKeyword2 && !containsKeyword3 &&
                !containsKeyword4 && !containsKeywordGeneratorPdf && !containsJoker && !containsKeywordSmierc && !shouldSendSmierc) {
-      flowRow.wysylka = false;
-      flowRow.action = "POMINIETO";
-      flowRow.notes = "brak warunków wysyłki";
-      _appendPrzeplywSheetRow(flowRow);
+      flowRow2.wysylka = false; flowRow2.action = "POMINIETO"; flowRow2.notes = "brak warunków wysyłki";
+      _appendPrzeplywSheetRow(flowRow2);
       _markAsProcessed(thread);
       continue;
     } else {
-      flowRow.wysylka = true;
-      flowRow.action = "WYSYLKA";
-      flowRow.notes = "zwykły lub keyword";
+      flowRow2.wysylka = true; flowRow2.action = "WYSYLKA"; flowRow2.notes = "zwykły lub keyword";
     }
-    _appendPrzeplywSheetRow(flowRow);
+    _appendPrzeplywSheetRow(flowRow2);
 
-    // Flaga: komunikacja z dotychczas znanym użytkownikiem lub specjalnym JOKER-em
-    var shouldSaveHistory      = isKnownSender || isAllowed || containsKeyword || containsKeyword1 || containsKeyword2 || containsKeyword3 || containsKeyword4 || containsKeywordGeneratorPdf || containsJoker || containsKeywordSmierc || shouldSendSmierc;
-
-    // Flaga pomocnicza: czy wiadomość zawiera dowolny keyword lub smierć
-    var hasAnyKeyword = containsKeyword || containsKeyword1 || containsKeyword2 || containsKeyword3 || 
-                        containsKeyword4 || containsKeywordGeneratorPdf || containsKeywordSmierc || containsJoker || shouldSendSmierc;
-
+    var shouldSaveHistory = isKnownSender || isAllowed || containsKeyword || containsKeyword1 || containsKeyword2 || containsKeyword3 || containsKeyword4 || containsKeywordGeneratorPdf || containsJoker || containsKeywordSmierc || shouldSendSmierc;
 
     var combinedKeywords = KEYWORDS.concat(KEYWORDS1).concat(KEYWORDS2).concat(KEYWORDS3)
       .concat(KEYWORDS4).concat(KEYWORDS_JOKER).concat(KEYWORDS_SMIERC).filter(Boolean);
@@ -1715,13 +1407,11 @@ function __AAA_processEmails() {
     if (webhookCalled) { continue; }
     webhookCalled = true;
 
-    // ── KEYWORDS_TEST (disable_flux) ──────────────────────────────────────────
-    // KEYWORDS_TEST - jeśli jest to słowo w mailu, to wyślij disable_flux=true
-    // (jeśli robimy odpowiedź lub nową wiadomość z responderami). Respondenci sprawdzą ten parametr i
-    // wyłączą generowanie Flux (obrazków), ale będą działać, aby nie marnować
-    // tokenów HF_TOKEN.
     var disableFlux = containsFlagaTest && (isBiz || isAllowed || isKnownSender || containsKeyword || containsKeyword2 || containsKeyword3 || containsKeyword4 || shouldSendSmierc);
-    
+
+    // ── Zapisz ODEBRANO do Sheets PRZED callем do Render ─────────────────────
+    _saveOdebranoToHistory(msgId, fromEmail, subject, sanitizedBody);
+
     var response = _callBackend(
       fromEmail, senderName, subject, sanitizedBody, plainBody, webhookUrl, msgId,
       containsKeyword2, containsKeyword3, containsKeyword4,
@@ -1730,49 +1420,46 @@ function __AAA_processEmails() {
       isBiz, isAllowed, isKnownSender,
       containsKeyword, containsKeyword1, containsKeyword2, containsKeyword3, containsKeyword4,
       containsFlagaTest, containsKeywordGeneratorPdf, containsKeywordSmierc,
-      containsJoker,
-      shouldSendSmierc,
-      disableFlux,
-      null,
-      [],
-      1
+      containsJoker, shouldSendSmierc,
+      disableFlux, null, [], 1
     );
 
-    if (response && response.json) {
-      var json = response.json;
-
-      if (json.biznes && (isBiz || containsKeyword1 || containsJoker)) {
-        executeMailSend(sectionWithLogs(json.biznes, json), fromEmail, subject, msg, "Notariusz – Informacja");
-      }
-      if (json.zwykly && shouldSendZwykly) {
-        // Lokalny mail Tyler Durden wyłączony; odpowiedź dostarczy backend.
-        executeMailSend(sectionWithLogs(json.zwykly, json), fromEmail, subject, msg, "Tyler Durden – Autoresponder");
-        saveResponseToHistory(fromEmail, subject, json.zwykly.reply_html || "");
-      }
-      if (containsKeyword2 && json.scrabble) {
-        executeScrabbleMailSend(sectionWithLogs(json.scrabble, json), fromEmail, subject, msg);
-      }
-      if (containsKeyword3 && json.dociekliwy) {
-        executeDociekliwyMailSend(sectionWithLogs(json.dociekliwy, json), fromEmail, subject, msg);
-      }
-      if (containsKeyword4 && json.emocje) {
-        executeEmocjeMailSend(sectionWithLogs(json.emocje, json), fromEmail, subject, msg);
-      }
-      if (json.nawiazanie) {
-        executeNawiazanieMailSend(sectionWithLogs(json.nawiazanie, json), fromEmail, subject, msg);
-      }
-      if (wantsGeneratorPdf && json.generator_pdf) {
-        executeGeneratorPdfMailSend(sectionWithLogs(json.generator_pdf, json), fromEmail, subject, msg);
-      }
-      if (shouldSendSmierc && json.smierc) {
-        var newEtap = json.smierc.nowy_etap || smircData.etap;
-        executeSmircMailSend(sectionWithLogs(json.smierc, json), fromEmail, subject, msg, newEtap);
-        _updateSmircData(fromEmail, newEtap, sanitizedBody, json.smierc.reply_html, msg.getId());
+    if (response && response.accepted) {
+      console.log("✅ Webhook zaakceptowany — Render wyśle maile w tle");
+      // Legacy fallback: jeśli backend zwrócił pełny JSON (stary tryb)
+      if (response.json) {
+        var json = response.json;
+        if (json.biznes && (isBiz || containsKeyword1 || containsJoker)) {
+          executeMailSend(sectionWithLogs(json.biznes, json), fromEmail, subject, msg, "Notariusz – Informacja");
+        }
+        if (json.zwykly && shouldSendZwykly) {
+          executeMailSend(sectionWithLogs(json.zwykly, json), fromEmail, subject, msg, "Tyler Durden – Autoresponder");
+        }
+        if (containsKeyword2 && json.scrabble) {
+          executeScrabbleMailSend(sectionWithLogs(json.scrabble, json), fromEmail, subject, msg);
+        }
+        if (containsKeyword3 && json.analiza) {
+          executeDociekliwyMailSend(sectionWithLogs(json.analiza, json), fromEmail, subject, msg);
+        }
+        if (containsKeyword4 && json.emocje) {
+          executeEmocjeMailSend(sectionWithLogs(json.emocje, json), fromEmail, subject, msg);
+        }
+        if (json.nawiazanie) {
+          executeNawiazanieMailSend(sectionWithLogs(json.nawiazanie, json), fromEmail, subject, msg);
+        }
+        if (wantsGeneratorPdf && json.generator_pdf) {
+          executeGeneratorPdfMailSend(sectionWithLogs(json.generator_pdf, json), fromEmail, subject, msg);
+        }
+        if (shouldSendSmierc && json.smierc) {
+          var newEtap = json.smierc.nowy_etap || smircData.etap;
+          executeSmircMailSend(sectionWithLogs(json.smierc, json), fromEmail, subject, msg, newEtap);
+          _updateSmircData(fromEmail, newEtap, sanitizedBody, json.smierc.reply_html, msg.getId());
+        }
       }
       if (shouldSaveHistory) {
         saveToHistory(fromEmail, subject, sanitizedBody);
       }
-      break; // główny blok obsłużony — przerywamy, następny przy kolejnym triggerze
+      break;
     } else {
       console.warn("Backend nie odpowiedział dla: " + fromEmail);
     }

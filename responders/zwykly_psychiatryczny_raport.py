@@ -38,11 +38,9 @@ from core.config import (
     HF_GUIDANCE,
     HF_TIMEOUT,
     MAX_DLUGOSC_EMAIL,
-    HF_TOKEN_BLACKLIST,
 )
 from core.logging_reporter import get_logger
-
-_HF_DEAD_TOKENS: set[str] = HF_TOKEN_BLACKLIST.copy()  # Kopia globalnej blacklist
+from core.hf_token_manager import get_active_tokens, mark_dead, is_dead
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ŚCIEŻKI
@@ -770,14 +768,6 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
 # FLUX — generowanie zdjęć
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_hf_tokens() -> list:
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(40)]
-    return [
-        (n, v)
-        for n in names
-        if n not in _HF_DEAD_TOKENS and (v := os.getenv(n, "").strip())
-    ]
-
 
 def _hf_credit_exhausted(resp: requests.Response) -> bool:
     if resp.status_code != 402:
@@ -795,7 +785,7 @@ def _generate_flux(prompt: str, label: str,
         current_app.logger.info("[psych-flux] HF_TOKENS_ACTIVE=nie — pomijam FLUX (%s)", label)
         return None
 
-    tokens = _get_hf_tokens()
+    tokens = get_active_tokens()
     if not tokens:
         current_app.logger.error("[psych-flux] Brak tokenów HF dla %s", label)
         return None
@@ -842,7 +832,7 @@ def _generate_flux(prompt: str, label: str,
                     current_app.logger.warning("[psych-flux] PNG→JPG błąd: %s", e)
                     return base64.b64encode(resp.content).decode("ascii")
             elif resp.status_code == 402:
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 current_app.logger.warning(
                     "[psych-flux] %s 402 token=%s — wyczerpane kredyty, dodano do czarnej listy",
                     label, name
@@ -854,7 +844,7 @@ def _generate_flux(prompt: str, label: str,
                     )
                     break
             elif resp.status_code in (401, 403):
-                _HF_DEAD_TOKENS.add(name)
+                mark_dead(name)
                 current_app.logger.warning(
                     "[psych-flux] %s HTTP %d token=%s — nieważny, dodano do czarnej listy",
                     label, resp.status_code, name

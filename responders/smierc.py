@@ -40,7 +40,6 @@ from datetime import date, datetime
 from flask import current_app
 
 from core.ai_client import call_deepseek, MODEL_TYLER
-from core.config import HF_TOKEN_BLACKLIST
 from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens, is_dead
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -377,14 +376,6 @@ def _generate_flux_prompt(source_text: str, groq_system_override: str = "") -> t
     return mutated_prompt, changes, provider, prompt
 
 
-def _get_hf_tokens() -> list:
-    """Pobiera listę dostępnych tokenów HF (HF_TOKEN, HF_TOKEN1...HF_TOKEN20)."""
-    names = [f"HF_TOKEN{i}" if i else "HF_TOKEN" for i in range(21)]
-    return [
-        (n, v)
-        for n in names
-        if not is_dead(n) and (v := os.getenv(n, "").strip())
-    ]
 
 
 def _hf_credit_exhausted(resp: requests.Response) -> bool:
@@ -437,7 +428,7 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
             return substitute
         current_app.logger.warning("[smierc-flux] test_mode — brak zastepczy.jpg, pomijam obrazek dla etapu %d", etap)
         return None
-    tokens = _get_hf_tokens()
+    tokens = get_active_tokens()
     if not tokens:
         current_app.logger.error("[flux] Brak tokenow HF!")
         return None

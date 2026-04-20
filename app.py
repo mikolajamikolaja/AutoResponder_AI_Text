@@ -3,27 +3,27 @@
 app.py
 Webhook backend dla Google Apps Script.
 
-KOLEJNOŚĆ WYSYŁKI (priorytetowa):
-  1. zwykly    — zawsze, jeśli nadawca jest znany lub contains_keyword
-  2. smierc    — jeśli wants_smierc (requiem aktywne)
-  3. dociekliwy (analiza / Eryk) — jeśli wants_analiza lub KEYWORDS3
-  4. pozostałe — biznes, scrabble, emocje, generator_pdf, nawiazanie
+ARCHITEKTURA (ta wersja):
+  /webhook → natychmiast 200 accepted → daemon thread wykonuje pipeline
 
-NAPRAWIONE BŁĘDY (wersja oryginalna):
-  - [BUG] attachments (zmienna lokalna) nadpisywała zewnętrzny parametr
-  - [BUG] smierc nie był uruchamiany w Wave 1/2 mimo wants_smierc=True
-  - [BUG] dociekliwy był wywoływany podwójnie (zwykly.py + app.py)
-  - [BUG] JOKER (zwykly+smierc) powodował timeout 502
+KOLEJNOŚĆ SEKCJI (stała, niezależna od GAS):
+  nawiazanie → analiza → zwykly → smierc → generator_pdf → biznes → scrabble → emocje
+
+NAPRAWIONE BŁĘDY (oryginał):
+  - [BUG] attachments nadpisywała zewnętrzny parametr
+  - [BUG] smierc nie był uruchamiany mimo wants_smierc=True
+  - [BUG] dociekliwy wywoływany podwójnie (zwykly.py + app.py)
+  - [BUG] JOKER powodował timeout 502
   - [BUG] log_txt / log_svg generowane PRZED smierc i dociekliwy
-  - [BUG] requested_sections nie zawierał 'smierc' ani 'dociekliwy'
   - [BUG] historia zapisywana podwójnie
 
-NOWE POPRAWKI (ta wersja):
-  - [FIX] OAuth — dodano /oauth/init z pełnymi scope'ami (gmail.send + drive + sheets)
-  - [FIX] OAuth — access_token jest automatycznie odświeżany gdy wygaśnie
-  - [FIX] OAuth — /oauth/status do diagnostyki tokenów
-  - [FIX] Lambda capture bug — zmienne loop captures naprawione przez default args
-  - [FIX] wyslij_odpowiedz używa _get_valid_access_token() zamiast gołego env
+NOWE (ta wersja):
+  - [FIX] Webhook zwraca 200 w < 1s — GAS nie dostaje timeout
+  - [FIX] Pipeline w daemon thread — każda sekcja: execute → send → drive → sheets → del
+  - [FIX] Stała kolejność sekcji przez SECTION_ORDER
+  - [FIX] zwykly NIE dostaje wyników z analiza — każda sekcja działa na surowym body
+  - [FIX] OAuth — /oauth/init z pełnymi scope'ami (gmail.send + drive + sheets)
+  - [FIX] OAuth — access_token automatycznie odświeżany gdy wygaśnie
 """
 
 import os
@@ -32,6 +32,7 @@ import html
 import io
 import json
 import re
+import threading
 import traceback
 import urllib.parse
 
@@ -53,10 +54,12 @@ from responders.smierc        import build_smierc_section
 from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
 from core.hf_token_manager import hf_tokens
+from core.sheets_logger import log_odebrano
+from core.job_runner import run_pipeline_async, build_section_order
 
 app = Flask(__name__)
 
-# Warm-up tokenów HF przy starcie serwera (nie czekaj na pierwsze żądanie)
+# Warm-up tokenów HF przy starcie serwera
 with app.app_context():
     hf_tokens.warmup()
 
@@ -75,20 +78,13 @@ REQUIRED_OAUTH_SCOPES = [
 def _get_valid_access_token() -> str:
     """
     Zwraca ważny Gmail access_token.
-
-    Logika:
-    1. Pobiera GMAIL_ACCESS_TOKEN z env.
-    2. Weryfikuje przez Google tokeninfo API.
-    3. Jeśli wygasł lub niepoprawny — odświeża przez refresh_token.
-    4. Nowy token zapisuje do os.environ (do czasu restartu procesu).
-    5. Jeśli refresh nie możliwy — rzuca RuntimeError z instrukcją.
+    Jeśli wygasł — odświeża przez refresh_token.
     """
     access_token  = os.getenv("GMAIL_ACCESS_TOKEN", "").strip()
     refresh_token = os.getenv("GMAIL_REFRESH_TOKEN", "").strip()
     client_id     = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
 
-    # --- Sprawdź czy obecny access_token jest ważny ---
     if access_token:
         try:
             r = http_requests.get(
@@ -99,7 +95,6 @@ def _get_valid_access_token() -> str:
             info = r.json()
             expires_in = int(info.get("expires_in", 0))
             if "error" not in info and expires_in > 30:
-                # Token ważny — sprawdź czy ma gmail.send scope
                 granted = info.get("scope", "")
                 if "gmail.send" not in granted:
                     app.logger.error(
@@ -116,7 +111,6 @@ def _get_valid_access_token() -> str:
         except Exception as e:
             app.logger.warning("[oauth] Błąd weryfikacji tokeninfo: %s", e)
 
-    # --- Token wygasł lub pusty — odśwież ---
     if not refresh_token:
         raise RuntimeError(
             "GMAIL_ACCESS_TOKEN wygasł i brak GMAIL_REFRESH_TOKEN. "
@@ -167,10 +161,6 @@ def _get_valid_access_token() -> str:
 
 @app.route("/oauth/init", methods=["GET"])
 def oauth_init():
-    """
-    Krok 1: Wygeneruj URL do Google z PEŁNYMI scope'ami i wyświetl link.
-    Odwiedź: GET /oauth/init
-    """
     client_id    = os.getenv("GMAIL_CLIENT_ID", "").strip()
     redirect_uri = request.url_root.rstrip("/") + "/oauth/callback"
 
@@ -182,10 +172,7 @@ def oauth_init():
         "redirect_uri":  redirect_uri,
         "response_type": "code",
         "scope":         " ".join(REQUIRED_OAUTH_SCOPES),
-        # access_type=offline  → Google zwróci refresh_token (ważny wieczyście)
         "access_type":   "offline",
-        # prompt=consent  → WYMUSZA ekran zgody nawet jeśli aplikacja była już autoryzowana
-        # KRYTYCZNE: bez tego Google NIE zwróci nowego refresh_token przy ponownej auth
         "prompt":        "consent",
     }
 
@@ -214,9 +201,6 @@ def oauth_init():
 
 @app.route("/oauth/callback", methods=["GET"])
 def oauth_callback():
-    """
-    Krok 2: Google przekierowuje tutaj z kodem. Wymieniamy code → tokeny.
-    """
     error = request.args.get("error")
     if error:
         return f"<h2>Błąd autoryzacji Google:</h2><p>{error}</p>", 400
@@ -257,7 +241,6 @@ def oauth_callback():
 
     app.logger.info("[oauth] Tokeny uzyskane — scope: %s", scope_granted)
 
-    # Sprawdź scope'y
     missing = [s for s in REQUIRED_OAUTH_SCOPES if s not in scope_granted]
     scope_status_html = (
         "<p style='color:green'>✅ Wszystkie scope'y przyznane.</p>"
@@ -266,16 +249,13 @@ def oauth_callback():
         ". <a href='/oauth/init'>Autoryzuj ponownie</a>.</p>"
     )
 
-    # Ostrzeżenie o braku refresh_token
     refresh_warning = ""
     if not refresh_token:
         refresh_warning = """
         <div style="background:#fff3cd;border:1px solid #ffc107;padding:16px;
                     border-radius:8px;margin:16px 0">
         <strong>⚠️ Brak refresh_token!</strong><br>
-        Google zwraca refresh_token tylko przy pierwszej autoryzacji lub z
-        <code>prompt=consent</code>. Wejdź na
-        <a href='/oauth/init'>/oauth/init</a> i autoryzuj ponownie.
+        Wejdź na <a href='/oauth/init'>/oauth/init</a> i autoryzuj ponownie.
         </div>
         """
         refresh_token = "(nie zwrócony przez Google — uruchom /oauth/init ponownie)"
@@ -307,8 +287,7 @@ def oauth_callback():
     </table>
     <p style="color:#888;font-size:13px;margin-top:20px">
     refresh_token nie wygasa — trzymaj go bezpiecznie.<br>
-    access_token wygasa po ~1h. Aplikacja odświeży go automatycznie
-    używając refresh_token.
+    access_token wygasa po ~1h. Aplikacja odświeży go automatycznie.
     </p>
     <hr>
     <p><a href="/oauth/status">➜ Sprawdź status tokenów</a></p>
@@ -318,17 +297,11 @@ def oauth_callback():
 
 @app.route("/oauth/status", methods=["GET"])
 def oauth_status():
-    """
-    Diagnostyka tokenów: sprawdza env, wywołuje tokeninfo Google,
-    i próbuje automatycznie odświeżyć wygasły access_token.
-    Odwiedź: GET /oauth/status
-    """
     access_token  = os.getenv("GMAIL_ACCESS_TOKEN", "").strip()
     refresh_token = os.getenv("GMAIL_REFRESH_TOKEN", "").strip()
     client_id     = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
 
-    # --- Weryfikacja przez tokeninfo ---
     token_info  = {}
     token_error = None
     if access_token:
@@ -346,7 +319,6 @@ def oauth_status():
     else:
         token_error = "GMAIL_ACCESS_TOKEN nie ustawiony w env"
 
-    # --- Scope'y ---
     granted_scope = token_info.get("scope", "")
     scope_rows = ""
     for s in REQUIRED_OAUTH_SCOPES:
@@ -356,7 +328,6 @@ def oauth_status():
             f"<td style='padding:6px 12px'>{icon}</td></tr>"
         )
 
-    # --- Próba odświeżenia jeśli token wygasł ---
     refresh_result_html = ""
     if token_error and refresh_token and client_id and client_secret:
         try:
@@ -445,15 +416,14 @@ def oauth_status():
 
 @app.route("/admin/hf-status")
 def hf_status():
-    """Diagnostyka stanu tokenów HF — tylko do debugowania."""
     return jsonify({
         "warmed_up": hf_tokens._warmed_up,
         "tokens":    hf_tokens.status_report(),
     })
 
+
 @app.route("/admin/hf-reset", methods=["POST"])
 def hf_reset():
-    """Resetuje cache tokenów — ponowny warm-up przy następnym żądaniu."""
     hf_tokens.reset()
     return jsonify({"status": "ok", "message": "Warm-up zostanie powtórzony przy następnym żądaniu"})
 
@@ -461,27 +431,6 @@ def hf_reset():
 # ═══════════════════════════════════════════════════════════════════════════════
 # POMOCNIKI
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def _run_sequential(tasks: dict, flask_app) -> dict:
-    """
-    Uruchamia słownik {klucz: lambda} SEKWENCYJNIE, zwraca {klucz: wynik}.
-    Sekwencyjność zapobiega timeout 502 przy równoległych ciężkich calach AI
-    (zwykly + smierc + FLUX = crash workera).
-    """
-    results = {}
-    for key, fn in tasks.items():
-        try:
-            flask_app.logger.info("[pipeline] START: %s", key)
-            results[key] = fn()
-            flask_app.logger.info("[pipeline] OK:    %s", key)
-        except Exception as e:
-            flask_app.logger.error(
-                "[pipeline] BŁĄD responderu '%s': %s\n%s",
-                key, e, traceback.format_exc()
-            )
-            results[key] = {}
-    return results
-
 
 def _strip_html_to_text(html_value: str) -> str:
     if not html_value:
@@ -567,10 +516,10 @@ def _build_log_svg_content(logger) -> str:
             "Brak danych logowania</text></svg>"
         )
 
-    input_data     = next((e for e in entries if e["type"] == "INPUT"), None)
-    api_calls      = [e for e in entries if e["type"] == "API_CALL"]
+    input_data      = next((e for e in entries if e["type"] == "INPUT"), None)
+    api_calls       = [e for e in entries if e["type"] == "API_CALL"]
     section_results = [e for e in entries if e["type"] == "SECTION_RESULT"]
-    decisions      = [e for e in entries if e["type"] == "DECISION"]
+    decisions       = [e for e in entries if e["type"] == "DECISION"]
 
     deepseek_all     = [e for e in api_calls if e["data"].get("api") == "deepseek"]
     deepseek_success = sum(1 for e in deepseek_all if e["data"].get("success"))
@@ -621,7 +570,6 @@ def _build_log_svg_content(logger) -> str:
 """
     y_pos = 60
 
-    # Sekcja 1: INPUT
     sender_disp  = input_data["data"].get("sender", "?") if input_data else "?"
     subject_disp = input_data["data"].get("subject", "?") if input_data else "?"
     body_preview = (
@@ -635,7 +583,6 @@ def _build_log_svg_content(logger) -> str:
 """
     y_pos += 140
 
-    # Sekcja 2: DECYZJE
     if decisions:
         svg += f"""  <rect x="20" y="{y_pos}" width="340" height="{50 + min(len(decisions), 4) * 20}" class="info"/>
   <text x="30" y="{y_pos+20}" class="title">🎯 DECYZJE: {len(decisions)}</text>
@@ -646,7 +593,6 @@ def _build_log_svg_content(logger) -> str:
             svg += f'  <text x="30" y="{y_pos+40+i*18}" class="text">• {decision_text} → {result}</text>\n'
         y_pos += 70 + min(len(decisions), 4) * 20
 
-    # Sekcja 3: API
     svg += f"""  <rect x="20" y="{y_pos}" width="1160" height="130" class="{'success' if deepseek_success > 0 else 'error'}"/>
   <text x="30" y="{y_pos+20}" class="title">⚙️ API CALLS</text>
   <text x="40" y="{y_pos+50}" class="metric">DEEPSEEK PRÓBY: {len(deepseek_all)}</text>
@@ -655,7 +601,6 @@ def _build_log_svg_content(logger) -> str:
 """
     y_pos += 160
 
-    # Sekcja 4: HARMONOGRAM
     svg += f"""  <rect x="20" y="{y_pos}" width="1160" height="{60 + num_timeline_items * 20}" class="warning"/>
   <text x="30" y="{y_pos+20}" class="title">⏱️ HARMONOGRAM PIERWSZYCH {num_timeline_items} ETAPÓW</text>
 """
@@ -668,7 +613,6 @@ def _build_log_svg_content(logger) -> str:
         svg += f'  <text x="40" y="{y_pos+47+i*20}" class="text">+{delta:5.2f}s [{entry_type:18s}]</text>\n'
     y_pos += 80 + num_timeline_items * 20
 
-    # Sekcja 5: SEKCJE RESPONDENTÓW
     section_details = [
         (e["data"].get("section"), e["data"].get("success")) for e in section_results
     ]
@@ -691,8 +635,8 @@ def _build_log_svg_content(logger) -> str:
 
 
 def _build_log_txt_content(logger, response_data) -> str:
-    api_calls      = [e for e in logger.entries if e["type"] == "API_CALL"]
-    deepseek_calls = [e for e in api_calls if e["data"].get("api") == "deepseek"]
+    api_calls        = [e for e in logger.entries if e["type"] == "API_CALL"]
+    deepseek_calls   = [e for e in api_calls if e["data"].get("api") == "deepseek"]
     deepseek_success = sum(1 for e in deepseek_calls if e["data"].get("success"))
     deepseek_total   = len(deepseek_calls)
 
@@ -753,9 +697,7 @@ def _build_log_txt_content(logger, response_data) -> str:
         if not isinstance(section_data, dict):
             continue
         has_html = bool(section_data.get("reply_html", "").strip())
-        has_att  = bool(
-            section_data.get("docx_list") or section_data.get("images")
-        )
+        has_att  = bool(section_data.get("docx_list") or section_data.get("images"))
         status = "✓" if (has_html or has_att) else "✗"
         lines.append(f"  {status} {section_name.upper()}")
         if has_html:
@@ -809,66 +751,7 @@ def _build_log_txt_content(logger, response_data) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# WYSYŁKA MAILA — pomocnik bez nadpisywania zmiennej attachments
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _wyslij_responder(
-    responder_key: str,
-    resp_data: dict,
-    sender: str,
-    sender_name: str,
-    previous_subject: str,
-    logger,
-) -> bool:
-    """
-    Wysyła jeden email dla danego respondera.
-    Zwraca True jeśli wysłanie się powiodło.
-
-    Używa lokalnej zmiennej `zal` zamiast `attachments`,
-    żeby nie nadpisywać listy attachmentów z requestu.
-
-    Przed wysyłką pobiera ważny access_token (odświeża jeśli wygasł).
-    """
-    section = resp_data.get(responder_key)
-    if not section or not isinstance(section, dict):
-        return False
-
-    email_html = section.get("reply_html", "")
-    zal        = zbierz_zalaczniki_z_response({responder_key: section})
-
-    if not email_html.strip() and not zal:
-        return False
-
-    subject_line = f"Re: {previous_subject or 'Twoja wiadomość'}"
-    if responder_key == "smierc" and section.get("subject"):
-        subject_line = section["subject"]
-
-    # Odśwież token przed wysyłką — jeśli wygasł, zostanie automatycznie odnowiony
-    try:
-        _get_valid_access_token()
-    except RuntimeError as e:
-        app.logger.error("[send] ⚠ Brak ważnego tokenu — nie wysyłam %s: %s", responder_key, e)
-        logger.log_decision("token_error", f"{responder_key}: {e}", False)
-        return False
-
-    success = wyslij_odpowiedz(
-        to_email   = sender,
-        to_name    = sender_name,
-        subject    = subject_line,
-        html_body  = email_html or "<p>Załączniki w osobnych plikach.</p>",
-        zalaczniki = zal,
-    )
-
-    if success:
-        logger.log_decision("email_sent", f"Sent {responder_key}", True)
-    else:
-        logger.log_decision("email_failed", f"Failed {responder_key}", False)
-
-    return success
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# WEBHOOK GŁÓWNY
+# WEBHOOK GŁÓWNY — natychmiastowe 200, pipeline w daemon thread
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/webhook", methods=["POST"])
@@ -887,6 +770,7 @@ def webhook():
     sender      = data.get("sender", "")
     sender_name = data.get("sender_name", "")
     subject     = data.get("subject", "")
+    message_id  = data.get("msg_id", "") or data.get("message_id", "")
     logger.log_input(sender, subject, body, sender_name)
 
     # ── Ochrona przed pętlą (admin email) ────────────────────────────────────
@@ -895,15 +779,14 @@ def webhook():
         logger.log_decision("admin_email_block", f"sender == ADMIN_EMAIL ({sender})", True)
         app.logger.warning("[AUTORESPONDER] 🔒 ZABLOKOWANO: Wiadomość od ADMIN_EMAIL (%s)", sender)
         return jsonify({
-            "status":  "blocked",
-            "reason":  "sender_is_admin_email",
-            "sender":  sender,
+            "status": "blocked",
+            "reason": "sender_is_admin_email",
+            "sender": sender,
         }), 200
 
     # ── Parametry requestu ────────────────────────────────────────────────────
     previous_body    = data.get("previous_body")    or None
     previous_subject = data.get("previous_subject") or None
-    # req_attachments trzymamy osobno żeby nigdy nie zostały nadpisane przez loop
     req_attachments  = data.get("attachments")      or []
     save_to_drive    = bool(data.get("save_to_drive"))
     test_mode        = bool(data.get("test_mode"))
@@ -1006,32 +889,29 @@ def webhook():
         with flask_app.app_context():
             return fn(*args, **kwargs_inner)
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # BUDOWANIE LISTY SEKCJI DO WYKONANIA
-    # Priorytet: zwykly → smierc → dociekliwy → pozostałe
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ── Dane śmierci ──────────────────────────────────────────────────────────
+    smierc_etap     = int(data.get("etap", 1))
+    smierc_data_str = data.get("data_smierci", "nieznanego dnia")
+    smierc_historia = data.get("historia", [])
 
+    # ── Budowanie listy sekcji ────────────────────────────────────────────────
     if is_retry:
         requested_sections = list(retry_responders)
     else:
         requested_sections = []
 
-        # 1. ZWYKLY — priorytet 1
         if contains_keyword or in_history_status == "tak":
             requested_sections.append("zwykly")
             logger.log_decision("zwykly", "known sender or keyword", "dodano")
 
-        # 2. SMIERC — priorytet 2
         if wants_smierc:
             requested_sections.append("smierc")
             logger.log_decision("smierc", "wants_smierc=True", "dodano")
 
-        # 3. DOCIEKLIWY (ANALIZA / ERYK) — priorytet 3
         if wants_analiza or contains_keyword3:
             requested_sections.append("analiza")
             logger.log_decision("analiza", "wants_analiza or keyword3", "dodano")
 
-        # 4. POZOSTAŁE
         if wants_nawiazanie:
             requested_sections.append("nawiazanie")
         if wants_biznes:
@@ -1044,34 +924,13 @@ def webhook():
             requested_sections.append("generator_pdf")
 
     app.logger.info(
-        "[pipeline] Zaplanowane sekcje (w kolejności): %s",
-        " → ".join(requested_sections),
+        "[pipeline] Zaplanowane sekcje: %s",
+        " → ".join(build_section_order(requested_sections)),
     )
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # POBIERZ DANE ŚMIERCI — PRZED uruchomieniem respondentów
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    smierc_etap     = int(data.get("etap", 1))
-    smierc_data_str = data.get("data_smierci", "nieznanego dnia")
-    smierc_historia = data.get("historia", [])
-
-    if wants_smierc:
-        app.logger.info(
-            "Smierc data dla %s: etap=%d data=%s", sender, smierc_etap, smierc_data_str
-        )
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # BUDOWANIE TASKS
-    #
-    # UWAGA: Używamy domyślnych argumentów lambdy (_key=key) żeby uniknąć
-    # klasycznego Python closure bug — bez tego wszystkie lambdy łapią
-    # ostatnią wartość zmiennej loop zamiast bieżącej.
-    #
-    # Czy zwykly dostaje załączniki?
-    # Jeśli "analiza" jest osobno w pipeline — NIE (app.py wywoła ją sam).
-    # Zapobiega podwójnemu wywołaniu AI.
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ── Budowanie TASKS ───────────────────────────────────────────────────────
+    # UWAGA: zwykly NIE dostaje wyników analiza — działa na surowym body
+    # skip_dociekliwy=True zawsze gdy analiza jest w pipeline
 
     zwykly_attachments = req_attachments if "analiza" not in requested_sections else []
     effective_test_mode = disable_flux or test_mode
@@ -1155,157 +1014,48 @@ def webhook():
         else:
             app.logger.warning("[pipeline] Nieznana sekcja ignorowana: %s", section_key)
 
-    # ── WYKONAJ PIPELINE SEKWENCYJNIE ────────────────────────────────────────
-    response_data = _run_sequential(tasks, flask_app)
-
-    # Zabezpieczenie — nawiazanie zawsze ma has_history
-    if "nawiazanie" not in response_data:
-        response_data["nawiazanie"] = {"has_history": False, "reply_html": "", "analysis": ""}
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # WYSYŁKA MAILI — kolejność priorytetowa: zwykly → smierc → analiza → reszta
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    SEND_ORDER = ["zwykly", "smierc", "analiza", "nawiazanie", "emocje",
-                  "scrabble", "biznes", "generator_pdf"]
-
-    any_sent = False
-    for responder_key in SEND_ORDER:
-        if responder_key not in response_data:
-            continue
-        sent = _wyslij_responder(
-            responder_key    = responder_key,
-            resp_data        = response_data,
-            sender           = sender,
-            sender_name      = sender_name,
-            previous_subject = previous_subject,
-            logger           = logger,
-        )
-        if sent:
-            any_sent = True
-            app.logger.info("[send] ✓ Wysłano: %s → %s", responder_key, sender)
-        else:
-            app.logger.info("[send] — Pominięto (brak treści): %s", responder_key)
-
-    # ── Alert dla admina jeśli nic nie wysłano ───────────────────────────────
-    if not any_sent and admin_email:
+    # ── Zapisz ODEBRANO do Sheets (natychmiast, przed wątkiem) ───────────────
+    if history_sheet_id and message_id:
         try:
-            _get_valid_access_token()
-            wyslij_odpowiedz(
-                to_email   = admin_email,
-                to_name    = "Admin",
-                subject    = f"[ALERT] Brak wysyłki dla: {sender}",
-                html_body  = (
-                    f"<p>Brak treści do wysłania dla nadawcy: {sender}<br>"
-                    f"Sekcje: {list(response_data.keys())}</p>"
-                ),
-                zalaczniki = [],
-            )
-            app.logger.warning("Wysłano alert do ADMIN_EMAIL: %s", admin_email)
-        except RuntimeError as e:
-            app.logger.error("[send] Nie można wysłać alertu — brak tokenu: %s", e)
+            log_odebrano(history_sheet_id, message_id, sender, subject, body)
+        except Exception as e:
+            app.logger.warning("[webhook] Błąd log_odebrano: %s", e)
 
-    # ── Zapis historii (RAZ, na końcu) ───────────────────────────────────────
-    if history_sheet_id and not skip_save_to_history:
-        success_hist = save_to_history_sheet(history_sheet_id, sender, subject, body)
-        if not success_hist:
-            app.logger.error("Błąd zapisu historii dla %s", sender)
-        else:
-            app.logger.info("Historia zapisana dla: %s", sender)
-
-    # ── Aktualizacja arkusza śmierci (etap) ──────────────────────────────────
-    if smierc_sheet_id and "smierc" in response_data and response_data["smierc"]:
-        smierc_res = response_data["smierc"]
-        if isinstance(smierc_res, dict) and "nowy_etap" in smierc_res:
-            try:
-                range_name = (
-                    f"{sender.replace('@', '_').replace('.', '_')}"
-                    f"!A{smierc_res['nowy_etap'] + 1}"
-                )
-                values = [[
-                    smierc_res["nowy_etap"], "",
-                    body[:2000],
-                    _strip_html_to_text(smierc_res.get("reply_html", ""))[:2000],
-                    "",
-                ]]
-                update_sheet_with_data(smierc_sheet_id, range_name, values)
-                app.logger.info(
-                    "Zaktualizowano arkusz śmierci dla %s, nowy etap: %d",
-                    sender, smierc_res["nowy_etap"],
-                )
-            except Exception as e:
-                app.logger.error("Błąd aktualizacji arkusza śmierci: %s", e)
-
-    # ── Generuj logi (PO wszystkich responderach) ─────────────────────────────
-    log_txt_content = _build_log_txt_content(logger, response_data)
-    log_txt_b64     = base64.b64encode(log_txt_content.encode("utf-8")).decode("utf-8")
-    response_data["log_txt"] = {
-        "base64": log_txt_b64, "content_type": "text/plain", "filename": "log.txt"
-    }
-
-    svg_content = _build_log_svg_content(logger)
-    log_svg_b64 = base64.b64encode(svg_content.encode("utf-8")).decode("utf-8")
-    response_data["log_svg"] = {
-        "base64": log_svg_b64, "content_type": "image/svg+xml", "filename": "log.svg"
-    }
-
-    # ── Zapis do Google Drive ─────────────────────────────────────────────────
-    if save_to_drive and drive_folder_id:
-        drive_uploads = []
-        for top_field in ("log_txt", "log_svg"):
-            file_obj = response_data.get(top_field)
-            if isinstance(file_obj, dict) and file_obj.get("base64") and file_obj.get("filename"):
-                if _upload_drive_item(file_obj, drive_folder_id):
-                    drive_uploads.append(f"{top_field}/{file_obj['filename']}")
-        for key, value in response_data.items():
-            if not isinstance(value, dict):
-                continue
-            section_uploads = _upload_drive_section_files(value, drive_folder_id)
-            drive_uploads.extend([f"{key}/{name}" for name in section_uploads])
-        if drive_uploads:
-            app.logger.info("Zapisano do Drive: %s", ", ".join(drive_uploads))
-        response_data["saved_to_drive"] = True
-
-    # ── Status sekcji ─────────────────────────────────────────────────────────
-    def section_success(key: str, value) -> bool:
-        if not value or not isinstance(value, dict):
-            return False
-        if key == "nawiazanie":
-            return bool(value.get("has_history") or value.get("reply_html"))
-        return bool(value)
-
-    failed_sections = [
-        key for key in requested_sections
-        if not section_success(key, response_data.get(key))
-    ]
-    response_data["processed_status"] = (
-        {"status": "partial", "failed": failed_sections, "attempt_count": attempt_count}
-        if failed_sections
-        else {"status": "ok"}
+    # ── Odpal pipeline w tle — GAS dostaje 200 w < 1s ────────────────────────
+    t = threading.Thread(
+        target=run_pipeline_async,
+        args=(
+            app._get_current_object(),
+            data,
+            message_id,
+            tasks,
+            sender,
+            sender_name,
+            previous_subject,
+            drive_folder_id,
+            history_sheet_id,
+            smierc_sheet_id,
+            save_to_drive,
+            skip_save_to_history,
+            logger,
+            wyslij_odpowiedz,
+            zbierz_zalaczniki_z_response,
+            _get_valid_access_token,
+        ),
+        daemon=True,
     )
+    t.start()
 
-    # ── Log końcowy ───────────────────────────────────────────────────────────
-    smierc_data_res   = response_data.get("smierc", {})
-    smierc_images_cnt = (
-        len(smierc_data_res.get("images", []))
-        if isinstance(smierc_data_res, dict) and isinstance(smierc_data_res.get("images"), list)
-        else 0
-    )
     app.logger.info(
-        "Response: zwykly=%s | smierc=%s (images=%d) | analiza=%s | "
-        "emocje=%s | nawiazanie=%s | generator_pdf=%s | sender=%s",
-        bool(response_data.get("zwykly")),
-        bool(response_data.get("smierc")),
-        smierc_images_cnt,
-        bool(response_data.get("analiza")),
-        bool(response_data.get("emocje")),
-        bool(response_data.get("nawiazanie", {}).get("has_history")),
-        bool(response_data.get("generator_pdf", {}).get("pdf")),
-        sender_name or sender or "(brak)",
+        "[webhook] ✓ Accepted message_id=%s sender=%s sections=%s",
+        message_id, sender, build_section_order(requested_sections)
     )
 
-    logger.finalize()
-    return jsonify(response_data), 200
+    return jsonify({
+        "status":     "accepted",
+        "message_id": message_id,
+        "sections":   build_section_order(requested_sections),
+    }), 200
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
