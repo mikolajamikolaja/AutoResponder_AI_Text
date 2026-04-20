@@ -243,7 +243,7 @@ def _load_cfg() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
-    sec = cfg.get("deepseek_1_pacjent", {})
+    sec = cfg.get("deepseek_1_pacjent") or cfg.get("groq_1_pacjent", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
@@ -266,7 +266,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
-    sec = cfg.get("deepseek_2_depozyt_leki", {})
+    sec = cfg.get("deepseek_2_depozyt_leki") or cfg.get("groq_2_depozyt_leki", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "(brak rzeczowników)"
@@ -308,8 +308,9 @@ def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
     uzyte_motywy — lista krótkich opisów zdarzeń już wygenerowanych,
                    żeby model nie powtarzał tych samych motywów.
     """
-    sec_key = f"deepseek_{2 + tydzien}_tydzien{tydzien}"
-    sec = cfg.get(sec_key, {})
+    sec_key  = f"deepseek_{2 + tydzien}_tydzien{tydzien}"
+    groq_key = f"groq_{2 + tydzien}_tydzien{tydzien}"
+    sec = cfg.get(sec_key) or cfg.get(groq_key, {})
     system = sec.get("system", "")
 
     try:
@@ -430,7 +431,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
-    sec = cfg.get("deepseek_5_wypis", {})
+    sec = cfg.get("deepseek_5_wypis") or cfg.get("groq_5_wypis", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     try:
@@ -462,7 +463,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
-    sec = cfg.get("deepseek_6_diagnozy_lacina", {})
+    sec = cfg.get("deepseek_6_diagnozy_lacina") or cfg.get("groq_6_diagnozy_lacina", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
@@ -776,19 +777,45 @@ def _hf_credit_exhausted(resp: requests.Response) -> bool:
     return "depleted your monthly included credits" in text or "purchase pre-paid credits" in text
 
 
+def _substitute_or_none(label: str) -> str | None:
+    """
+    Zwraca base64 obrazka zastępczego (zastepczy.jpg) z podpisem,
+    lub None jeśli plik nie istnieje.
+    Używane gdy tokeny HF są niedostępne, wyczerpane lub zwracają błędy.
+    """
+    substitute = _load_substitute_image()
+    if not substitute:
+        current_app.logger.warning(
+            "[psych-flux] Brak zastepczy.jpg — fotografia pominięta (%s)", label
+        )
+        return None
+    caption = "pacjent" if label == "photo_pacjent" else "przedmioty"
+    substitute = _add_text_below_image(
+        substitute,
+        f"Zdjęcie zastępcze — {caption} (tokeny HF niedostępne)",
+        0,
+    )
+    current_app.logger.info("[psych-flux] Użyto zastepczy.jpg dla %s", label)
+    return substitute.get("base64")
+
+
 def _generate_flux(prompt: str, label: str,
                    steps: int = 28, guidance: float = 7.0,
                    width: int = 1024, height: int = 1024,
                    test_mode: bool = False) -> str | None:
     """Generuje obrazek FLUX. Zwraca base64 JPG lub None."""
     if os.getenv("HF_TOKENS_ACTIVE", "tak").strip().lower() == "nie":
-        current_app.logger.info("[psych-flux] HF_TOKENS_ACTIVE=nie — pomijam FLUX (%s)", label)
-        return None
+        current_app.logger.info(
+            "[psych-flux] HF_TOKENS_ACTIVE=nie — używam zastepczy.jpg (%s)", label
+        )
+        return _substitute_or_none(label)
 
     tokens = get_active_tokens()
     if not tokens:
-        current_app.logger.error("[psych-flux] Brak tokenów HF dla %s", label)
-        return None
+        current_app.logger.error(
+            "[psych-flux] Brak tokenów HF dla %s — używam zastepczy.jpg", label
+        )
+        return _substitute_or_none(label)
 
     seed    = random.randint(0, 2 ** 32 - 1)
     payload = {
@@ -857,8 +884,10 @@ def _generate_flux(prompt: str, label: str,
         except Exception as e:
             current_app.logger.warning("[psych-flux] %s wyjątek token=%s: %s", label, name, e)
 
-    current_app.logger.error("[psych-flux] %s — wszystkie tokeny zawiodły", label)
-    return None
+    current_app.logger.error(
+        "[psych-flux] %s — wszystkie tokeny zawiodły — używam zastepczy.jpg", label
+    )
+    return _substitute_or_none(label)
 
 
 def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str, test_mode: bool = False) -> tuple:
@@ -1001,8 +1030,9 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         return p
 
     def field(label, value, label_color=DARK, val_color=DARK, size=10):
-        if not value:
-            return
+        if value in (None, "", [], {}, "__BRAK__"):
+            value = "[brak danych]"
+            val_color = LGREY
         p  = doc.add_paragraph()
         rl = p.add_run(f"{label}: ")
         rl.bold            = True
@@ -1100,17 +1130,24 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # SEKCJA 2 — POWÓD PRZYJĘCIA
     # ══════════════════════════════════════════════════════════════════════════
     heading("II. POWÓD PRZYJĘCIA", 2, RED, 11)
-    para(raport.get("powod_przyjecia", ""), size=10)
+    powod = raport.get("powod_przyjecia") or ""
+    if not powod or powod == "__BRAK__":
+        para("[brak danych — sekcja nie została wygenerowana]", italic=True, color=LGREY, size=9)
+    else:
+        para(powod, size=10)
     doc.add_paragraph()
 
     # ══════════════════════════════════════════════════════════════════════════
     # SEKCJA 3 — CYTATY Z PRZYJĘCIA
     # ══════════════════════════════════════════════════════════════════════════
     heading("III. CYTATY Z IZBY PRZYJĘĆ", 2, RED, 11)
-    cytaty = raport.get("cytaty_z_przyjecia", "")
-    if isinstance(cytaty, list):
+    cytaty = raport.get("cytaty_z_przyjecia")
+    if not cytaty or cytaty == "__BRAK__":
+        para("[brak danych — cytaty nie zostały wygenerowane]", italic=True, color=LGREY, size=9)
+    elif isinstance(cytaty, list):
         for c in cytaty:
-            para(str(c), italic=True, color=GREY, size=9)
+            if c and str(c).strip() not in ("", "__BRAK__"):
+                para(str(c), italic=True, color=GREY, size=9)
     else:
         para(str(cytaty), italic=True, color=GREY, size=9)
     doc.add_paragraph()
@@ -1126,14 +1163,23 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         proto = dep.get("protokol_depozytu", "")
         if isinstance(lista, str):
             lista = [x.strip() for x in lista.split(",") if x.strip()]
-        for item in lista:
-            p_item = doc.add_paragraph(style="List Bullet")
-            r_item = p_item.add_run(str(item))
-            r_item.font.size      = Pt(10)
-            r_item.font.color.rgb = DARK
-        if proto:
+        if lista and lista != ["__BRAK__"]:
+            for item in lista:
+                if str(item).strip() in ("", "__BRAK__"):
+                    continue
+                p_item = doc.add_paragraph(style="List Bullet")
+                r_item = p_item.add_run(str(item))
+                r_item.font.size      = Pt(10)
+                r_item.font.color.rgb = DARK
+        else:
+            para("[brak danych — lista przedmiotów nie została wygenerowana]",
+                 italic=True, color=LGREY, size=9)
+        if proto and proto != "__BRAK__":
             doc.add_paragraph()
             para(proto, italic=True, color=GREY, size=9)
+    else:
+        para("[brak danych — sekcja depozytu nie została wygenerowana]",
+             italic=True, color=LGREY, size=9)
     doc.add_paragraph()
 
     if photo_przedmioty_b64:
@@ -1151,6 +1197,9 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     heading("V. FARMAKOLOGIA — PEŁNA LISTA LEKÓW ZASTOSOWANYCH", 2, RED, 11)
     farm       = raport.get("farmakologia", {})
     leki_lista = farm.get("leki", []) if isinstance(farm, dict) else []
+
+    # Filtruj leki z wartością __BRAK__
+    leki_lista = [l for l in leki_lista if isinstance(l, dict) and l.get("nazwa", "") != "__BRAK__"]
 
     if leki_lista:
         t = doc.add_table(rows=1, cols=4)
@@ -1174,6 +1223,10 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                 for p in cell.paragraphs:
                     for r in p.runs:
                         r.font.size = Pt(9)
+        doc.add_paragraph()
+    else:
+        para("[brak danych — lista leków nie została wygenerowana]",
+             italic=True, color=LGREY, size=9)
         doc.add_paragraph()
 
     nota_farm = farm.get("nota_farmaceutyczna", "") if isinstance(farm, dict) else ""

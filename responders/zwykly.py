@@ -4137,15 +4137,12 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     except Exception:
         pass
 
+
     # Usunięto generowanie plakatu SVG - zgodnie z życzeniem użytkownika
     plakat_svg = None
 
-    flow_diagram_svg = None
-    try:
-        from core.logging_reporter import get_logger as get_exec_logger
-        flow_diagram_svg = _build_flow_diagram_svg(get_exec_logger())
-    except Exception:
-        pass
+    # flow_diagram_svg przeniesiony na KONIEC respond() — tuż przed return
+    # żeby logger miał już wszystkie dane sesji (api_calls, sections_completed)
 
     try:
         explanation_txt = _build_explanation_txt(res_text, body)
@@ -4249,6 +4246,24 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     # Raport psychiatryczny (DOCX) dodaj do docx_list zeby smtp_wysylka go wyslal jako zalacznik
     if raport_pdf and isinstance(raport_pdf, dict) and raport_pdf.get("base64"):
         analiza_docx_list.append(raport_pdf)
+
+    # ── Diagram SVG — generuj NA KOŃCU gdy logger ma wszystkie dane sesji ────────
+    flow_diagram_svg = None
+    try:
+        from core.logging_reporter import get_logger as _get_exec_logger
+        _exec_log = _get_exec_logger()
+        # Uzupełnij metadata loggera danymi z tej sesji
+        _exec_log.set_metadata("api_calls", [
+            e for e in _exec_log.entries if e.get("type") == "API_CALL"
+        ])
+        _exec_log.set_metadata("sections_completed", [
+            e["data"].get("section", "")
+            for e in _exec_log.entries
+            if e.get("type") == "SECTION_RESULT" and e.get("data", {}).get("success")
+        ])
+        flow_diagram_svg = _build_flow_diagram_svg(_exec_log)
+    except Exception as _svg_err:
+        logger.warning("[zwykly] flow_diagram_svg błąd: %s", _svg_err)
 
     return {
         "reply_html": reply_html,

@@ -1,6 +1,6 @@
 /**
  * __AAA_processEmails - Google Apps Script
- * WERSJA 11 - ASYNC PIPELINE + WERYFIKACJA:
+ * WERSJA 12 - ASYNC PIPELINE + WERYFIKACJA:
  *
  * Architektura:
  *   GAS: odbierz email → zapisz ODEBRANO do Sheets → POST do Render → koniec
@@ -371,7 +371,7 @@ function _getRetryAttachments(threadId) {
 
 function _processPendingRetries(webhookUrl) {
   var list = _loadPendingRetries();
-  if (!list.length) return;
+  if (!list.length) return false;
   console.log("Retry: przetwarzam " + list.length + " elementów");
 
   var updated = list.slice();
@@ -428,6 +428,7 @@ function _processPendingRetries(webhookUrl) {
   }
 
   _savePendingRetries(updated);
+  return true;  // v11: wysłano zadanie do Rendera
 }
 
 // ── Moduł SMIERC ─────────────────────────────────────────────────────────────
@@ -1085,17 +1086,73 @@ function _markAsProcessed(thread) {
 // GŁÓWNA PĘTLA
 // ════════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════════
+// SPRAWDZENIE CZY RENDER JEST ZAJĘTY
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * _isRenderBusy
+ *
+ * Odpytuje endpoint GET /status na Render.
+ * Zwraca true jeśli Render przetwarza inny pipeline — wtedy GAS nie wysyła nic.
+ *
+ * Przy ręcznych testach w dzienniku zobaczysz:
+ *   [busy] Render zajęty (active=1) — porzucam, spróbuję za 30 min
+ */
+function _isRenderBusy(webhookUrl) {
+  var statusUrl = webhookUrl.replace("/webhook", "/status");
+  try {
+    var resp = UrlFetchApp.fetch(statusUrl, {
+      method:             "get",
+      muteHttpExceptions: true,
+      deadline:           10,
+    });
+    var code = resp.getResponseCode();
+    if (code !== 200) {
+      // Jeśli /status niedostępny — zakładamy wolny (nie blokujemy)
+      console.warn("[busy] /status zwrócił " + code + " — zakładam wolny");
+      return false;
+    }
+    var json = JSON.parse(resp.getContentText());
+    if (json.busy) {
+      console.warn("[busy] Render zajęty (active=" + json.active + ") — porzucam, spróbuję za 30 min");
+      return true;
+    }
+    return false;
+  } catch(e) {
+    console.warn("[busy] Błąd /status: " + e.message + " — zakładam wolny");
+    return false;
+  }
+}
+
 function __AAA_processEmails() {
   var props      = PropertiesService.getScriptProperties();
   var webhookUrl = props.getProperty("WEBHOOK_URL");
   if (!webhookUrl) { console.error("Brak WEBHOOK_URL!"); return; }
 
+  // v11: JEDNA wiadomość do Rendera na uruchomienie — flaga renderBusy
+  // Jeśli któraś funkcja wysłała zadanie, pozostałe nie wysyłają nic.
+  var renderBusy = false;
+
   // Najpierw przetwórz oczekujące retry (lokalna kolejka PropertiesService)
-  _processPendingRetries(webhookUrl);
+  if (_processPendingRetries(webhookUrl)) {
+    console.log("[v11] renderBusy=true po _processPendingRetries — pomijam check i pętlę");
+    renderBusy = true;
+  }
 
   // Sprawdź Sheets — które wiadomości Render jeszcze nie obsłużył
-  // (ODEBRANO bez WYSŁANO w ciągu ostatnich 24h) → wyślij retry
-  _checkUnprocessedMessages(webhookUrl);
+  // (ODEBRANO bez WYSŁANO w ciągu ostatnich 72h) → wyślij retry dla najstarszej
+  if (!renderBusy && _checkUnprocessedMessages(webhookUrl)) {
+    console.log("[v11] renderBusy=true po _checkUnprocessedMessages — pomijam pętlę");
+    renderBusy = true;
+  }
+
+  if (renderBusy) {
+    // Render już dostał zadanie — nie wysyłamy nowych emaili w tej rundzie
+    var knownSendersEarly = _getKnownSenders();
+    console.log("Znani nadawcy: " + knownSendersEarly.length);
+    return;
+  }
 
   var BIZ_LIST                   = _getListFromProps("BIZ_LIST");
   var ALLOWED_LIST               = _getListFromProps("ALLOWED_LIST");
@@ -1556,7 +1613,7 @@ function _isBannedSender(email, bannedList) {
  *  - Przy nieudanym retry wysyła alert e-mail do ADMIN_EMAIL
  */
 function _checkUnprocessedMessages(webhookUrl) {
-  var MAX_AGE_HOURS = 72;  // v11: zwiększone z 24h — emaile nie wypadają z weryfikacji
+  var MAX_AGE_HOURS = 72;  // v11: zwiększone z 24h
   var props   = PropertiesService.getScriptProperties();
   var sheetId = props.getProperty("HISTORY_SHEET_ID");
   if (!sheetId) {
@@ -1652,8 +1709,7 @@ function _checkUnprocessedMessages(webhookUrl) {
     return;
   }
 
-  // v11: sortuj od najstarszej, weź tylko JEDNĄ — nie przeciążaj Render
-  // Młodsze wiadomości NIE są oznaczane jako przetworzone — czekają na następny trigger
+  // v11: sortuj od najstarszej, wyślij TYLKO JEDNĄ — nie przeciążaj Rendera
   unprocessed.sort(function(a, b) { return (a.ts || 0) - (b.ts || 0); });
   var oldest = [unprocessed[0]];
   console.warn("[check] Nieobsłużone przez Render: " + unprocessed.length + " wiadomości — wysyłam tylko najstarszą: " + unprocessed[0].message_id);
@@ -1713,6 +1769,7 @@ function _checkUnprocessedMessages(webhookUrl) {
 
     Utilities.sleep(500);
   }
+  return true;  // v11: wysłano zadanie do Rendera
 }
 
 function keepAlive() {

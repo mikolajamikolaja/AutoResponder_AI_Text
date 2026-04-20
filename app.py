@@ -59,6 +59,22 @@ from core.job_runner import run_pipeline_async, build_section_order
 
 app = Flask(__name__)
 
+# ── Globalny licznik aktywnych pipeline'ów ────────────────────────────────────
+# Używany przez /status — GAS sprawdza przed wysłaniem czy Render jest wolny.
+import threading as _threading
+_pipeline_lock   = _threading.Lock()
+_active_pipelines = 0  # liczba aktualnie działających wątków pipeline
+
+def _pipeline_start():
+    global _active_pipelines
+    with _pipeline_lock:
+        _active_pipelines += 1
+
+def _pipeline_done():
+    global _active_pipelines
+    with _pipeline_lock:
+        _active_pipelines = max(0, _active_pipelines - 1)
+
 # Warm-up tokenów HF przy starcie serwera
 with app.app_context():
     hf_tokens.warmup()
@@ -751,6 +767,27 @@ def _build_log_txt_content(logger, response_data) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STATUS — GAS sprawdza przed wysłaniem czy Render jest wolny
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/status", methods=["GET"])
+def status():
+    """
+    Zwraca czy Render aktualnie przetwarza pipeline.
+    GAS odpytuje ten endpoint przed każdym POST /webhook.
+    Odpowiedź:
+      {"busy": false, "active": 0}  — Render wolny, można wysłać
+      {"busy": true,  "active": 1}  — Render zajęty, GAS powinien poczekać
+    """
+    busy = _active_pipelines > 0
+    app.logger.info("[status] active=%d busy=%s", _active_pipelines, busy)
+    return jsonify({
+        "busy":   busy,
+        "active": _active_pipelines,
+    }), 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # WEBHOOK GŁÓWNY — natychmiastowe 200, pipeline w daemon thread
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1014,6 +1051,18 @@ def webhook():
         else:
             app.logger.warning("[pipeline] Nieznana sekcja ignorowana: %s", section_key)
 
+    # ── Odrzuć gdy pipeline już działa — GAS dostanie "busy" i spróbuje później
+    if _active_pipelines > 0:
+        app.logger.warning(
+            "[webhook] 🔒 BUSY — odrzucam message_id=%s sender=%s (active=%d)",
+            message_id, sender, _active_pipelines
+        )
+        return jsonify({
+            "status":  "busy",
+            "reason":  "Pipeline already running. Try again later.",
+            "active":  _active_pipelines,
+        }), 503
+
     # ── Zapisz ODEBRANO do Sheets (natychmiast, przed wątkiem) ───────────────
     if history_sheet_id and message_id:
         try:
@@ -1022,28 +1071,21 @@ def webhook():
             app.logger.warning("[webhook] Błąd log_odebrano: %s", e)
 
     # ── Odpal pipeline w tle — GAS dostaje 200 w < 1s ────────────────────────
-    t = threading.Thread(
-        target=run_pipeline_async,
-        args=(
-            app,
-            data,
-            message_id,
-            tasks,
-            sender,
-            sender_name,
-            previous_subject,
-            drive_folder_id,
-            history_sheet_id,
-            smierc_sheet_id,
-            save_to_drive,
-            skip_save_to_history,
-            logger,
-            wyslij_odpowiedz,
-            zbierz_zalaczniki_z_response,
-            _get_valid_access_token,
-        ),
-        daemon=True,
-    )
+    _pipeline_start()
+    def _pipeline_wrapper():
+        try:
+            run_pipeline_async(
+                app, data, message_id, tasks, sender, sender_name,
+                previous_subject, drive_folder_id, history_sheet_id,
+                smierc_sheet_id, save_to_drive, skip_save_to_history,
+                logger, wyslij_odpowiedz, zbierz_zalaczniki_z_response,
+                _get_valid_access_token,
+            )
+        finally:
+            _pipeline_done()
+            app.logger.info("[pipeline] ✓ Zakończono — active=%d", _active_pipelines)
+
+    t = threading.Thread(target=_pipeline_wrapper, daemon=True)
     t.start()
 
     app.logger.info(

@@ -8,6 +8,7 @@ ZMIANY:
     mógł wykryć że Render obsłużył wiadomość
   - Przy braku tokenów HF — obrazek zastępczy zamiast crashu
 """
+import base64
 import gc
 import traceback
 
@@ -174,6 +175,44 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 save_to_history_sheet(history_sheet_id, sender, subject, body)
             except Exception as e:
                 flask_app.logger.error("[async] Błąd zapisu historii: %s", e)
+
+        # ── log.txt — generuj NA KOŃCU gdy logger ma pełne dane ─────────────────
+        try:
+            from app import _build_log_txt_content, _build_log_svg_content
+            log_content = _build_log_txt_content(logger, {})
+            log_b64 = base64.b64encode(log_content.encode("utf-8")).decode("ascii")
+            log_txt = {
+                "base64":       log_b64,
+                "content_type": "text/plain",
+                "filename":     f"log_{logger.session_id}.txt",
+            }
+
+            # Wyślij log.txt mailem jako ostatni załącznik
+            from smtp_wysylka import wyslij_odpowiedz
+            subject_log = f"[LOG] {data.get('subject', 'pipeline')}"
+            wyslij_odpowiedz(
+                to_email=sender,
+                to_name=sender_name,
+                subject=subject_log,
+                html_body=(
+                    "<p style='font-family:monospace;color:#444'>"
+                    "Log wykonania pipeline — załącznik <code>log.txt</code>.</p>"
+                ),
+                zalaczniki=[log_txt],
+            )
+            flask_app.logger.info("[async] log.txt wysłany (%d znaków)", len(log_content))
+
+            # Opcjonalnie: zapisz też na Drive
+            if save_to_drive and drive_folder_id:
+                upload_file_to_drive(
+                    log_b64,
+                    log_txt["filename"],
+                    "text/plain",
+                    drive_folder_id,
+                )
+                flask_app.logger.info("[async] log.txt zapisany na Drive")
+        except Exception as e:
+            flask_app.logger.error("[async] Błąd generowania/wysyłki log.txt: %s", e)
 
         flask_app.logger.info(
             "[async] Pipeline zakończony dla %s | sekcje: %s",
