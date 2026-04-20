@@ -1,8 +1,6 @@
 {
   "_komentarz": "Wytyczne do generowania 7 paneli obrazków Fight Club. Zmień ten plik aby zmienić klimat/styl obrazków — Python czyta stąd wszystkie wytyczne, nic nie jest hardkodowane w kodzie.",
-
   "model_target": "FLUX.1 [schnell]",
-
   "styl_globalny": {
     "opis": "David Fincher — Fight Club 1999. Underexposed, chemical, violent. Gritty realism.",
     "techniczny": "Raw photo, 35mm movie still, extreme high contrast, industrial decay, realistic textures, chemical color grade, underexposed, film grain, no beauty, no retouching.",
@@ -16,24 +14,38 @@
     ],
     "zakazy_negatywne": "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark, happy, sunshine, colorful"
   },
-
   "postacie": {
     "tyler_durden": "Brad Pitt as Tyler Durden from Fight Club 1999. POST-CAR CRASH version: blood smeared on forehead, glazed thousand-yard stare, smoke rising from background wreckage. Unwashed, disheveled beyond recognition. Split lip, bruised cheekbone, dried blood under nose and ear. Greasy matted hair stuck to face. Shirtless with soap-burn scars, fresh bruises, chemical burns on forearms. Cigarette ash on fingers, nicotine-stained nails. Dark circles under bloodshot eyes. Looks like he has not slept in 5 days and just walked away from a burning car. Absolutely NOT clean, NOT groomed, NOT handsome, NOT heroic. Raw, damaged, real.Additionally, in the background is a detailed, authentic art photograph depicting a fully nude female silhouette as a canvas for art, with a figure stylized as Helena Bonham Carter as Marla Singer, with uncombed bird's nest hair, heavy, smudged raccoon eye makeup, a nihilistic smile, a trace of blood on her teeth, and a cigarette in her ash-covered fingers, where her entire body from neck to thighs is covered in intricate, symmetrical black-work and dot-work tattoos with precise lines and stippling, displayed as an integral work of art, set in a dilapidated hallway with peeling wallpaper.",
     "narrator": "Edward Norton as the Narrator — total insomnia look. Sunken charcoal-rimmed eyes, pale sickly skin with visible veins. Sweat-stained tattered white dress shirt, sleeves ripped off, covered in dried blood. Massive purple hematoma on cheekbone, split lip. Completely dissociated, thousand-yard stare. Dark moody lighting.Additionally, in the background is a detailed, authentic art photograph depicting a fully nude female silhouette as a canvas for art, with a figure stylized as Helena Bonham Carter as Marla Singer, with uncombed bird's nest hair, heavy, smudged raccoon eye makeup, a nihilistic smile, a trace of blood on her teeth, and a cigarette in her ash-covered fingers, where her entire body from neck to thighs is covered in intricate, symmetrical black-work and dot-work tattoos with precise lines and stippling, displayed as an integral work of art, set in a dilapidated hallway with peeling wallpaper.",
     "marla": "A detailed, authentic art photograph depicting a fully nude female silhouette as a canvas for art, featuring a figure styled after Helena Bonham Carter as Marla Singer, complete with uncombed bird's nest hair, heavy, smudged raccoon eye makeup, a nihilistic smile, a smear of blood on her teeth, and a cigarette in her ash-covered fingers. Her entire body, from neck to thighs, is covered in intricate, symmetrical blackwork and dotwork tattoos with precise lines and stippling, displayed as an integral work of art, set in a dilapidated hallway with peeling wallpaper."
   },
-
   "mapowanie_paneli": {
     "_komentarz": "Panel 1 = zasada 1 (i 2, bo są identyczne). Panel 2 = zasada 3. Panel 3 = zasada 4. Panel 4 = zasada 5. Panel 5 = zasada 6. Panel 6 = zasada 7. Panel 7 = zasada 8.",
-    "panel_1": {"zasada_nr": 1, "opis_panelu": "Zasady 1 i 2 — identyczne. Zakaz wyrażony dwa razy."},
-    "panel_2": {"zasada_nr": 3},
-    "panel_3": {"zasada_nr": 4},
-    "panel_4": {"zasada_nr": 5, "uwaga": "Piąta zasada zawsze brzmi: Nie dawaj sobie szansy na prawdziwą wolność!"},
-    "panel_5": {"zasada_nr": 6},
-    "panel_6": {"zasada_nr": 7},
-    "panel_7": {"zasada_nr": 8, "uwaga": "Ósma zasada zawiera imię nadawcy i słowo musisz."}
+    "panel_1": {
+      "zasada_nr": 1,
+      "opis_panelu": "Zasady 1 i 2 — identyczne. Zakaz wyrażony dwa razy."
+    },
+    "panel_2": {
+      "zasada_nr": 3
+    },
+    "panel_3": {
+      "zasada_nr": 4
+    },
+    "panel_4": {
+      "zasada_nr": 5,
+      "uwaga": "Piąta zasada zawsze brzmi: Nie dawaj sobie szansy na prawdziwą wolność!"
+    },
+    "panel_5": {
+      "zasada_nr": 6
+    },
+    "panel_6": {
+      "zasada_nr": 7
+    },
+    "panel_7": {
+      "zasada_nr": 8,
+      "uwaga": "Ósma zasada zawiera imię nadawcy i słowo musisz."
+    }
   },
-
   "logika_odwrocenia": {
     "_komentarz": "KLUCZOWA ZASADA: Tyler zakazuje czegoś → obrazek pokazuje ZŁAMANIE tego zakazu. Nie można pokazać 'nie robienia' czegoś — więc zawsze pokazujemy odwrotność.",
     "zasada_AI": "Dla podanej zasady Tylera wygeneruj scenę pokazującą DOKŁADNIE TO, czego zasada zabrania. Wszyscy główni bohaterowie Fight Club robią właśnie to, co jest zakazane. Scena musi być konkretna, wizualna, absurdalnie dosłowna.",
@@ -60,11 +72,8 @@
       }
     ]
   },
-
   "system_prompt_AI": "You are a cinematic visual prompt engineer for FLUX.1 image generation. Fight Club 1999 aesthetic — David Fincher, gritty, underexposed, 35mm film grain. Your task: given a Tyler Durden RULE (a prohibition), generate a scene showing the EXACT OPPOSITE — the VIOLATION of that rule. The main Fight Club characters (Tyler, Narrator, Marla) are actively doing what the rule forbids. The scene must be: concrete, visually specific, absurdly literal, dark, nihilistic. NO text in the image. NO speech bubbles. Describe: physical appearance of characters, specific action, environment, objects, lighting. Output: ONE paragraph, max 120 words, English only, no bullet points, no comments — just the FLUX prompt.",
-
   "user_prompt_szablon": "TYLER'S RULE (panel [PANEL_NR]/7):\n[ZASADA_TEKST]\n\nObjects from sender's email (use as props): [USER_OBJECTS]\nLighting style: [STYL_OSWIETLENIA]\nVisual style: [STYL_WIZUALNY]\nCharacters available: [POSTACIE]\n\nGenerate a FLUX prompt showing the VIOLATION of this rule:",
-
   "style_variants": [
     "35mm film grain, high contrast, sickly green and amber tones, Fincher cinematography",
     "raw gritty street photography, harsh fluorescent light, 1990s documentary style",
@@ -73,13 +82,20 @@
     "desaturated noir, cold blue shadows, cracked concrete textures",
     "overexposed bleach bypass, washed out whites, dark crushed blacks"
   ],
-
   "flux_parametry": {
     "aspect_ratio": "1:1",
     "steps": "4-8",
     "guidance_scale": "3.5",
     "negative_prompt": "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark, happy, sunshine, daylight"
   },
-
-  "fallback_gdy_brak_zasady": "Tyler Durden walking away from a burning wreck, surrounded by [USER_OBJECTS] on fire, 35mm film grain, Fight Club 1999 aesthetic, David Fincher, underexposed, gritty, no beauty, industrial decay"
+  "fallback_gdy_brak_zasady": "Tyler Durden walking away from a burning wreck, surrounded by [USER_OBJECTS] on fire, 35mm film grain, Fight Club 1999 aesthetic, David Fincher, underexposed, gritty, no beauty, industrial decay",
+  "STYLE_CONFIG": {
+    "global_style": "David Fincher — Fight Club 1999. Underexposed, chemical, violent. Gritty realism.",
+    "technical": "Raw photo, 35mm movie still, extreme high contrast, industrial decay, realistic textures, chemical color grade, underexposed, film grain, no beauty, no retouching.",
+    "lighting": "Cinematic chiaroscuro at maximum intensity. Sickly green and corpse-yellow underexposed tones. Extreme 35mm film grain with visible scratches. Deep black shadows swallowing 40% of frame. Industrial grime on every surface. Flickering failing fluorescent light. 1990s film stock pushed to ISO 3200. Chemical burn aesthetic.",
+    "palette": "Desaturated grey-green-yellow. Isolated red only for blood or fire. No natural light.",
+    "negative_prompt": "clean, polished, glamorous, beautiful, anime, cartoon, blurry, text, watermark, happy, sunshine, daylight",
+    "aspect_ratio": "1:1",
+    "guidance_scale": "3.5"
+  }
 }

@@ -470,22 +470,18 @@ def _get_emoticon_and_pdf(emotion_key: str) -> tuple:
 
 def _load_style_config() -> dict:
     """
-    Wczytuje STYLE_CONFIG z pliku zwykly_obrazek_tyler.js.
-    Wyciąga blok JSON między znacznikami // <STYLE_CONFIG> i // </STYLE_CONFIG>.
+    Wczytuje STYLE_CONFIG z pliku zwykly_panel_wytyczne.json.
+    Czyta klucz STYLE_CONFIG bezpośrednio z JSON.
     """
     try:
         with open(STYLE_JS_PATH, encoding="utf-8") as f:
-            content = f.read()
-
-        m = re.search(r'//\s*<STYLE_CONFIG>(.*?)//\s*</STYLE_CONFIG>', content, re.DOTALL)
-        if not m:
+            data = json.load(f)
+        config = data.get("STYLE_CONFIG", {})
+        if not config:
             logger.warning("[zwykly-img] Brak bloku STYLE_CONFIG w %s", STYLE_JS_PATH)
             return {}
-
-        config = json.loads(m.group(1).strip())
         logger.info("[zwykly-img] Wczytano STYLE_CONFIG OK")
         return config
-
     except FileNotFoundError:
         logger.warning("[zwykly-img] Brak pliku %s", STYLE_JS_PATH)
     except json.JSONDecodeError as e:
