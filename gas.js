@@ -1,6 +1,6 @@
 /**
  * __AAA_processEmails - Google Apps Script
- * WERSJA 10 - ASYNC PIPELINE + WERYFIKACJA:
+ * WERSJA 11 - ASYNC PIPELINE + WERYFIKACJA:
  *
  * Architektura:
  *   GAS: odbierz email → zapisz ODEBRANO do Sheets → POST do Render → koniec
@@ -1556,7 +1556,7 @@ function _isBannedSender(email, bannedList) {
  *  - Przy nieudanym retry wysyła alert e-mail do ADMIN_EMAIL
  */
 function _checkUnprocessedMessages(webhookUrl) {
-  var MAX_AGE_HOURS = 24;
+  var MAX_AGE_HOURS = 72;  // v11: zwiększone z 24h — emaile nie wypadają z weryfikacji
   var props   = PropertiesService.getScriptProperties();
   var sheetId = props.getProperty("HISTORY_SHEET_ID");
   if (!sheetId) {
@@ -1652,10 +1652,11 @@ function _checkUnprocessedMessages(webhookUrl) {
     return;
   }
 
-  // Sortuj od najstarszej i weź tylko JEDNĄ — żeby nie przeciążać Render
+  // v11: sortuj od najstarszej, weź tylko JEDNĄ — nie przeciążaj Render
+  // Młodsze wiadomości NIE są oznaczane jako przetworzone — czekają na następny trigger
   unprocessed.sort(function(a, b) { return (a.ts || 0) - (b.ts || 0); });
   var oldest = [unprocessed[0]];
-  console.warn("[check] Nieobsłużone przez Render: " + unprocessed.length + " wiadomości — wysyłam tylko najstarszą");
+  console.warn("[check] Nieobsłużone przez Render: " + unprocessed.length + " wiadomości — wysyłam tylko najstarszą: " + unprocessed[0].message_id);
 
   var secret     = props.getProperty("WEBHOOK_SECRET");
   var adminEmail = props.getProperty("ADMIN_EMAIL");

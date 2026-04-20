@@ -941,18 +941,40 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         section.left_margin   = Cm(2.5)
         section.right_margin  = Cm(2.5)
 
-    # Dodaj stopkę z numerami stron
+    # Dodaj stopkę z numerami stron (XML — python-docx nie ma add_field na Run)
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
     section = doc.sections[0]
     footer = section.footer
     footer_paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
     footer_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run = footer_paragraph.add_run()
-    footer_run.add_field('PAGE')
-    footer_run.add_text(' / ')
-    footer_run.add_field('NUMPAGES')
-    footer_run.font.size = Pt(9)
-    footer_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+    footer_paragraph.clear()
+
+    def _add_page_field(paragraph, field_name):
+        """Wstawia pole Word (PAGE lub NUMPAGES) do akapitu przez XML."""
+        run = paragraph.add_run()
+        run.font.size = Pt(9)
+        run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+        fld = OxmlElement('w:fldChar')
+        fld.set(qn('w:fldCharType'), 'begin')
+        run._r.append(fld)
+        instr = OxmlElement('w:instrText')
+        instr.set(qn('xml:space'), 'preserve')
+        instr.text = ' ' + field_name + ' '
+        run._r.append(instr)
+        fld2 = OxmlElement('w:fldChar')
+        fld2.set(qn('w:fldCharType'), 'separate')
+        run._r.append(fld2)
+        fld3 = OxmlElement('w:fldChar')
+        fld3.set(qn('w:fldCharType'), 'end')
+        run._r.append(fld3)
+
+    _add_page_field(footer_paragraph, 'PAGE')
+    sep_run = footer_paragraph.add_run(' / ')
+    sep_run.font.size = Pt(9)
+    sep_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+    _add_page_field(footer_paragraph, 'NUMPAGES')
 
     RED   = RGBColor(0x99, 0x1A, 0x1A)
     DARK  = RGBColor(0x0D, 0x0D, 0x0D)
