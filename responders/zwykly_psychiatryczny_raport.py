@@ -4,19 +4,20 @@ responders/zwykly_psychiatryczny_raport.py
 Moduł obsługujący CAŁY pipeline raportu psychiatrycznego:
   - 10 wywołań DeepSeek (każda sekcja osobno)
       Runda 1 (równolegle): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
-      Runda 2 (równolegle): #3a tydzień1 dni 1-4 | #3b tydzień1 dni 5-7
-                            #4a tydzień2 dni 8-11 | #4b tydzień2 dni 12-14 | #5 wypis
-      Runda 3: #7a zalecenia+rokowanie | #7b notatki_pielegniarek | #7c notatki_sprzataczki+incydenty
+      Runda 2 (równolegle): #3 dni 1,3 | #4 dni 14,30 | #5 wypis
+      Runda 3: #7a zalecenia+rokowanie | #7b notatki_pielegniarek (3) | #7c notatki_sprzataczki (3)+incydenty (2)
   - 2 wywołania DeepSeek (tone check + completeness check, merge JSON)
   - 2 zdjęcia FLUX generowane sekwencyjnie
   - Budowanie DOCX (python-docx)
   - Zwraca dict: {raport_pdf, psych_photo_1, psych_photo_2}
 
-ZMIANY v5:
-  - _sekcja_tydzien podzielona na chunki (3-4 dni każdy) → koniec z uciętymi JSON
-  - zalecenia podzielone na 3 osobne wywołania (7a/7b/7c) → koniec z powtarzalnością
-  - Każdy chunk przekazuje listę już użytych motywów → zakaz powtórzeń
-  - max_tokens obniżone do bezpiecznych wartości per chunk
+ZMIANY v6:
+  - Hospitalizacja skrócona: tylko dni 1, 3, 14, 30
+  - Zalecenia: 1 zadanie (nie 3)
+  - Incydenty: 2 (nie 10)
+  - Notatki pielęgniarek: 3 (nie 10)
+  - Notatki sprzątaczek: 3 (nie 10)
+  - Klucze groq_* → deepseek_* wszędzie
 """
 
 import os
@@ -243,7 +244,7 @@ def _load_cfg() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
-    sec = cfg.get("deepseek_1_pacjent") or cfg.get("groq_1_pacjent", {})
+    sec = cfg.get("deepseek_1_pacjent", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
@@ -266,7 +267,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
-    sec = cfg.get("deepseek_2_depozyt_leki") or cfg.get("groq_2_depozyt_leki", {})
+    sec = cfg.get("deepseek_2_depozyt_leki", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "(brak rzeczowników)"
@@ -298,19 +299,16 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
 # DEEPSEEK #3/#4 — tygodnie hospitalizacji (CHUNKI po 3-4 dni)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
-                           tydzien: int, data_przyjecia: str,
-                           dni_od: int, dni_do: int,
-                           uzyte_motywy: list | None = None) -> list:
+def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
+                    data_przyjecia: str) -> list:
     """
-    Generuje chunk dni hospitalizacji od dni_od do dni_do (włącznie).
-    dni_od/dni_do to numery dni w hospitalizacji (1-14).
-    uzyte_motywy — lista krótkich opisów zdarzeń już wygenerowanych,
-                   żeby model nie powtarzał tych samych motywów.
+    Generuje 2 wybrane dni hospitalizacji (skrócona wersja):
+      tydzien=1 → dni 1 i 3
+      tydzien=2 → dni 14 i 30
+    Jeden call DeepSeek na oba dni naraz → mały JSON, brak ucięć.
     """
-    sec_key  = f"deepseek_{2 + tydzien}_tydzien{tydzien}"
-    groq_key = f"groq_{2 + tydzien}_tydzien{tydzien}"
-    sec = cfg.get(sec_key) or cfg.get(groq_key, {})
+    sec_key = f"deepseek_{2 + tydzien}_tydzien{tydzien}"
+    sec = cfg.get(sec_key, {})
     system = sec.get("system", "")
 
     try:
@@ -318,50 +316,40 @@ def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
     except Exception:
         base_date = datetime.now()
 
-    # Oblicz daty dla tego chunku
+    if tydzien == 1:
+        numery_dni = [1, 3]
+    else:
+        numery_dni = [14, 30]
+
     daty = {
         d: (base_date + timedelta(days=d - 1)).strftime("%d.%m.%Y")
-        for d in range(dni_od, dni_do + 1)
+        for d in numery_dni
     }
     daty_str = "\n".join(f"Dzień {d}: {dt}" for d, dt in daty.items())
-
     leki_str = json.dumps(leki, ensure_ascii=False, indent=2) if leki else "[]"
 
-    # Schema dynamiczny dla konkretnych dni
     schema_days = [
         {
             "dzien": d,
             "data": daty[d],
-            "zdarzenie": f"Min. 4-5 zdań. Styl Szwejka. Nawiązuje do emaila. Brak → '__BRAK__'",
+            "zdarzenie": "Min. 4-5 zdań. Styl Szwejka. Nawiązuje do emaila. Brak → '__BRAK__'",
             "lek": "Nazwa leku + dawka lub '__BRAK__'",
             "stan_pacjenta": "Jedno zdanie nihilistyczne lub '__BRAK__'",
             "nota_lekarska": "2-3 zdania lub '__BRAK__'"
         }
-        for d in range(dni_od, dni_do + 1)
+        for d in numery_dni
     ]
-
-    zakaz_str = ""
-    if uzyte_motywy:
-        zakaz_str = (
-            f"\nBEZWZGLĘDNY ZAKAZ powtarzania tych motywów (już użyte w poprzednich dniach):\n"
-            + "\n".join(f"- {m}" for m in uzyte_motywy[:12])
-            + "\nKażdy dzień MUSI mieć INNE zdarzenie — nowy motyw, nowa sytuacja.\n"
-        )
 
     user = (
         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"LISTA LEKÓW DO UŻYCIA:\n{leki_str}\n\n"
-        f"DATY HOSPITALIZACJI — użyj DOKŁADNIE tych dat:\n{daty_str}\n"
-        f"{zakaz_str}\n"
-        f"SCHEMAT JSON (wygeneruj tablicę {dni_do - dni_od + 1} obiektów "
-        f"dla dni {dni_od}-{dni_do}):\n"
+        f"DATY — użyj DOKŁADNIE tych dat:\n{daty_str}\n\n"
+        f"SCHEMAT JSON (wygeneruj tablicę 2 obiektów):\n"
         f"{json.dumps(schema_days, ensure_ascii=False, indent=2)}\n\n"
-        f"Zwróć TYLKO czysty JSON z tablicą {dni_do - dni_od + 1} obiektów."
+        f"Zwróć TYLKO czysty JSON z tablicą 2 obiektów."
     )
 
-    section_name = f"tydzien{tydzien}_dni{dni_od}-{dni_do}"
-    # max_tokens: ~700 tokenów na dzień × liczba dni + bufor
-    mt = (dni_do - dni_od + 1) * 700 + 300
+    section_name = f"tydzien{tydzien}_dni{'_'.join(str(d) for d in numery_dni)}"
     raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, section_name)
 
@@ -372,7 +360,6 @@ def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
             if isinstance(v, list) and len(v) > 0:
                 return v
 
-    # fallback
     current_app.logger.warning("[psych-raport] %s → fallback", section_name)
     return [
         {
@@ -383,47 +370,8 @@ def _sekcja_tydzien_chunk(cfg: dict, body: str, leki: list,
             "stan_pacjenta": "__BRAK__",
             "nota_lekarska": "__BRAK__"
         }
-        for d in range(dni_od, dni_do + 1)
+        for d in numery_dni
     ]
-
-
-def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
-                    data_przyjecia: str) -> list:
-    """
-    Wrapper: generuje pełny tydzień w dwóch chunkach.
-    Tydzień 1 → dni 1-4 + dni 5-7
-    Tydzień 2 → dni 8-11 + dni 12-14
-    Drugi chunk dostaje listę motywów z pierwszego → zero powtórzeń.
-    """
-    if tydzien == 1:
-        start = 1
-    else:
-        start = 8
-
-    mid  = start + 3   # po 4 dniach
-    end  = start + 6   # 7 dni razem
-
-    # Chunk A (4 dni)
-    chunk_a = _sekcja_tydzien_chunk(
-        cfg, body, leki, tydzien, data_przyjecia,
-        dni_od=start, dni_do=mid
-    )
-
-    # Wyciągnij użyte motywy z chunk A
-    uzyte = [
-        str(d.get("zdarzenie", ""))[:100]
-        for d in chunk_a
-        if isinstance(d, dict) and d.get("zdarzenie") not in (None, "", "__BRAK__")
-    ]
-
-    # Chunk B (3 dni) z zakazem powtórzeń
-    chunk_b = _sekcja_tydzien_chunk(
-        cfg, body, leki, tydzien, data_przyjecia,
-        dni_od=mid + 1, dni_do=end,
-        uzyte_motywy=uzyte
-    )
-
-    return chunk_a + chunk_b
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -431,7 +379,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
-    sec = cfg.get("deepseek_5_wypis") or cfg.get("groq_5_wypis", {})
+    sec = cfg.get("deepseek_5_wypis", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     try:
@@ -463,7 +411,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
-    sec = cfg.get("deepseek_6_diagnozy_lacina") or cfg.get("groq_6_diagnozy_lacina", {})
+    sec = cfg.get("deepseek_6_diagnozy_lacina", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
@@ -523,10 +471,8 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
     # ── deepseek_7a — ZALECENIA + ROKOWANIE ──────────────────────────────────────
     schema_7a = json.dumps({
         "zalecenia_tylera": sec_7.get("schema", {}).get("zalecenia_tylera", {
-            "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIA OBOWIĄZKOWE",
+            "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIE OBOWIĄZKOWE",
             "zadanie_1": "...",
-            "zadanie_2": "...",
-            "zadanie_3": "...",
             "podpis": "Tyler Durden"
         }),
         "rokowanie": sec_7.get("schema", {}).get("rokowanie",
@@ -537,7 +483,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"EMAIL PACJENTA (PRIORYTET — każde pole MUSI nawiązywać do treści emaila):\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
         f"SCHEMAT JSON (wypełnij TYLKO te klucze):\n{schema_7a}\n\n"
-        f"zalecenia_tylera.zadanie_1/2/3: min. 5-6 zdań każde, konkretny przedmiot/plan/rzecz z emaila.\n"
+        f"zalecenia_tylera.zadanie_1: min. 5-6 zdań, konkretny przedmiot/plan/rzecz z emaila.\n"
         f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
@@ -554,10 +500,10 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"EMAIL PACJENTA:\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
         f"SCHEMAT JSON (wypełnij TYLKO klucz notatki_pielegniarek):\n{schema_7b}\n\n"
-        f"notatki_pielegniarek: MINIMUM 10 obiektów. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
+        f"notatki_pielegniarek: DOKŁADNIE 3 obiekty. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
         f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
         f"nawiązuje do KONKRETNYCH zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
-        f"KAŻDA notatka musi nawiązywać do INNEGO zdarzenia i INNEGO dnia — bezwzględny zakaz powtórzeń.\n"
+        f"KAŻDA notatka musi nawiązywać do INNEGO zdarzenia i INNEGO dnia.\n"
         f"Zwróć TYLKO czysty JSON."
     )
     raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER)
@@ -575,10 +521,10 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"EMAIL PACJENTA:\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
         f"SCHEMAT JSON (wypełnij TYLKO klucze notatki_sprzataczki i incydenty_specjalne):\n{schema_7c}\n\n"
-        f"notatki_sprzataczki: MINIMUM 10 obiektów. Każdy: data (DD.MM.YYYY), "
+        f"notatki_sprzataczki: DOKŁADNIE 3 obiekty. Każdy: data (DD.MM.YYYY), "
         f"tresc (2-3 zdania — co znalazła sprzątając salę, gwarą polską, humor Szwejka/Monty Python, "
         f"nawiązuje do emaila pacjenta). KAŻDA notatka musi mówić o INNYM znalezisku.\n"
-        f"incydenty_specjalne: MINIMUM 10 incydentów, każdy 4-5 zdań, NAPRAWDĘ absurdalnych i śmiesznych, "
+        f"incydenty_specjalne: DOKŁADNIE 2 incydenty, każdy 4-5 zdań, NAPRAWDĘ absurdalnych i śmiesznych, "
         f"nawiązujących do emaila. KAŻDY incydent INNY motyw. "
         f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"Zwróć TYLKO czysty JSON."
@@ -596,9 +542,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         return {
             "zalecenia_tylera": {
                 "naglowek": "ZALECENIA TERAPEUTYCZNE — PROTOKÓŁ AWARYJNY",
-                "zadanie_1": "Zidentyfikować i wyeliminować główne źródło złudzeń.",
-                "zadanie_2": "Wyrzeknij się publicznie planów opisanych w wiadomości przychodzącej.",
-                "zadanie_3": "Spalić wszystkie notatki związane z treścią emaila.",
+                "zadanie_1": "Zidentyfikować i wyeliminować główne źródło złudzeń opisanych w wiadomości.",
                 "podpis": "Dr. Tyler Durden, Ordynator Oddziału Beznadziei"
             },
             "rokowanie": "Trudne. Pacjent przejawia objawy niezdrowego optymizmu.",
@@ -1239,7 +1183,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # ══════════════════════════════════════════════════════════════════════════
     # SEKCJA 6 — HOSPITALIZACJA (14 dni)
     # ══════════════════════════════════════════════════════════════════════════
-    heading("VI. PRZEBIEG HOSPITALIZACJI — 14 DNI", 2, RED, 11)
+    heading("VI. PRZEBIEG HOSPITALIZACJI — DNI 1, 3, 14, 30", 2, RED, 11)
 
     dni_all = (raport.get("hospitalizacja_tydzien_1", []) or []) + \
               (raport.get("hospitalizacja_tydzien_2", []) or [])
@@ -1366,10 +1310,9 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     if isinstance(zt, dict):
         if zt.get("naglowek"):
             para(zt["naglowek"], bold=True, color=RED, size=10)
-        for key in ["zadanie_1", "zadanie_2", "zadanie_3"]:
-            if zt.get(key) and zt[key] != "__BRAK__":
-                p_z = doc.add_paragraph(style="List Number")
-                p_z.add_run(str(zt[key])).font.size = Pt(10)
+        if zt.get("zadanie_1") and zt["zadanie_1"] != "__BRAK__":
+            p_z = doc.add_paragraph(style="List Number")
+            p_z.add_run(str(zt["zadanie_1"])).font.size = Pt(10)
         if zt.get("podpis"):
             doc.add_paragraph()
             para(zt["podpis"], italic=True, color=GREY, size=9)
@@ -1533,10 +1476,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
 
     Równoległość DeepSeek:
       Runda 1 (niezależne): #1 pacjent | #2 depozyt+leki | #6 diagnozy | #8 flux_prompty
-      Runda 2 (równolegle): #3a t1 dni 1-4 | #3b t1 dni 5-7
-                            #4a t2 dni 8-11 | #4b t2 dni 12-14 | #5 wypis
-                            (chunki w tygodniach sekwencyjnie wewnątrz wątku,
-                             ale oba tygodnie + wypis równolegle między sobą)
+      Runda 2 (równolegle): #3 dni 1,3 | #4 dni 14,30 | #5 wypis
       Runda 3: #7a zalecenia+rokowanie | #7b notatki_pielegniarek | #7c notatki_sprzataczki+incydenty
                (trzy wywołania równolegle)
       Potem: DeepSeek tone + completeness (sekwencyjnie)

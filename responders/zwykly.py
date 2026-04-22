@@ -365,11 +365,10 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
 def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
     """
-    Groq rotacja (wszystkie klucze) → DeepSeek FALLBACK.
+    DeepSeek jako główny model.
     Zwraca (tekst_odpowiedzi, nazwa_providera).
     """
-    # Uproszczona wersja: używa tylko DeepSeek, ponieważ klucze Groq mogą być niedostępne
-    # W przyszłości można dodać rotację kluczy Groq
+    # Używa tylko DeepSeek
     result = call_deepseek(system, user, MODEL_TYLER, max_tokens=max_tokens)
     if result:
         return result, "deepseek"
@@ -847,7 +846,7 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GENEROWANIE PROMPTÓW DLA TRYPTYKU (Groq → DeepSeek fallback)
+# GENEROWANIE PROMPTÓW DLA TRYPTYKU (DeepSeek)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -1044,7 +1043,7 @@ def _load_panel_wytyczne() -> dict:
 
 
 # _generate_panel_prompt_from_rule usunięta — zastąpiona przez _generate_triptych_prompts_batch
-# (1 call Groq dla wszystkich 7 paneli naraz zamiast 7 osobnych calli)
+# (1 call DeepSeek dla wszystkich 7 paneli naraz zamiast 7 osobnych calli)
 
 
 def _detect_city(body: str) -> str:
@@ -1141,7 +1140,7 @@ def _build_session_vars(
 
     Wykryte z emaila:
       USER_PERSON, USER_OBJECTS, USER_GENDER, USER_CITY, USER_JOB, USER_EMOTION, USER_PROVIDER
-      USER_OBJECTS pochodzi z nouns_dict (Groq) jeśli dostępny, fallback na regex.
+      USER_OBJECTS pochodzi z nouns_dict (DeepSeek) jeśli dostępny, fallback na regex.
 
     Ze zdań Tylera:
       TEXT_1 .. TEXT_N
@@ -1164,7 +1163,7 @@ def _build_session_vars(
         _prev = ""
     vars_dict["PREVIOUS_BODY"] = _prev
 
-    # ── USER_OBJECTS: Groq nouns_dict (priorytet) → fallback regex ───────────
+    # ── USER_OBJECTS: DeepSeek nouns_dict (priorytet) → fallback regex ──────────
     if nouns_dict and isinstance(nouns_dict, dict):
         # nouns_dict = {rzecz001: 'kopalnia', rzecz002: 'pies', ...}
         # Bierzemy wartości w kolejności kluczy, max 15
@@ -1182,7 +1181,7 @@ def _build_session_vars(
     else:
         # Fallback na detekcję z body tylko gdy webhook nie przysłał sender_name
         vars_dict["USER_PERSON"] = _detect_sender_name(body) or ""
-    # ── Zdrobnienie imienia — słownik (bez Groq) ─────────────────────────────
+    # ── Zdrobnienie imienia — słownik (bez zewnętrznego AI) ─────────────────────────────
     _user_person = vars_dict["USER_PERSON"].split()[0] if vars_dict["USER_PERSON"] else ""
     _ZDROBNIENIA = {
         "monika": "Moniczka", "anna": "Ania", "katarzyna": "Kasia", "małgorzata": "Gosia",
@@ -1469,7 +1468,7 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
 
 def _generate_raw_email_image(body: str, test_mode: bool = False) -> dict | None:
     """
-    Generuje obrazek FLUX bezpośrednio z treści emaila — BEZ udziału Groq/DeepSeek.
+    Generuje obrazek FLUX bezpośrednio z treści emaila — BEZ udziału AI.
     Prompt = surowa treść emaila skrócona do 400 znaków.
     Obrazek jest konwertowany do JPG 95% i zmniejszony do 95% rozmiaru.
     """
@@ -1522,7 +1521,7 @@ def _generate_triptych_prompts_batch(
         style_config: dict,
 ) -> list:
     """
-    Generuje prompty FLUX dla wszystkich 7 paneli w JEDNYM wywołaniu Groq.
+    Generuje prompty FLUX dla wszystkich 7 paneli w JEDNYM wywołaniu DeepSeek.
     Zamiast 7 osobnych calli → 1 call zwracający JSON z 7 promptami.
     Zwraca listę 7 stringów (promptów), fallback na puste stringi.
     """
@@ -1588,7 +1587,7 @@ def _generate_triptych(
 ) -> tuple:
     """
     Generuje 7 paneli — każdy odpowiada jednej zasadzie Tylera.
-    OPTYMALIZACJA: 1 call Groq dla wszystkich 7 promptów naraz (zamiast 7 calli).
+    OPTYMALIZACJA: 1 call DeepSeek dla wszystkich 7 promptów naraz (zamiast 7 calli).
     Obrazki FLUX generowane sekwencyjnie.
     Jeśli HF_TOKEN nie działa → panel pomijany, zwracamy ile wygenerowano.
     """
@@ -1652,10 +1651,10 @@ def _generate_triptych(
         return [], [], []
 
     # ── 1 CALL: Generuj wszystkie 7 promptów naraz ───────────────────────────
-    logger.info("[zwykly-img] Generuję 7 promptów FLUX w 1 callu Groq")
+    logger.info("[zwykly-img] Generuję 7 promptów FLUX w 1 callu DeepSeek")
     flux_prompts = _generate_triptych_prompts_batch(panel_rules, session_vars, style_config)
 
-    # ── Generuj obrazki równolegle (bez dodatkowych calli Groq) ──────────────
+    # ── Generuj obrazki równolegle (bez dodatkowych calli DeepSeek) ──────────
     def _gen_panel(panel_idx):
         rule_text = panel_rules[panel_idx - 1]
         flux_prompt = flux_prompts[panel_idx - 1]
@@ -1911,7 +1910,7 @@ def _build_debug_txt(
 
 def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     """
-    Zwraca emotkę PNG z katalogu EMOTKI_DIR — bez wywołania Groq/FLUX.
+    Zwraca emotkę PNG z katalogu EMOTKI_DIR — bez wywołania API/FLUX.
     HF tokeny są na czarnej liście — generowanie FLUX nie ma sensu.
     Jeśli plik istnieje → zwraca base64, jeśli nie → None.
     """
@@ -1941,7 +1940,7 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
 
 def _generate_cv_content(body: str, previous_body: str | None, sender_email: str) -> dict | None:
     """
-    Generuje treść CV w stylu Tylera przez AI (Groq → DeepSeek fallback).
+    Generuje treść CV w stylu Tylera przez DeepSeek AI.
     Zwraca dict z polami CV lub None przy błędzie.
     """
     try:
@@ -1988,7 +1987,7 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
 def _generate_cv_photo(body: str, cv_data: dict, test_mode: bool = False) -> str | None:
     """
     Generuje zdjęcie profilowe do CV przez FLUX.
-    Prompt budowany lokalnie (bez Groq) — oszczędność 1 calla.
+    Prompt budowany lokalnie (bez AI) — oszczędność 1 calla.
     Zwraca base64 PNG lub None.
     """
     try:
@@ -2005,7 +2004,7 @@ def _generate_cv_photo(body: str, cv_data: dict, test_mode: bool = False) -> str
     plec = _detect_gender(body, imie)
     plec_en = {"kobieta": "woman", "mezczyzna": "man"}.get(plec, "person")
 
-    # Prompt budowany lokalnie — bez Groq
+    # Prompt budowany lokalnie — bez AI
     photo_prompt = (
         f"Portrait of a {plec_en}, {tytul or 'office worker'}, "
         f"Fight Club 1999 aesthetic, exhausted, slightly damaged look, "
@@ -2347,7 +2346,7 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
 
 def _build_explanation_txt(res_text: str, body: str) -> dict | None:
     """
-    Generuje plik wyjaśnienie.txt — Groq/DeepSeek tłumaczy każde zdanie
+    Generuje plik wyjaśnienie.txt — DeepSeek tłumaczy każde zdanie
     Tylera i Sokratesa prostym językiem po polsku.
     Zwraca dict {base64, content_type, filename} lub None przy błędzie.
     """
@@ -4050,7 +4049,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     import re
     from responders.dociekliwy import build_dociekliwy_section
 
-    logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2 - oszczędny Groq)")
+    logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2)")
     app_obj = flask_app._get_current_object()
 
     # --- INICJALIZACJA ---
@@ -4061,7 +4060,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     ankieta_html = ankieta_pdf = horoskop_pdf = karta_rpg_pdf = plakat_svg = gra_html = None
     explanation_txt = debug_txt = ""
 
-    # ── KROK 1: Tekst AI + Rzeczowniki równolegle (2 calle Groq) ─────────────
+    # ── KROK 1: Tekst AI + Rzeczowniki równolegle (2 calle DeepSeek) ────────
     def _get_ai_main():
         with app_obj.app_context():
             p_data = _load_prompt_json()
@@ -4079,11 +4078,11 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     session_vars = _build_session_vars(body, sender_email, sender_name, previous_body or "", res_text, emotion_key, provider, nouns_dict)
     for k, v in nouns_dict.items(): session_vars[k.upper()] = v
 
-    # ── KROK 2: Zadania bez AI lub z 1 callem Groq każde ─────────────────────
-    # Sekwencyjnie, żeby każdy Groq był wykonywany pojedynczo.
+    # ── KROK 2: Zadania bez AI lub z 1 callem DeepSeek każde ───────────────
+    # Sekwencyjnie, żeby każdy call DeepSeek był wykonywany pojedynczo.
     def task_tryptyk():
         with app_obj.app_context():
-            # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje Groq
+            # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje AI
             imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars, test_mode=test_mode)
             return imgs
 
@@ -4224,7 +4223,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         logger.info("[zwykly] Pomijam dociekliwy — app.py wywola go osobno")
 
     # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
-    # Uruchamiamy po KROK 2, żeby nie rywalizować o klucze Groq z tryptyk/ankieta/horo/rpg/gra
+    # Uruchamiamy po KROK 2, żeby nie rywalizować z tryptyk/ankieta/horo/rpg/gra
     try:
         with app_obj.app_context():
             r_res = build_raport(

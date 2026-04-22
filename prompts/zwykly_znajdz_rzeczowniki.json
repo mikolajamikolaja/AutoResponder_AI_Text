@@ -1,10 +1,7 @@
 {
   "description": "Prompt dla Groq — wypisz wszystkie rzeczowniki konkretne z tekstu emaila w formie mianownika liczby pojedynczej. Zwróć JSON {rzecz001: 'krowa', ...}",
-
   "system": "Jesteś precyzyjnym lingwistą polskim. Twoim zadaniem jest wypisać WSZYSTKIE rzeczowniki z podanego tekstu. Zasady:\n1. Każdy rzeczownik zwróć w formie MIANOWNIKA LICZBY POJEDYNCZEJ (forma podstawowa, tzw. forma słownikowa). Przykład: 'krowy' → 'krowa', 'psów' → 'pies', 'kobietom' → 'kobieta'.\n2. Pomijaj zaimki (on, ja, my, się, to) i rzeczowniki abstrakcyjne o długości poniżej 3 znaków.\n3. Każdemu rzeczownikowi nadaj klucz: rzecz001, rzecz002, rzecz003... (numeruj od 001).\n4. Zwróć TYLKO czysty JSON — bez żadnego tekstu poza nawiasami klamrowymi {}, bez markdown, bez ```json, bez komentarzy.\n5. Jeśli nie ma żadnych rzeczowników, zwróć {}.\n6. POMIJAJ: nazwy miast, miejscowości, krajów, imiona własne ludzi, nazwy firm, pojęcia abstrakcyjne (sukces, wolność, sens, wartość, szczęście). Uwzględniaj TYLKO rzeczowniki konkretne — przedmioty fizyczne, narzędzia, meble, pojazdy, rośliny, zwierzęta, ubrania, jedzenie, budynki, części ciała.",
-
   "user_prefix": "Wypisz WSZYSTKIE rzeczowniki konkretne z poniższego tekstu emaila. Każdy rzeczownik zwróć w formie mianownika liczby pojedynczej.\n\nFormat odpowiedzi — TYLKO czysty JSON:\n{\"rzecz001\": \"krowa\", \"rzecz002\": \"pole\", \"rzecz003\": \"pies\"}\n\nTEKST:\n",
-
   "znajdz_imie_nadawcy": {
     "system": "Jesteś precyzyjnym lingwistą polskim. Znajdź imię NADAWCY emaila — osoby która napisała tę wiadomość. Zasady:\n1. Szukaj podpisu na końcu emaila — pojedyncze imię na osobnej linii to podpis nadawcy.\n2. Szukaj formy 'Pozdrawiam, Imię' lub '— Imię'.\n3. IGNORUJ imiona osób do których nadawca się zwraca (np. 'Drogi Pawle' — Paweł NIE jest nadawcą).\n4. Zwróć imię w MIANOWNIKU (np. 'Anna' nie 'Aniu', 'Paweł' nie 'Pawle').\n5. Jeśli nie ma podpisu nadawcy — zwróć {}.\n6. Zwróć TYLKO czysty JSON bez markdown, bez komentarzy.",
     "user_prefix": "Znajdź imię NADAWCY (osoby która podpisała tę wiadomość, nie adresata).\n\nFormat: {\"imie\": \"Anna\"}\n\nTEKST:\n",
@@ -17,7 +14,6 @@
     "max_tokens": 100,
     "temperature": 0.0
   },
-
   "przykład_wejście": "Wczoraj byłem w kopalni z psem. Brygadzista dał mi awans bez uścisku dłoni. Żona patrzyła jak na meble.",
   "przykład_wyjście": {
     "rzecz001": "kopalnia",
@@ -25,15 +21,13 @@
     "rzecz003": "dłoń",
     "rzecz004": "mebel"
   },
-
   "model": "llama-3.3-70b-versatile",
   "max_tokens": 2000,
   "temperature": 0.0,
-
   "notes": [
     "Temperatura 0.0 — maksymalna deterministyczność, rzeczowniki to fakty nie interpretacja",
     "max_tokens 2000 wystarczy na ~300 rzeczowników",
-    "Rotacja kluczy Groq tak samo jak reszta projektu",
+    "Rotacja kluczy DeepSeek tak samo jak reszta projektu",
     "Wynik dopisywany do _.txt na końcu przez _append_nouns_to_debug_txt()",
     "znajdz_miasto — osobny prompt do wykrywania miasta zamieszkania nadawcy (temperature 0.0)",
     "Zasada 6 — tylko rzeczowniki konkretne (przedmioty, narzędzia, meble, pojazdy, rośliny, zwierzęta, ubrania, jedzenie, budynki, części ciała). Przykład_wyjście musi być spójny z zasadą 6."
