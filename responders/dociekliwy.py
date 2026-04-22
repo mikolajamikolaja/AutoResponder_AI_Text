@@ -99,59 +99,78 @@ def _generuj_gre(body: str, sender_name: str) -> Optional[dict]:
     """
     Generuje kompletną grę jednym wywołaniem AI.
     Zwraca dict z kluczami 'pytania' (lista drzew) i 'wyrok' (str).
+    Używa uproszczonej struktury żeby zmieścić się w limicie tokenów.
     """
     prompt = f"""Rozmówca "{sender_name or 'Anonim'}" napisał:
-"{body[:500]}"
+"{body[:400]}"
 
-Przeanalizuj wiadomość i wyodrębnij maksymalnie {MAX_PYTANIA} pytania lub stwierdzenia, które Eryk uzna za nieprecyzyjne.
-Dla każdego z tych pytań stwórz drzewo doprecyzowań o głębokości {MAX_RUNDY} rund (każda runda ma 3 opcje A/B/C).
+Wygeneruj grę Eryka: {MAX_PYTANIA} pytania, każde z {MAX_RUNDY} rundami po 3 opcje (A/B/C).
 
-Zasady BEZWZGLĘDNE:
-1. Wyodrębnij 1-{MAX_PYTANIA} pytań/stwierdzeń z oryginalnej wiadomości. Każde musi być konkretne i wiarygodne.
-2. Dla każdego pytania stwórz drzewo z {MAX_RUNDY} rundami dopytywania.
-3. Każda runda ma 3 opcje (A/B/C) — każda opcja musi brzmieć jak pytanie, które realna osoba mogłaby zadać (wiarygodne, konkretne, nie abstrakcyjne).
-4. Każda opcja prowadzi do kolejnej rundy (opcja zawiera pole "runda2", a w nim "pytanie" i "opcje").
-5. Ostatnia runda (runda{MAX_RUNDY}) ma tylko "tekst" i "reakcję" (bez dalszych rund).
-6. Reakcje Eryka są absurdalne, biurokratyczne, ironiczne. Wyciągają błędne wnioski z wyboru.
-7. Każde pytanie z INNEJ dziedziny (filozofia, biologia, prawo, kosmologia, kulinaria, heraldyka, stomatologia, meteorologia, filologia, ekonomia, ogrodnictwo itd.)
-8. Wyrok końcowy musi być absurdalnym wnioskiem wynikającym logicznie (po erykowemu) z dokonanych wyborów we wszystkich pytaniach.
-9. Tylko po polsku.
-
-Odpowiedz WYŁĄCZNIE w JSON, zero komentarzy, zero backtick-ów:
+Odpowiedz WYŁĄCZNIE czystym JSON bez backtick-ów, bez komentarzy:
 {{
   "pytania": [
     {{
       "id": "P1",
-      "tresc": "Co dokładnie masz na myśli mówiąc 100zł?",
+      "tresc": "Konkretne pytanie wynikające z wiadomości rozmówcy?",
       "opcje": {{
         "A": {{
-          "tekst": "Banknot",
-          "reakcja": "Skoro wybrałeś banknot, to sugerujesz że pieniądze materialne...",
+          "tekst": "Krótka odpowiedź A",
+          "reakcja": "Absurdalna reakcja Eryka na A.",
           "runda2": {{
-            "pytanie": "A czy ten banknot jest nowy czy używany?",
+            "pytanie": "Drugie pytanie Eryka po wyborze A?",
             "opcje": {{
-              "A": {{"tekst": "Nowy", "reakcja": "Nowy banknot wskazuje na brak zaufania do cyrkulacji...", "runda3": {{"pytanie": "...", "opcje": {{...}}}}}},
-              "B": {{"tekst": "Używany", "reakcja": "Używany banknot sugeruje że akceptujesz ślady poprzednich właścicieli...", "runda3": {{...}}}},
-              "C": {{"tekst": "Nie wiem", "reakcja": "Brak wiedzy o stanie banknotu demaskuje Cię jako...", "runda3": {{...}}}}
+              "A": {{"tekst": "Odpowiedź A2", "reakcja": "Reakcja na A2."}},
+              "B": {{"tekst": "Odpowiedź B2", "reakcja": "Reakcja na B2."}},
+              "C": {{"tekst": "Odpowiedź C2", "reakcja": "Reakcja na C2."}}
             }}
           }}
         }},
-        "B": {{...}},
-        "C": {{...}}
+        "B": {{
+          "tekst": "Krótka odpowiedź B",
+          "reakcja": "Absurdalna reakcja Eryka na B.",
+          "runda2": {{
+            "pytanie": "Drugie pytanie Eryka po wyborze B?",
+            "opcje": {{
+              "A": {{"tekst": "Odpowiedź A2", "reakcja": "Reakcja na A2."}},
+              "B": {{"tekst": "Odpowiedź B2", "reakcja": "Reakcja na B2."}},
+              "C": {{"tekst": "Odpowiedź C2", "reakcja": "Reakcja na C2."}}
+            }}
+          }}
+        }},
+        "C": {{
+          "tekst": "Krótka odpowiedź C",
+          "reakcja": "Absurdalna reakcja Eryka na C.",
+          "runda2": {{
+            "pytanie": "Drugie pytanie Eryka po wyborze C?",
+            "opcje": {{
+              "A": {{"tekst": "Odpowiedź A2", "reakcja": "Reakcja na A2."}},
+              "B": {{"tekst": "Odpowiedź B2", "reakcja": "Reakcja na B2."}},
+              "C": {{"tekst": "Odpowiedź C2", "reakcja": "Reakcja na C2."}}
+            }}
+          }}
+        }}
       }}
     }},
     {{
       "id": "P2",
-      "tresc": "...",
-      "opcje": {{...}}
+      "tresc": "Drugie konkretne pytanie z innej dziedziny?",
+      "opcje": {{
+        "A": {{"tekst": "...", "reakcja": "...", "runda2": {{"pytanie": "...", "opcje": {{"A": {{"tekst": "...", "reakcja": "..."}}, "B": {{"tekst": "...", "reakcja": "..."}}, "C": {{"tekst": "...", "reakcja": "..."}}}}}}}},
+        "B": {{"tekst": "...", "reakcja": "...", "runda2": {{"pytanie": "...", "opcje": {{"A": {{"tekst": "...", "reakcja": "..."}}, "B": {{"tekst": "...", "reakcja": "..."}}, "C": {{"tekst": "...", "reakcja": "..."}}}}}}}},
+        "C": {{"tekst": "...", "reakcja": "...", "runda2": {{"pytanie": "...", "opcje": {{"A": {{"tekst": "...", "reakcja": "..."}}, "B": {{"tekst": "...", "reakcja": "..."}}, "C": {{"tekst": "...", "reakcja": "..."}}}}}}}}
+      }}
     }}
   ],
-  "wyrok": "Ostateczny absurdalny wyrok Eryka po przejściu wszystkich drzew. Zakończ podpisem: Z pozdrowieniami, Eryk."
-}}"""
+  "wyrok": "Absurdalny wyrok końcowy. Z pozdrowieniami, Eryk."
+}}
 
-    # Zwiększono max_tokens — wcześniej 4000 było za mało dla zagnieżdżonego JSON 3x3
-    # _deepseek_korekta USUNIĘTA: dodawała ~30s i często niszczyła poprawny JSON
-    raw = _deepseek_call(prompt, _SYSTEM_ERYK, max_tokens=6000)
+Zasady:
+- Pytania konkretne, wynikające z treści wiadomości rozmówcy
+- Reakcje krótkie (1-2 zdania), absurdalne, biurokratyczne
+- Każde pytanie z innej dziedziny (filozofia, biologia, prawo, kosmologia, kulinaria itp.)
+- Wyrok absurdalny ale logiczny po erykowemu"""
+
+    raw = _deepseek_call(prompt, _SYSTEM_ERYK, max_tokens=4000)
     if not raw:
         return None
 
@@ -165,40 +184,119 @@ def _parse_json_safe(raw: Optional[str]) -> Optional[dict]:
     raw = re.sub(r"```\s*$", "", raw.strip())
     # Usuń komentarze JS-style (// ...) które AI czasem wstawia
     raw = re.sub(r"//[^\n]*", "", raw)
+    # Usuń trailing commas przed } i ] — częsty błąd AI
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
+        if _validate_gra_structure(data):
+            return data
+        logger.warning("[eryk] JSON sparsowany ale struktura niepoprawna — próba naprawy")
     except json.JSONDecodeError:
-        # Próba naprawienia uciętego JSON
-        repaired = _repair_json(raw)
-        if repaired:
-            try:
-                return json.loads(repaired)
-            except Exception:
-                pass
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except Exception:
-                pass
+        pass
+
+    # Próba naprawienia uciętego JSON
+    repaired = _repair_json(raw)
+    if repaired:
+        try:
+            data = json.loads(repaired)
+            if _validate_gra_structure(data):
+                return data
+            # Struktura niekompletna po naprawie — lepszy fallback niż zepsute dane
+            logger.warning("[eryk] JSON naprawiony ale struktura niekompletna — używam fallback")
+            return None
+        except Exception:
+            pass
+
+    m = re.search(r"\{.*\}", raw, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group())
+            if _validate_gra_structure(data):
+                return data
+        except Exception:
+            pass
+
     logger.warning("[eryk] JSON parse failed: %s", raw[:200])
     return None
 
 
+def _validate_gra_structure(data: dict) -> bool:
+    """Sprawdza czy JSON ma minimalną poprawną strukturę gry."""
+    if not isinstance(data, dict):
+        return False
+    pytania = data.get("pytania")
+    if not isinstance(pytania, list) or not pytania:
+        return False
+    # Pierwsze pytanie musi mieć tresc i opcje z co najmniej jedną opcją
+    p0 = pytania[0]
+    if not isinstance(p0, dict):
+        return False
+    if not p0.get("tresc"):
+        return False
+    opcje = p0.get("opcje", {})
+    if not isinstance(opcje, dict) or not opcje:
+        return False
+    # Przynajmniej jedna opcja musi mieć tekst
+    for v in opcje.values():
+        if isinstance(v, dict) and v.get("tekst"):
+            return True
+    return False
+
+
 def _repair_json(raw: str) -> Optional[str]:
-    """Prosta naprawa uciętego JSON."""
+    """Naprawa uciętego JSON — zamyka otwarte stringi, tablice i obiekty."""
     raw = raw.strip()
     if not raw.startswith("{"):
         return None
-    # Policz { i }
-    open_count = raw.count("{")
-    close_count = raw.count("}")
-    if close_count >= open_count:
-        return raw
-    # Dodaj brakujące }
-    missing = open_count - close_count
-    repaired = raw + "}" * missing
-    return repaired
+
+    # Usuń trailing commas
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
+
+    # Jeśli JSON jest ucięty w środku stringa — zamknij string
+    # Liczymy cudzysłowy niezescapowane
+    in_string = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+
+    if in_string:
+        raw += '"'  # zamknij otwarty string
+
+    # Usuń ostatni przecinek przed uzupełnieniem nawiasów
+    raw = re.sub(r",\s*$", "", raw.strip())
+
+    # Uzupełnij brakujące nawiasy
+    stack = []
+    in_string = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if ch in "{[":
+                stack.append("}" if ch == "{" else "]")
+            elif ch in "}]":
+                if stack and stack[-1] == ch:
+                    stack.pop()
+
+    if stack:
+        raw += "".join(reversed(stack))
+
+    return raw
 
 
 # ── FALLBACK ──────────────────────────────────────────────────────────────────

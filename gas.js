@@ -1,6 +1,6 @@
 /**
  * __AAA_processEmails - Google Apps Script
- * WERSJA 12 - ASYNC PIPELINE + WERYFIKACJA:
+ * WERSJA 12 - ASYNC PIPELINE + WERYFIKACJA + FIX PĘTLI RETRY:
  *
  * Architektura:
  *   GAS: odbierz email → zapisz ODEBRANO do Sheets → POST do Render → koniec
@@ -15,6 +15,14 @@
  *   - [FIX] _checkUnprocessedMessages ignoruje banned senders w retry
  *   - [FIX] _checkUnprocessedMessages uznaje ERROR:* i EMPTY:* za "obsłużone"
  *   - [FIX] Wszystkie body w MailApp.sendEmail używają .join("\r\n") zamiast "\n"
+ *
+ * Nowe w v12:
+ *   - [FIX] _checkUnprocessedMessages — limit MAX_RETRIES_PER_MSG (domyślnie 3)
+ *           Po wyczerpaniu retryków wiadomość oznaczana jest jako WYSŁANO:GAS_FALLBACK
+ *           w Sheets, co odblokowuje kolejkę i pozwala przetworzyć nowsze maile.
+ *           Licznik retryków przechowywany w Script Properties jako RETRY_CNT_<msg_id>.
+ *   - [NEW] _markHandledInSheet() — zapisuje GAS_FALLBACK w kol. F bez udziału Rendera
+ *   - [FIX] GAS_FALLBACK traktowany jako "obsłużony" w logice handledIds
  */
 
 // ── Normalizacja tekstu ───────────────────────────────────────────────────────
@@ -1600,6 +1608,34 @@ function _isBannedSender(email, bannedList) {
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
+ * _markHandledInSheet
+ *
+ * Zapisuje GAS_FALLBACK w kolumnie F (status_render) dla danego message_id,
+ * gdy Render nie odpisał po MAX_RETRIES_PER_MSG próbach.
+ * Dzięki temu _checkUnprocessedMessages nie będzie już retryować tej wiadomości.
+ */
+function _markHandledInSheet(sheetId, msgId) {
+  try {
+    var ss    = SpreadsheetApp.openById(sheetId);
+    var sheet = ss.getSheetByName("Historia");
+    if (!sheet) { sheet = ss.getSheets()[0]; }
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    var data = sheet.getRange(2, 1, lastRow - 1, 6).getValues();
+    for (var i = 0; i < data.length; i++) {
+      var rowMsgId     = (data[i][0] || "").toString().trim();
+      var rowStatusGas = (data[i][4] || "").toString().trim().toUpperCase();
+      var rowStatusRnd = (data[i][5] || "").toString().trim();
+      if (rowMsgId === msgId && rowStatusGas === "ODEBRANO" && !rowStatusRnd) {
+        sheet.getRange(i + 2, 6).setValue("WYSŁANO:GAS_FALLBACK");
+        console.log("[check] Oznaczono " + msgId + " jako WYSŁANO:GAS_FALLBACK — odblokowano kolejkę");
+        return;
+      }
+    }
+  } catch(e) { console.error("[check] Błąd _markHandledInSheet: " + e.message); }
+}
+
+/**
  * _checkUnprocessedMessages
  *
  * Czyta zakładkę "Historia" w HISTORY_SHEET_ID.
@@ -1608,12 +1644,15 @@ function _isBannedSender(email, bannedList) {
  *
  * Zasady:
  *  - Pomija banned senders — nawet jeśli mają stary wpis ODEBRANO w Sheets
- *  - Traktuje WYSŁANO, ERROR:* i EMPTY:* jako "obsłużone" przez Render
+ *  - Traktuje WYSŁANO, ERROR:*, EMPTY:* i GAS_FALLBACK jako "obsłużone" przez Render
  *  - Wysyła retry do Render z flagą is_retry=true i czeka 25s na odpowiedź
  *  - Przy nieudanym retry wysyła alert e-mail do ADMIN_EMAIL
+ *  - v12: MAX_RETRIES_PER_MSG — po przekroczeniu limitu wiadomość jest oznaczana
+ *    jako GAS_FALLBACK w Sheets i nie blokuje kolejki przy następnych uruchomieniach
  */
 function _checkUnprocessedMessages(webhookUrl) {
-  var MAX_AGE_HOURS = 72;  // v11: zwiększone z 24h
+  var MAX_AGE_HOURS      = 72;   // v11: zwiększone z 24h
+  var MAX_RETRIES_PER_MSG = 3;   // v12: max retryków zanim oznaczymy jako fallback
   var props   = PropertiesService.getScriptProperties();
   var sheetId = props.getProperty("HISTORY_SHEET_ID");
   if (!sheetId) {
@@ -1679,7 +1718,9 @@ function _checkUnprocessedMessages(webhookUrl) {
     }
 
     // Obsłużone = Render podjął próbę (sukces lub błąd — nie ponawiamy)
+    // v12: GAS_FALLBACK i WYSŁANO:GAS_FALLBACK również traktowane jako obsłużone
     if (statusRend === "WYSŁANO" ||
+        statusRend.indexOf("GAS_FALLBACK") !== -1 ||
         responder.indexOf("ERROR:") === 0 ||
         responder.indexOf("EMPTY:") === 0) {
       handledIds[msgId] = true;
@@ -1719,7 +1760,22 @@ function _checkUnprocessedMessages(webhookUrl) {
 
   for (var j = 0; j < oldest.length; j++) {
     var item = oldest[j];
-    console.log("[check] Retry dla: " + item.sender + " msg_id=" + item.message_id);
+
+    // v12: sprawdź licznik retryków dla tej wiadomości
+    var retryCountKey = "RETRY_CNT_" + item.message_id;
+    var retryCount    = parseInt(props.getProperty(retryCountKey) || "0", 10);
+    if (retryCount >= MAX_RETRIES_PER_MSG) {
+      console.warn("[check] " + item.message_id + " — osiągnięto limit " + MAX_RETRIES_PER_MSG +
+                   " retryków. Oznaczam jako GAS_FALLBACK i odblokowuję kolejkę.");
+      _markHandledInSheet(sheetId, item.message_id);
+      // Wyczyść licznik żeby nie zaśmiecać Properties
+      try { props.deleteProperty(retryCountKey); } catch(e2) {}
+      continue;
+    }
+
+    console.log("[check] Retry dla: " + item.sender + " msg_id=" + item.message_id +
+                " temat=\"" + item.subject + "\"" +
+                " (próba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG + ")");
 
     try {
       var retryPayload = {
@@ -1743,7 +1799,11 @@ function _checkUnprocessedMessages(webhookUrl) {
       var resp = UrlFetchApp.fetch(webhookUrl, retryOptions);
       var code = resp.getResponseCode();
       if (code === 200) {
-        console.log("[check] ✓ Retry zaakceptowany: " + item.sender);
+        // Render zaakceptował zadanie — czekamy aż sam zapisze WYSŁANO do Sheets.
+        // Zwiększamy tylko licznik, żeby po MAX_RETRIES_PER_MSG próbach odblokować kolejkę.
+        try { props.setProperty(retryCountKey, String(retryCount + 1)); } catch(e3) {}
+        console.log("[check] ✓ Retry zaakceptowany: " + item.sender +
+                    " — Render wyśle mail i zapisze WYSŁANO (próba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG + ")");
       } else {
         console.error("[check] ✗ Retry odrzucony (" + code + "): " + item.sender);
         if (adminEmail) {
@@ -1769,7 +1829,7 @@ function _checkUnprocessedMessages(webhookUrl) {
 
     Utilities.sleep(500);
   }
-  return true;  // v11: wysłano zadanie do Rendera
+  return true;  // Render dostał zadanie — nie wysyłamy nowych emaili w tej rundzie
 }
 
 function keepAlive() {
