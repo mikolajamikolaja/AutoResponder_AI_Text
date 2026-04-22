@@ -436,8 +436,9 @@ def hf_status():
 
 @app.route("/admin/hf-reset", methods=["POST"])
 def hf_reset():
-    hf_tokens.reset()
-    return jsonify({"status": "ok", "message": "Warm-up zostanie powtórzony przy następnym żądaniu"})
+    # force_reset ignoruje cooldown MIN_WARMUP_INTERVAL — używaj gdy tokeny faktycznie odnowiono
+    hf_tokens.force_reset()
+    return jsonify({"status": "ok", "message": "Tokeny zresetowane — warm-up przy następnym żądaniu (bez cooldown)"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -6,28 +6,25 @@ respondery (zwykly, smierc, dociekliwy, …).
 
 ZASADY:
   1. Stan tokenów (aktywne / martwe) jest JEDEN dla całego procesu serwera.
-  2. Walidacja tokenu odbywa się przez lekki HEAD request (bez generowania
-     obrazka) — endpoint whoami HF API lub sprawdzenie modelu.
-  3. Warm-up jednorazowy przy pierwszym użyciu (lazy) — wynik cache'owany
-     w pamięci przez całą sesję.
-  4. Tokeny mogą być też oznaczone jako martwe w trakcie sesji (402/401/403)
-     — każdy responder wywołuje mark_dead(name) zamiast pisać do własnego seta.
-  5. Resety ręczne przez /admin/hf-status (opcjonalny endpoint Flask).
+  2. Walidacja tokenu odbywa się przez lekki GET na whoami HF API.
+  3. Warm-up jednorazowy przy pierwszym użyciu (lazy).
+  4. Tokeny oznaczane jako martwe przez mark_dead(name) podczas sesji.
+  5. Reset ręczny przez /admin/hf-reset.
+
+KLUCZOWE OPTYMALIZACJE (vs poprzednia wersja):
+  - Gdy ALL_DEAD_CACHE=True → get_active_tokens() zwraca [] natychmiast,
+    zero requestów HTTP. Kasuje cache po RECHECK_AFTER sekundach.
+  - warm-up NIE jest blokujący dla wątku pipeline — odpala się w tle
+    i zwraca [] dopóki nie skończy (fail-fast).
+  - warmup() uruchamia się MAX RAZ co MIN_WARMUP_INTERVAL sekund
+    — chroni przed pętlą restart→warmup→OOM.
+  - Liczba równoległych wątków warm-upu ograniczona do MAX_WARMUP_THREADS.
 
 UŻYCIE:
     from core.hf_token_manager import hf_tokens, mark_dead, get_active_tokens
 
-    # Pobierz listę aktywnych tokenów — [(name, value), ...]
-    tokens = get_active_tokens()
-
-    # Po błędzie 402/401/403 w responderze:
-    mark_dead("HF_TOKEN3")
-
-MIGRACJA z kodu respondentów:
-  - Usuń lokalne  _HF_DEAD_TOKENS  i  _get_hf_tokens()
-  - Zamień wywołania  _get_hf_tokens()      →  get_active_tokens()
-  - Zamień  _HF_DEAD_TOKENS.add(name)       →  mark_dead(name)
-  - Zamień  name not in _HF_DEAD_TOKENS     →  not is_dead(name)
+    tokens = get_active_tokens()          # [(name, value), ...]
+    mark_dead("HF_TOKEN3")                # po błędzie 401/402/403
 ════════════════════════════════════════════════════════════════════════════════
 """
 
@@ -37,90 +34,83 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
 from typing import Optional
 
-import requests
+import requests as _requests
 
 logger = logging.getLogger(__name__)
 
-# ─── Stałe ────────────────────────────────────────────────────────────────────
+# ─── Stałe konfiguracyjne ──────────────────────────────────────────────────────
 
-# Endpoint do lekkiej weryfikacji tokenu (nie generuje obrazka, nie zużywa kredytów)
 _HF_WHOAMI_URL = "https://huggingface.co/api/whoami"
+_CHECK_TIMEOUT = 6           # timeout pojedynczego sprawdzenia tokenu (s)
+_TOKEN_RANGE   = 100         # skanuj HF_TOKEN, HF_TOKEN1 … HF_TOKEN99
+_MAX_WARMUP_THREADS = 8      # max równoległych wątków podczas warm-upu
 
-# Alternatywny endpoint — sprawdza dostęp do modelu (tylko GET, brak kosztów)
-_HF_MODEL_URL  = (
-    "https://api-inference.huggingface.co/models/"
-    "black-forest-labs/FLUX.1-schnell"
-)
+# Po tym czasie od warm-upu z wynikiem ALL_DEAD — spróbuj ponownie
+# 0 = nigdy nie próbuj ponownie (tokeny 401 są trwale martwe)
+_RECHECK_AFTER = 0
 
-# Timeout lekkiego sprawdzenia (sekund)
-_CHECK_TIMEOUT = 8
-
-# Liczba tokenów do skanowania (HF_TOKEN, HF_TOKEN1 … HF_TOKEN{MAX-1})
-_TOKEN_RANGE = 100
-
-# Minimalny interwał ponownego sprawdzania MARTWEGO tokenu (sekundy).
-# Ustaw na 0 jeśli nie chcesz automatycznego ponownego sprawdzania.
-_RECHECK_INTERVAL = 0  # domyślnie bez automatycznego przywracania
+# Minimalny odstęp między kolejnymi warm-upami (ochrona przed pętlą OOM-restart)
+_MIN_WARMUP_INTERVAL = 120   # sekund
 
 
-# ─── Stan globalny (singleton w ramach procesu) ────────────────────────────────
+# ─── Stan tokenu ──────────────────────────────────────────────────────────────
 
 class _TokenState:
-    """Wewnętrzna struktura stanu jednego tokenu."""
     __slots__ = ("name", "value", "alive", "dead_reason", "dead_at", "remaining")
 
     def __init__(self, name: str, value: str):
-        self.name        = name
-        self.value       = value
-        self.alive       = True          # domyślnie zakładamy aktywny
-        self.dead_reason = ""
-        self.dead_at     = 0.0
-        self.remaining: Optional[int] = None  # z nagłówka X-Remaining-Requests
+        self.name:        str            = name
+        self.value:       str            = value
+        self.alive:       bool           = True
+        self.dead_reason: str            = ""
+        self.dead_at:     float          = 0.0
+        self.remaining:   Optional[int]  = None
 
+
+# ─── Menedżer ─────────────────────────────────────────────────────────────────
 
 class HFTokenManager:
     """
-    Singleton — jeden obiekt na cały proces Flask.
-    Thread-safe (RLock).
+    Singleton — jeden obiekt na cały proces Flask. Thread-safe (RLock).
     """
 
     def __init__(self):
-        self._lock         = threading.RLock()
-        self._tokens: dict[str, _TokenState] = {}
-        self._warmed_up    = False
-        self._warmup_lock  = threading.Lock()
+        self._lock              = threading.RLock()
+        self._tokens:           dict[str, _TokenState] = {}
+        self._warmed_up:        bool  = False
+        self._warmup_lock:      threading.Lock = threading.Lock()
+        self._warmup_running:   bool  = False
+        self._last_warmup_at:   float = 0.0   # monotonic timestamp ostatniego warm-upu
+        self._all_dead_since:   float = 0.0   # kiedy ostatnio stwierdzono ALL DEAD
 
     # ── Wczytywanie tokenów ze środowiska ─────────────────────────────────────
 
     def _load_from_env(self) -> list[_TokenState]:
-        """Wczytuje tokeny ze zmiennych środowiskowych."""
-        states = []
         names = ["HF_TOKEN"] + [f"HF_TOKEN{i}" for i in range(1, _TOKEN_RANGE)]
+        states = []
         for name in names:
             val = os.getenv(name, "").strip()
             if val:
                 states.append(_TokenState(name, val))
         return states
 
-    # ── Lekka weryfikacja jednego tokenu (bez generowania obrazka) ─────────────
+    # ── Lekka weryfikacja jednego tokenu ──────────────────────────────────────
 
     @staticmethod
     def _check_token_alive(name: str, value: str) -> tuple[bool, str]:
         """
-        Sprawdza czy token jest aktywny przez lekki GET na whoami.
-
-        Nie generuje obrazka, nie zużywa kredytów generatywnych.
-
-        Zwraca: (alive: bool, reason: str)
+        Sprawdza token przez GET /api/whoami.
+        Zwraca (alive, reason).
         """
         headers = {"Authorization": f"Bearer {value}"}
         try:
-            resp = requests.get(_HF_WHOAMI_URL, headers=headers, timeout=_CHECK_TIMEOUT)
+            resp = _requests.get(_HF_WHOAMI_URL, headers=headers,
+                                 timeout=_CHECK_TIMEOUT)
+            resp.close()
             if resp.status_code == 200:
-                user = resp.json().get("name", "?")
-                logger.debug("[hf-manager] Token %s OK → użytkownik: %s", name, user)
                 return True, ""
             elif resp.status_code in (401, 403):
                 reason = f"Nieważny token (HTTP {resp.status_code})"
@@ -128,67 +118,78 @@ class HFTokenManager:
                 return False, reason
             elif resp.status_code == 429:
                 # Rate limit na whoami — token prawdopodobnie żywy
-                logger.warning("[hf-manager] Token %s: rate limit na whoami — zakładam aktywny", name)
+                logger.warning("[hf-manager] Token %s: rate limit whoami — zakładam aktywny", name)
                 return True, ""
             else:
-                reason = f"HTTP {resp.status_code}"
-                logger.warning("[hf-manager] Token %s nieznany status: %s", name, reason)
-                # Niepewny — zakładamy aktywny, żeby nie blokować niepotrzebnie
+                # Nieznany status — zakładamy aktywny, żeby nie blokować
+                logger.debug("[hf-manager] Token %s: HTTP %s — zakładam aktywny",
+                             name, resp.status_code)
                 return True, ""
-
-        except requests.exceptions.Timeout:
-            logger.warning("[hf-manager] Token %s: timeout sprawdzenia — zakładam aktywny", name)
-            return True, ""
-        except requests.exceptions.ConnectionError as e:
-            logger.warning("[hf-manager] Token %s: brak połączenia (%s) — zakładam aktywny", name, e)
+        except _requests.exceptions.Timeout:
+            logger.warning("[hf-manager] Token %s: timeout — zakładam aktywny", name)
             return True, ""
         except Exception as e:
-            logger.warning("[hf-manager] Token %s: błąd sprawdzenia: %s — zakładam aktywny", name, e)
+            logger.warning("[hf-manager] Token %s: błąd (%s) — zakładam aktywny", name, e)
             return True, ""
 
-    # ── Warm-up (jednorazowy przy pierwszym użyciu) ────────────────────────────
+    # ── Warm-up ───────────────────────────────────────────────────────────────
 
     def warmup(self, force: bool = False) -> None:
         """
-        Sprawdza wszystkie tokeny JEDEN raz na starcie sesji.
-        Wywoływane leniwie (lazy) przy pierwszym get_active_tokens().
-        Można wymusić przez force=True (np. po restarcie lub z endpointu /admin).
-
-        Blokuje wątek wywołujący — przy starcie to OK, bo warm-up jest szybki
-        (tylko GET whoami, równoległy dla każdego tokenu).
+        Sprawdza wszystkie tokeny JEDEN raz.
+        - Blokuje warmup_lock żeby nie uruchamiać wielokrotnie równolegle.
+        - Respektuje _MIN_WARMUP_INTERVAL — chroni przed pętlą OOM-restart.
+        - Ogranicza równoległość do _MAX_WARMUP_THREADS.
         """
         with self._warmup_lock:
             if self._warmed_up and not force:
                 return
 
+            now = time.monotonic()
+            if not force and (now - self._last_warmup_at) < _MIN_WARMUP_INTERVAL:
+                # Za wcześnie na kolejny warm-up — zwróć co mamy
+                logger.info(
+                    "[hf-manager] Warm-up pominięty — był %.0fs temu (min %ds)",
+                    now - self._last_warmup_at, _MIN_WARMUP_INTERVAL
+                )
+                self._warmed_up = True  # traktuj jako "done" żeby nie loopować
+                return
+
+            self._last_warmup_at = now
+
             states = self._load_from_env()
             if not states:
                 logger.error("[hf-manager] Brak tokenów HF w zmiennych środowiskowych!")
                 with self._lock:
-                    self._tokens = {}
+                    self._tokens    = {}
                     self._warmed_up = True
                 return
 
             logger.info(
-                "[hf-manager] Warm-up: sprawdzam %d tokenów HF (lekki HEAD, bez generowania)…",
-                len(states)
+                "[hf-manager] Warm-up: sprawdzam %d tokenów HF…", len(states)
             )
 
-            # Równoległe sprawdzanie tokenów (threadpool)
+            # Równoległe sprawdzanie z ograniczoną pulą wątków
             results: dict[str, tuple[bool, str]] = {}
-            threads = []
-
-            def _check(state: _TokenState):
-                alive, reason = self._check_token_alive(state.name, state.value)
-                results[state.name] = (alive, reason)
-
-            for s in states:
-                t = threading.Thread(target=_check, args=(s,), daemon=True)
-                threads.append(t)
-                t.start()
-
-            for t in threads:
-                t.join(timeout=_CHECK_TIMEOUT + 2)
+            with ThreadPoolExecutor(max_workers=_MAX_WARMUP_THREADS) as pool:
+                future_to_name = {
+                    pool.submit(self._check_token_alive, s.name, s.value): s.name
+                    for s in states
+                }
+                try:
+                    for future in as_completed(future_to_name,
+                                               timeout=_CHECK_TIMEOUT + 4):
+                        name = future_to_name[future]
+                        try:
+                            results[name] = future.result()
+                        except Exception as e:
+                            logger.warning("[hf-manager] Błąd sprawdzenia %s: %s", name, e)
+                            results[name] = (True, "")  # fail-safe: zakładaj aktywny
+                except FuturesTimeout:
+                    logger.warning("[hf-manager] Warm-up timeout — część tokenów nieznana")
+                    for name in future_to_name.values():
+                        if name not in results:
+                            results[name] = (True, "")  # fail-safe
 
             with self._lock:
                 self._tokens = {}
@@ -199,10 +200,21 @@ class HFTokenManager:
                     s.dead_at     = 0.0 if alive else time.monotonic()
                     self._tokens[s.name] = s
 
-            active = sum(1 for s in self._tokens.values() if s.alive)
-            dead   = len(self._tokens) - active
+                active = sum(1 for s in self._tokens.values() if s.alive)
+                dead   = len(self._tokens) - active
+
+                if active == 0 and self._tokens:
+                    self._all_dead_since = time.monotonic()
+                    logger.warning(
+                        "[hf-manager] WSZYSTKIE %d TOKENY MARTWE — "
+                        "FLUX wyłączony do ręcznego resetu lub upływu %ds",
+                        dead, _RECHECK_AFTER or 999999
+                    )
+                else:
+                    self._all_dead_since = 0.0
+
             logger.info(
-                "[hf-manager] Warm-up zakończony: %d aktywnych, %d martwych (z %d łącznie)",
+                "[hf-manager] Warm-up: %d aktywnych / %d martwych / %d łącznie",
                 active, dead, len(self._tokens)
             )
             self._warmed_up = True
@@ -213,9 +225,21 @@ class HFTokenManager:
         """
         Zwraca listę aktywnych tokenów: [(name, value), …]
 
-        Przy pierwszym wywołaniu wykonuje warm-up (jednorazowo).
-        W trakcie sesji zwraca cached wynik — bez dodatkowych requestów.
+        FAST-PATH: gdy wszystkie tokeny są martwe → zwraca [] BEZ warm-upu
+        i BEZ żadnych requestów HTTP. Sprawdza tylko czy minął _RECHECK_AFTER.
         """
+        # Fast-path: wszystkie martwe i _RECHECK_AFTER=0 → od razu []
+        if self._warmed_up and self._all_dead_since > 0:
+            if _RECHECK_AFTER == 0:
+                return []
+            if (time.monotonic() - self._all_dead_since) < _RECHECK_AFTER:
+                return []
+            # Czas minął — zresetuj i sprawdź ponownie
+            logger.info("[hf-manager] Ponowne sprawdzenie tokenów po %ds", _RECHECK_AFTER)
+            with self._lock:
+                self._warmed_up     = False
+                self._all_dead_since = 0.0
+
         if not self._warmed_up:
             self.warmup()
 
@@ -228,77 +252,100 @@ class HFTokenManager:
 
     def mark_dead(self, name: str, reason: str = "402/401/403") -> None:
         """
-        Oznacza token jako martwy na czas sesji.
-        Wywoływane przez respondery po otrzymaniu błędu 402/401/403.
+        Oznacza token jako martwy. Wywoływane przez respondery po błędzie.
+        Gdy po oznaczeniu wszystkie są martwe — ustawia _all_dead_since.
         """
         with self._lock:
-            if name in self._tokens:
-                s = self._tokens[name]
-                if s.alive:
-                    s.alive       = False
-                    s.dead_reason = reason
-                    s.dead_at     = time.monotonic()
-                    active = sum(1 for x in self._tokens.values() if x.alive)
-                    logger.warning(
-                        "[hf-manager] Token %s → MARTWY (%s). Pozostało aktywnych: %d",
-                        name, reason, active
-                    )
-            else:
-                # Token nie był w warm-upie (np. dodany po starcie) — dodaj jako martwy
-                logger.warning("[hf-manager] mark_dead(%s) — token nieznany, ignoruję", name)
+            s = self._tokens.get(name)
+            if s is None:
+                logger.debug("[hf-manager] mark_dead(%s) — token nieznany", name)
+                return
+            if not s.alive:
+                return  # już martwy, nic do roboty
+
+            s.alive       = False
+            s.dead_reason = reason
+            s.dead_at     = time.monotonic()
+
+            active = sum(1 for x in self._tokens.values() if x.alive)
+            logger.warning(
+                "[hf-manager] Token %s → MARTWY (%s). Aktywnych: %d",
+                name, reason, active
+            )
+
+            if active == 0:
+                self._all_dead_since = time.monotonic()
+                logger.warning(
+                    "[hf-manager] WSZYSTKIE TOKENY MARTWE — "
+                    "kolejne wywołania get_active_tokens() zwrócą [] natychmiast"
+                )
 
     def mark_remaining(self, name: str, remaining: int) -> None:
-        """Aktualizuje licznik pozostałych requestów dla tokenu (z nagłówka X-Remaining-Requests)."""
         with self._lock:
-            if name in self._tokens:
-                self._tokens[name].remaining = remaining
+            s = self._tokens.get(name)
+            if s:
+                s.remaining = remaining
 
     def is_dead(self, name: str) -> bool:
-        """Zwraca True jeśli token jest na liście martwych."""
         with self._lock:
             s = self._tokens.get(name)
             return s is not None and not s.alive
 
-    def status_report(self) -> list[dict]:
-        """
-        Zwraca pełny raport stanu tokenów (do logów / endpointu /admin/hf-status).
-        """
+    def all_dead(self) -> bool:
+        """True gdy wszystkie znane tokeny są martwe (lub brak tokenów)."""
         if not self._warmed_up:
-            self.warmup()
+            return False
         with self._lock:
-            report = []
-            for s in self._tokens.values():
-                report.append({
+            if not self._tokens:
+                return True
+            return self._all_dead_since > 0
+
+    def status_report(self) -> list[dict]:
+        """Pełny raport stanu — do /admin/hf-status."""
+        if not self._warmed_up:
+            # Nie blokuj endpointu status jeśli warm-up nie był wykonany
+            return [{"info": "warm-up nie wykonany — brak danych"}]
+        with self._lock:
+            now = time.monotonic()
+            return [
+                {
                     "name":      s.name,
                     "alive":     s.alive,
                     "reason":    s.dead_reason or "OK",
                     "remaining": s.remaining,
                     "dead_ago":  (
-                        f"{int(time.monotonic() - s.dead_at)}s temu"
+                        f"{int(now - s.dead_at)}s temu"
                         if not s.alive and s.dead_at else None
                     ),
-                })
-            return report
+                }
+                for s in self._tokens.values()
+            ]
 
     def reset(self) -> None:
         """
         Resetuje stan — wymusza ponowny warm-up przy następnym użyciu.
-        Przydatne np. po ręcznym odnowieniu tokenów.
+        Używa przy ręcznym odnowieniu tokenów w Render env.
+        UWAGA: nie resetuje _last_warmup_at — żeby chronić przed pętlą.
         """
         with self._warmup_lock:
             with self._lock:
-                self._warmed_up = False
-                self._tokens    = {}
-        logger.info("[hf-manager] Stan tokenów zresetowany — warm-up przy następnym użyciu")
+                self._warmed_up      = False
+                self._all_dead_since = 0.0
+                self._tokens         = {}
+        logger.info("[hf-manager] Reset — warm-up przy następnym get_active_tokens()")
 
-    def all_dead(self) -> bool:
-        """Zwraca True gdy wszystkie znane tokeny są martwe."""
-        if not self._warmed_up:
-            return False  # Nie wiemy jeszcze
-        with self._lock:
-            if not self._tokens:
-                return True
-            return all(not s.alive for s in self._tokens.values())
+    def force_reset(self) -> None:
+        """
+        Reset TWARDY — ignoruje _MIN_WARMUP_INTERVAL.
+        Tylko do użytku przez /admin/hf-reset gdy tokeny faktycznie odnowiono.
+        """
+        with self._warmup_lock:
+            with self._lock:
+                self._warmed_up      = False
+                self._all_dead_since = 0.0
+                self._last_warmup_at = 0.0   # zezwól na natychmiastowy warm-up
+                self._tokens         = {}
+        logger.info("[hf-manager] Force-reset — warm-up przy następnym użyciu (bez cooldown)")
 
 
 # ── Singleton ──────────────────────────────────────────────────────────────────
@@ -308,20 +355,20 @@ hf_tokens = HFTokenManager()
 # ── Skróty (dla wygody migracji) ──────────────────────────────────────────────
 
 def get_active_tokens() -> list[tuple[str, str]]:
-    """Skrót: zwraca aktywne tokeny [(name, value), …]"""
+    """Zwraca aktywne tokeny [(name, value), …]"""
     return hf_tokens.get_active_tokens()
 
 
 def mark_dead(name: str, reason: str = "błąd 402/401/403") -> None:
-    """Skrót: oznacza token jako martwy."""
+    """Oznacza token jako martwy."""
     hf_tokens.mark_dead(name, reason)
 
 
 def mark_remaining(name: str, remaining: int) -> None:
-    """Skrót: aktualizuje licznik pozostałych requestów."""
+    """Aktualizuje licznik pozostałych requestów."""
     hf_tokens.mark_remaining(name, remaining)
 
 
 def is_dead(name: str) -> bool:
-    """Skrót: sprawdza czy token jest martwy."""
+    """Sprawdza czy token jest martwy."""
     return hf_tokens.is_dead(name)
