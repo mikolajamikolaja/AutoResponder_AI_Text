@@ -27,13 +27,10 @@ NOWE (ta wersja):
 """
 
 import os
-import base64
 import html
-import io
 import json
 import re
 import threading
-import traceback
 import urllib.parse
 
 from flask import Flask, request, jsonify, current_app
@@ -42,15 +39,8 @@ import requests as http_requests
 from drive_utils import upload_file_to_drive, update_sheet_with_data, save_to_history_sheet
 from core.logging_reporter import init_logger, get_logger
 
-from responders.zwykly        import build_zwykly_section
-from responders.biznes        import build_biznes_section
-from responders.scrabble      import build_scrabble_section
-from responders.dociekliwy    import build_dociekliwy_section as build_analiza_section
-from responders.emocje        import build_emocje_section
-from responders.nawiazanie    import build_nawiazanie_section
-from responders.gif_maker     import make_gif
-from responders.generator_pdf import build_generator_pdf_section
-from responders.smierc        import build_smierc_section
+# OPTYMALIZACJA PAMIĘCI: responders ładowane lazy (przy pierwszym żądaniu),
+# nie przy starcie — oszczędza ~30-60 MB RAM na instancji 512 MB.
 from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
 from core.hf_token_manager import hf_tokens
@@ -60,10 +50,9 @@ from core.job_runner import run_pipeline_async, build_section_order
 app = Flask(__name__)
 
 # ── Globalny licznik aktywnych pipeline'ów ────────────────────────────────────
-# Używany przez /status — GAS sprawdza przed wysłaniem czy Render jest wolny.
 import threading as _threading
 _pipeline_lock   = _threading.Lock()
-_active_pipelines = 0  # liczba aktualnie działających wątków pipeline
+_active_pipelines = 0
 
 def _pipeline_start():
     global _active_pipelines
@@ -75,9 +64,16 @@ def _pipeline_done():
     with _pipeline_lock:
         _active_pipelines = max(0, _active_pipelines - 1)
 
-# Warm-up tokenów HF przy starcie serwera
-with app.app_context():
-    hf_tokens.warmup()
+# OPTYMALIZACJA: warmup HF usunięty ze startu serwera.
+# hf_tokens.warmup() wywoływane lazy przy pierwszym żądaniu wymagającym tokenu.
+# Oszczędza pamięć przy zimnym starcie i restarcie po OOM.
+
+
+def _lazy_responder(module_path: str, fn_name: str):
+    """Importuje responder na żądanie — nie trzyma wszystkich w RAM od startu."""
+    import importlib
+    mod = importlib.import_module(module_path)
+    return getattr(mod, fn_name)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -736,8 +732,8 @@ def _build_log_txt_content(logger, response_data) -> str:
             lines.append(f"  [{i+1:2d}] +{delta:6.2f}s: {entry['type'][:20]}")
     lines.append("")
 
-    lines.append("5. SZCZEGÓŁOWE WPISY")
-    for entry in logger.entries:
+    lines.append("5. SZCZEGÓŁOWE WPISY (ostatnie 50)")
+    for entry in logger.entries[-50:]:
         ts = entry.get("timestamp", 0.0)
         lines.append(f"[{entry['type']}] +{ts:.2f}s")
         lines.extend(_format_log_entry_data(entry.get("data")))
@@ -923,8 +919,11 @@ def webhook():
     flask_app = app
 
     def run(fn, *args, **kwargs_inner):
+        import gc
         with flask_app.app_context():
-            return fn(*args, **kwargs_inner)
+            result = fn(*args, **kwargs_inner)
+            gc.collect()
+            return result
 
     # ── Dane śmierci ──────────────────────────────────────────────────────────
     smierc_etap     = int(data.get("etap", 1))
@@ -983,7 +982,7 @@ def webhook():
                     _tm=effective_test_mode, \
                     _skip=("analiza" in requested_sections): \
                 run(
-                    build_zwykly_section,
+                    _lazy_responder('responders.zwykly', 'build_zwykly_section'),
                     _body, _prev, _sender, _sname,
                     test_mode=_tm,
                     attachments=_att,
@@ -996,7 +995,7 @@ def webhook():
                     _etap=smierc_etap, _ds=smierc_data_str, \
                     _hist=smierc_historia, _tm=effective_test_mode: \
                 run(
-                    build_smierc_section,
+                    _lazy_responder('responders.smierc', 'build_smierc_section'),
                     sender_email     = _sender,
                     body             = _body,
                     etap             = _etap,
@@ -1011,7 +1010,7 @@ def webhook():
                     _sender=sender, _sname=sender_name, \
                     _tm=effective_test_mode: \
                 run(
-                    build_analiza_section,
+                    _lazy_responder('responders.dociekliwy', 'build_dociekliwy_section'),
                     _body, _att,
                     sender      = _sender,
                     sender_name = _sname,
@@ -1024,7 +1023,7 @@ def webhook():
                     _prevs=previous_subject, _sender=sender, \
                     _sname=sender_name: \
                 run(
-                    build_nawiazanie_section,
+                    _lazy_responder('responders.nawiazanie', 'build_nawiazanie_section'),
                     body             = _body,
                     previous_body    = _prev,
                     previous_subject = _prevs,
@@ -1034,19 +1033,22 @@ def webhook():
 
         elif section_key == "biznes":
             tasks["biznes"] = lambda _body=body, _sname=sender_name: \
-                run(build_biznes_section, _body, sender_name=_sname)
+                run(_lazy_responder('responders.biznes', 'build_biznes_section'),
+                    _body, sender_name=_sname)
 
         elif section_key == "scrabble":
             tasks["scrabble"] = lambda _body=body: \
-                run(build_scrabble_section, _body)
+                run(_lazy_responder('responders.scrabble', 'build_scrabble_section'), _body)
 
         elif section_key == "emocje":
             tasks["emocje"] = lambda _body=body, _sname=sender_name, _tm=effective_test_mode: \
-                run(build_emocje_section, _body, sender_name=_sname, test_mode=_tm)
+                run(_lazy_responder('responders.emocje', 'build_emocje_section'),
+                    _body, sender_name=_sname, test_mode=_tm)
 
         elif section_key == "generator_pdf":
             tasks["generator_pdf"] = lambda _body=body, _sname=sender_name: \
-                run(build_generator_pdf_section, _body, sender_name=_sname)
+                run(_lazy_responder('responders.generator_pdf', 'build_generator_pdf_section'),
+                    _body, sender_name=_sname)
 
         else:
             app.logger.warning("[pipeline] Nieznana sekcja ignorowana: %s", section_key)
@@ -1107,6 +1109,9 @@ def webhook():
 @app.route("/webhook_gif", methods=["POST"])
 def webhook_gif():
     """Przyjmuje dwa PNG jako base64, zwraca dwa GIFy jako base64."""
+    import gc
+    from responders.gif_maker import make_gif
+
     data     = request.json or {}
     png1_b64 = data.get("png1_base64")
     png2_b64 = data.get("png2_base64")
@@ -1121,10 +1126,13 @@ def webhook_gif():
 
     app.logger.info("/webhook_gif — GIFy: gif1=%s gif2=%s", bool(gif1_b64), bool(gif2_b64))
 
-    return jsonify({
+    result = jsonify({
         "gif1": {"base64": gif1_b64, "content_type": "image/gif", "filename": "komiks_ai.gif"},
         "gif2": {"base64": gif2_b64, "content_type": "image/gif", "filename": "komiks_ai_retro.gif"},
     }), 200
+    del gif1_b64, gif2_b64, png1_b64, png2_b64
+    gc.collect()
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

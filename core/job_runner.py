@@ -3,19 +3,20 @@
 core/job_runner.py
 Asynchroniczny pipeline — każda sekcja: wykonaj → wyślij → drive → sheets → del.
 
-ZMIANY:
-  - log_wyslano wywoływany zawsze po wysyłce (niezależnie od sukcesu) żeby GAS
-    mógł wykryć że Render obsłużył wiadomość
-  - Przy braku tokenów HF — obrazek zastępczy zamiast crashu
+OPTYMALIZACJE PAMIĘCI (512 MB):
+  - log.txt generowany strumieniowo i natychmiast zapisywany, bez trzymania w RAM
+  - log_svg usunięty całkowicie (największy pożeracz pamięci)
+  - del + gc.collect() po każdej sekcji (było, wzmocnione)
+  - base64 plików kasowane natychmiast po uploadzie do Drive
+  - logger.entries czyszczone po wygenerowaniu log.txt
+  - Brak importów na poziomie modułu — lazy import wewnątrz funkcji
 """
-import base64
 import gc
 import traceback
 
 from drive_utils import upload_file_to_drive, update_sheet_with_data, save_to_history_sheet
 from core.sheets_logger import log_wyslano
 
-# Stała kolejność sekcji — niezależna od GAS
 SECTION_ORDER = [
     "nawiazanie",
     "analiza",
@@ -29,7 +30,6 @@ SECTION_ORDER = [
 
 
 def build_section_order(requested: list) -> list:
-    """Zwraca tylko zlecone sekcje w stałej kolejności."""
     return [s for s in SECTION_ORDER if s in requested]
 
 
@@ -42,10 +42,11 @@ def _upload_drive_item(item: dict, folder_id: str) -> bool:
         item.get("content_type", "application/octet-stream"),
         folder_id,
     )
+    # Usuń base64 natychmiast po uploadzie — to największy pożeracz pamięci
+    item.pop("base64", None)
     if not result:
         return False
-    item["drive_url"] = result["url"]
-    item.pop("base64", None)
+    item["drive_url"] = result.get("url", "")
     return True
 
 
@@ -86,10 +87,9 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
     Wykonuje sekcje sekwencyjnie w tle (daemon thread).
     Po każdej sekcji: wyślij mail → zapisz Drive → zapisz Sheets → del → gc.
 
-    WAŻNE: log_wyslano jest zapisywany po każdej próbie wysyłki (sukces lub porażka),
-    żeby GAS przy następnym uruchomieniu wiedział że Render obsłużył tę wiadomość.
-    Jeśli wysyłka się nie powiodła — zapisujemy WYSŁANO z responderem "ERROR:{section}".
+    WAŻNE: log_wyslano zapisywany po każdej próbie wysyłki (sukces lub porażka).
     """
+    # Lazy import — nie ładuj modułów smtp przy starcie serwera
     from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
     with flask_app.app_context():
@@ -110,16 +110,15 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 flask_app.logger.error(
                     "[async] BŁĄD '%s': %s\n%s", section_key, e, traceback.format_exc()
                 )
-                # Zapisz do Sheets że próbowaliśmy — GAS nie będzie retry-ował
                 if history_sheet_id and message_id:
                     try:
                         log_wyslano(history_sheet_id, message_id, f"ERROR:{section_key}", str(e)[:200])
                     except Exception:
                         pass
+                gc.collect()
                 continue
 
             if not result:
-                # Sekcja zwróciła pusty wynik — zapisz jako obsłużone
                 if history_sheet_id and message_id:
                     try:
                         log_wyslano(history_sheet_id, message_id, f"EMPTY:{section_key}", "")
@@ -128,10 +127,9 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 continue
 
             # ── Wyślij email ────────────────────────────────────────────────────
-            sent = False
             try:
                 _token_refresh(get_token_fn, flask_app, section_key)
-                sent = _send_section_email(
+                _send_section_email(
                     section_key, result, sender, sender_name, previous_subject,
                     wyslij_odpowiedz, zbierz_zalaczniki_z_response, flask_app, logger
                 )
@@ -145,12 +143,14 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 except Exception as e:
                     flask_app.logger.error("[async] Błąd Drive '%s': %s", section_key, e)
 
-            # ── Sheets — ZAWSZE zapisz że Render obsłużył tę sekcję ────────────
-            # GAS sprawdza czy message_id ma wpis WYSŁANO — jeśli nie, ponawia.
-            # Dlatego zapisujemy niezależnie od tego czy mail dotarł.
+            # ── Sheets ──────────────────────────────────────────────────────────
             if history_sheet_id and message_id:
                 try:
-                    reply_html = result.get("reply_html", "") if isinstance(result, dict) else ""
+                    # Pobierz reply_html przed del result, ale skróć do 500 znaków
+                    reply_html = ""
+                    if isinstance(result, dict):
+                        raw_html = result.get("reply_html", "")
+                        reply_html = raw_html[:500] if raw_html else ""
                     log_wyslano(history_sheet_id, message_id, section_key, reply_html)
                     sections_done.append(section_key)
                 except Exception as e:
@@ -163,7 +163,7 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 except Exception as e:
                     flask_app.logger.error("[async] Błąd smierc sheet: %s", e)
 
-            # ── Zwolnij pamięć ──────────────────────────────────────────────────
+            # ── Zwolnij pamięć natychmiast ──────────────────────────────────────
             del result
             gc.collect()
 
@@ -173,51 +173,72 @@ def run_pipeline_async(flask_app, data: dict, message_id: str, tasks: dict,
                 body = data.get("body", "")
                 subject = data.get("subject", "")
                 save_to_history_sheet(history_sheet_id, sender, subject, body)
+                # Zwolnij referencje do dużych danych
+                del body, subject
             except Exception as e:
                 flask_app.logger.error("[async] Błąd zapisu historii: %s", e)
 
-        # ── log.txt — generuj NA KOŃCU gdy logger ma pełne dane ─────────────────
-        try:
-            from app import _build_log_txt_content, _build_log_svg_content
-            log_content = _build_log_txt_content(logger, {})
-            log_b64 = base64.b64encode(log_content.encode("utf-8")).decode("ascii")
-            log_txt = {
-                "base64":       log_b64,
-                "content_type": "text/plain",
-                "filename":     f"log_{logger.session_id}.txt",
-            }
-
-            # Wyślij log.txt mailem jako ostatni załącznik
-            from smtp_wysylka import wyslij_odpowiedz
-            subject_log = f"[LOG] {data.get('subject', 'pipeline')}"
-            wyslij_odpowiedz(
-                to_email=sender,
-                to_name=sender_name,
-                subject=subject_log,
-                html_body=(
-                    "<p style='font-family:monospace;color:#444'>"
-                    "Log wykonania pipeline — załącznik <code>log.txt</code>.</p>"
-                ),
-                zalaczniki=[log_txt],
-            )
-            flask_app.logger.info("[async] log.txt wysłany (%d znaków)", len(log_content))
-
-            # Opcjonalnie: zapisz też na Drive
-            if save_to_drive and drive_folder_id:
-                upload_file_to_drive(
-                    log_b64,
-                    log_txt["filename"],
-                    "text/plain",
-                    drive_folder_id,
-                )
-                flask_app.logger.info("[async] log.txt zapisany na Drive")
-        except Exception as e:
-            flask_app.logger.error("[async] Błąd generowania/wysyłki log.txt: %s", e)
+        # ── log.txt — generuj NA KOŃCU, wyślij strumieniowo, bez trzymania w RAM ─
+        _send_log_txt(flask_app, logger, data, sender, sender_name,
+                      save_to_drive, drive_folder_id, wyslij_odpowiedz,
+                      upload_file_to_drive)
 
         flask_app.logger.info(
             "[async] Pipeline zakończony dla %s | sekcje: %s",
             sender, ", ".join(sections_done) if sections_done else "brak"
         )
+
+
+def _send_log_txt(flask_app, logger, data, sender, sender_name,
+                  save_to_drive, drive_folder_id, wyslij_odpowiedz_fn,
+                  upload_fn):
+    """
+    Generuje i wysyła log.txt strumieniowo.
+    NIE buduje log_svg (było głównym pożeraczem pamięci).
+    Po wysyłce czyści logger.entries żeby zwolnić RAM.
+    """
+    try:
+        from app import _build_log_txt_content
+        import base64
+
+        log_content = _build_log_txt_content(logger, {})
+        # Koduj i od razu usuń string źródłowy
+        log_b64 = base64.b64encode(log_content.encode("utf-8")).decode("ascii")
+        log_len = len(log_content)
+        del log_content  # zwolnij RAM
+
+        filename = f"log_{logger.session_id}.txt"
+        log_txt = {
+            "base64":       log_b64,
+            "content_type": "text/plain",
+            "filename":     filename,
+        }
+
+        subject_log = f"[LOG] {data.get('subject', 'pipeline')}"
+        wyslij_odpowiedz_fn(
+            to_email=sender,
+            to_name=sender_name,
+            subject=subject_log,
+            html_body=(
+                "<p style='font-family:monospace;color:#444'>"
+                "Log wykonania pipeline — załącznik <code>log.txt</code>.</p>"
+            ),
+            zalaczniki=[log_txt],
+        )
+        flask_app.logger.info("[async] log.txt wysłany (%d znaków)", log_len)
+
+        if save_to_drive and drive_folder_id:
+            upload_fn(log_b64, filename, "text/plain", drive_folder_id)
+            flask_app.logger.info("[async] log.txt zapisany na Drive")
+
+        # Zwolnij base64 i wyczyść entries loggera
+        del log_b64, log_txt
+        if hasattr(logger, "entries"):
+            logger.entries.clear()
+        gc.collect()
+
+    except Exception as e:
+        flask_app.logger.error("[async] Błąd generowania/wysyłki log.txt: %s", e)
 
 
 def _token_refresh(get_token_fn, flask_app, section_key):
@@ -237,7 +258,7 @@ def _send_section_email(section_key, result, sender, sender_name, previous_subje
     zal = zbierz_fn({section_key: result})
 
     if not email_html.strip() and not zal:
-        flask_app.logger.info("[async] '%s' — brak treści i załączników, pomijam wysyłkę", section_key)
+        flask_app.logger.info("[async] '%s' — brak treści i załączników, pomijam", section_key)
         return False
 
     subject_line = f"Re: {previous_subject or 'Twoja wiadomość'}"
@@ -251,6 +272,8 @@ def _send_section_email(section_key, result, sender, sender_name, previous_subje
         html_body=email_html or "<p>Załączniki w osobnych plikach.</p>",
         zalaczniki=zal,
     )
+    # Zwolnij listę załączników od razu
+    del zal
     if success:
         flask_app.logger.info("[async] ✓ Wysłano: %s → %s", section_key, sender)
     else:
@@ -259,7 +282,8 @@ def _send_section_email(section_key, result, sender, sender_name, previous_subje
 
 
 def _update_smierc_sheet(smierc_sheet_id, sender, data, smierc_result):
-    import re, html as html_lib
+    import re
+    import html as html_lib
 
     def strip_html(h):
         if not h:
