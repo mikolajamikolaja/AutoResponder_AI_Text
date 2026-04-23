@@ -48,10 +48,26 @@ from core.logging_reporter import init_logger, get_logger
 from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
 from core.hf_token_manager import hf_tokens
+from core.responder_manager import ResponderManager, PipelineBuilder
+from core.user_manager import UserManager
+from core.resource_manager import ResourceManager
+from core.validator import Validator
 from core.sheets_logger import log_odebrano
-from core.job_runner import run_pipeline_async, build_section_order
 
 app = Flask(__name__)
+
+# ── Inicjalizacja managerów ─────────────────────────────────────────────────
+responder_manager = ResponderManager()
+pipeline_builder = PipelineBuilder(responder_manager)
+validator = Validator(responder_manager.config)
+resource_manager = ResourceManager(
+    memory_threshold_mb=responder_manager.config.get("performance", {}).get(
+        "memory_threshold_mb", 400
+    ),
+    max_concurrent=responder_manager.config.get("performance", {}).get(
+        "max_concurrent_pipelines", 5
+    ),
+)
 
 
 # ── Health check dla GAS ────────────────────────────────────────────────────
@@ -71,12 +87,14 @@ def _pipeline_start():
     global _active_pipelines
     with _pipeline_lock:
         _active_pipelines += 1
+    resource_manager.pipeline_start()
 
 
 def _pipeline_done():
     global _active_pipelines
     with _pipeline_lock:
         _active_pipelines = max(0, _active_pipelines - 1)
+    resource_manager.pipeline_end()
 
 
 # OPTYMALIZACJA: warmup HF usunięty ze startu serwera.
@@ -912,6 +930,10 @@ def webhook():
     message_id = data.get("msg_id", "") or data.get("message_id", "")
     logger.log_input(sender, subject, body, sender_name)
 
+    # ── Walidacja wejścia ────────────────────────────────────────────────────
+    if not validator.validate_email(body, subject, sender):
+        return jsonify({"status": "ignored", "reason": "validation failed"}), 200
+
     # ── Ochrona przed pętlą (admin email) ────────────────────────────────────
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     if admin_email and sender.strip().lower() == admin_email:
@@ -956,16 +978,13 @@ def webhook():
     smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
     history_sheet_id = os.getenv("HISTORY_SHEET_ID")
 
-    # ── Sprawdzenie statusu użytkownika ───────────────────────────────────────
-    from drive_utils import check_user_in_sheet
+    # ── Inicjalizacja user manager ────────────────────────────────────────────
+    user_manager = UserManager(history_sheet_id, smierc_sheet_id)
 
+    # ── Sprawdzenie statusu użytkownika ───────────────────────────────────────
     if not test_mode:
-        in_history_status = (
-            "tak" if check_user_in_sheet(history_sheet_id, sender) else "nie"
-        )
-        in_requiem_status = (
-            "tak" if check_user_in_sheet(smierc_sheet_id, sender) else "nie"
-        )
+        in_history_status = "tak" if user_manager.is_known_user(sender) else "nie"
+        in_requiem_status = "tak" if user_manager.is_on_death_list(sender) else "nie"
     else:
         in_history_status = "test_mode"
         in_requiem_status = "test_mode"
@@ -1065,36 +1084,29 @@ def webhook():
     if is_retry:
         requested_sections = list(retry_responders)
     else:
-        requested_sections = []
-
-        if (contains_keyword and not contains_keyword3) or in_history_status == "tak":
-            requested_sections.append("zwykly")
-            logger.log_decision(
-                "zwykly", "known sender or keyword (but not keyword3)", "dodano"
-            )
-
-        if wants_smierc:
-            requested_sections.append("smierc")
-            logger.log_decision("smierc", "wants_smierc=True", "dodano")
-
-        if wants_analiza or contains_keyword3:
-            requested_sections.append("analiza")
-            logger.log_decision("analiza", "wants_analiza or keyword3", "dodano")
-
-        if wants_nawiazanie:
-            requested_sections.append("nawiazanie")
-        if wants_biznes:
-            requested_sections.append("biznes")
-        if wants_scrabble:
-            requested_sections.append("scrabble")
-        if wants_emocje:
-            requested_sections.append("emocje")
-        if wants_generator_pdf:
-            requested_sections.append("generator_pdf")
+        # Przygotuj dane dla PipelineBuilder
+        pipeline_data = {
+            "contains_keyword": contains_keyword,
+            "contains_keyword1": contains_keyword1,
+            "contains_keyword2": contains_keyword2,
+            "contains_keyword3": contains_keyword3,
+            "contains_keyword4": contains_keyword4,
+            "contains_keyword_joker": contains_keyword_joker,
+            "wants_smierc": wants_smierc,
+            "wants_analiza": wants_analiza,
+            "wants_biznes": wants_biznes,
+            "wants_scrabble": wants_scrabble,
+            "wants_emocje": wants_emocje,
+            "wants_generator_pdf": wants_generator_pdf,
+            "previous_body": previous_body,
+            "in_history_status": in_history_status,
+            "in_requiem_status": in_requiem_status,
+        }
+        requested_sections = pipeline_builder.build_sections(pipeline_data)
 
     app.logger.info(
         "[pipeline] Zaplanowane sekcje: %s",
-        " → ".join(build_section_order(requested_sections)),
+        " → ".join(requested_sections),
     )
 
     # ── Budowanie TASKS ───────────────────────────────────────────────────────
@@ -1207,6 +1219,23 @@ def webhook():
 
         else:
             app.logger.warning("[pipeline] Nieznana sekcja ignorowana: %s", section_key)
+
+    # ── Sprawdź zasoby systemowe ─────────────────────────────────────────────
+    if not resource_manager.can_start_pipeline():
+        app.logger.warning(
+            "[webhook] 🚫 RESOURCE LIMIT — odrzucam message_id=%s sender=%s",
+            message_id,
+            sender,
+        )
+        return (
+            jsonify(
+                {
+                    "status": "resource_limit",
+                    "reason": "System resource limit reached. Try again later.",
+                }
+            ),
+            503,
+        )
 
     # ── Odrzuć gdy pipeline już działa — GAS dostanie "busy" i spróbuje później
     if _active_pipelines > 0:

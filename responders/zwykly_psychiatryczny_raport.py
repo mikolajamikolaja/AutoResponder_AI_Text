@@ -385,11 +385,13 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=750)
     result = _parse_json_safe(raw, "pacjent")
-    if not result:
+    if not result or not isinstance(result, dict):
         fb = cfg.get("fallback_dane_pacjenta", {})
-        current_app.logger.warning("[psych-raport] sekcja_pacjent → fallback")
+        current_app.logger.warning(
+            "[psych-raport] sekcja_pacjent → fallback (nie dict lub pusty)"
+        )
         return fb
     return result
 
@@ -410,10 +412,12 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=750)
     result = _parse_json_safe(raw, "depozyt_leki")
-    if not result:
-        current_app.logger.warning("[psych-raport] sekcja_depozyt_leki → fallback")
+    if not result or not isinstance(result, dict):
+        current_app.logger.warning(
+            "[psych-raport] sekcja_depozyt_leki → fallback (nie dict lub pusty)"
+        )
         return {
             "depozyt": {
                 "lista_przedmiotow": (
@@ -492,7 +496,7 @@ def _sekcja_tydzien(
     )
 
     section_name = f"tydzien{tydzien}_dni{'_'.join(str(d) for d in numery_dni)}"
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, section_name)
 
     if isinstance(result, list):
@@ -536,7 +540,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "wypis")
     if not result:
         return {
@@ -574,9 +578,12 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=750)
     result = _parse_json_safe(raw, "diagnozy")
-    if not result:
+    if not result or not isinstance(result, dict):
+        current_app.logger.warning(
+            "[psych-raport] sekcja_diagnozy → fallback (nie dict lub pusty)"
+        )
         return {
             "diagnoza_wstepna": {
                 "nazwa_lacinska": "Syndroma Emaili Desperati",
@@ -653,7 +660,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a = call_deepseek(system_7, user_7a, MODEL_TYLER)
+    raw_7a = call_deepseek(system_7, user_7a, MODEL_TYLER, max_tokens=1500)
     result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
 
     # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
@@ -678,7 +685,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"KAŻDA notatka musi nawiązywać do INNEGO zdarzenia i INNEGO dnia.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER)
+    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER, max_tokens=1500)
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
 
     # ── deepseek_7c — NOTATKI SPRZĄTACZKI + INCYDENTY ────────────────────────────
@@ -707,7 +714,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7c = call_deepseek(system_7, user_7c, MODEL_TYLER)
+    raw_7c = call_deepseek(system_7, user_7c, MODEL_TYLER, max_tokens=1500)
     result_7c = _parse_json_safe(raw_7c, "zalecenia_7c") or {}
 
     # ── Scal wyniki trzech wywołań ────────────────────────────────────────────
@@ -761,7 +768,7 @@ def _sekcja_flux_prompty(
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON z dwoma promptami FLUX po angielsku."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "flux_prompty")
     if not result or not isinstance(result, dict):
         objects_critical = f"CRITICAL OBJECTS: {nouns_str}."
@@ -850,7 +857,7 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
         "[psych-raport] DeepSeek completeness check START (slim=%d kluczy)",
         len(raport_slim),
     )
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     if not raw:
         current_app.logger.warning(
             "[psych-raport] DeepSeek completeness → brak odpowiedzi, skip"
@@ -899,7 +906,7 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
         f"Zwróć TYLKO czysty JSON z listą relacji świadków."
     )
 
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "relacje_swiadkow")
 
     if not result or not isinstance(result, dict):
@@ -1554,7 +1561,7 @@ def _build_docx(
 
     dd = raport.get("diagnoza_dodatkowa", {})
     if isinstance(dd, dict):
-        heading("Diagnoza Dodatkowa (współistniejąca):", 3, DARK, 10)
+        heading("Diagnoza Dodatkowa:", 3, DARK, 10)
         p_dd = doc.add_paragraph()
         r1 = p_dd.add_run(dd.get("nazwa_lacinska", ""))
         r1.bold = True
@@ -1566,6 +1573,22 @@ def _build_docx(
             r2.font.color.rgb = DARK
         if dd.get("opis_kliniczny"):
             para(dd["opis_kliniczny"], size=10)
+    doc.add_paragraph()
+
+    cw = raport.get("choroba_wspolistniejaca", {})
+    if isinstance(cw, dict):
+        heading("Choroba Współistniejąca:", 3, DARK, 10)
+        p_cw = doc.add_paragraph()
+        r1 = p_cw.add_run(cw.get("nazwa_lacinska", ""))
+        r1.bold = True
+        r1.font.size = Pt(11)
+        r1.font.color.rgb = RED
+        if cw.get("nazwa_polska"):
+            r2 = p_cw.add_run(f" (pol. {cw['nazwa_polska']})")
+            r2.font.size = Pt(10)
+            r2.font.color.rgb = DARK
+        if cw.get("opis_kliniczny"):
+            para(cw["opis_kliniczny"], size=10)
     doc.add_paragraph()
 
     objawy = raport.get("objawy", [])
@@ -1898,13 +1921,9 @@ def build_raport(
         "[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport)
     )
 
-    # ── DeepSeek tone check ───────────────────────────────────────────────────
-    raport = _deepseek_tone_check(cfg, raport)
-    current_app.logger.info("[psych-raport] DeepSeek#1 tone OK")
-
     # ── DeepSeek completeness check ──────────────────────────────────────────
     raport = _deepseek_completeness_check(cfg, raport, body)
-    current_app.logger.info("[psych-raport] DeepSeek#2 completeness OK")
+    current_app.logger.info("[psych-raport] DeepSeek#1 completeness OK")
 
     # ── Relacje świadków ─────────────────────────────────────────────────────
     try:

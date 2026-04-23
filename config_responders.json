@@ -1,0 +1,105 @@
+{
+    "description": "Centralna konfiguracja responderów AutoResponder AI Text. Wszystkie wytyczne i mapowania w jednym miejscu.",
+    "responders": {
+        "nawiazanie": {
+            "description": "Kontynuacja rozmowy na podstawie poprzedniej wiadomości",
+            "prompt_file": "prompt_nawiazanie.txt",
+            "requires_flux": false,
+            "wave": 1,
+            "enabled": true
+        },
+        "analiza": {
+            "description": "Analiza załączników i diagramów",
+            "prompt_file": null,
+            "requires_flux": false,
+            "wave": 1,
+            "enabled": true
+        },
+        "zwykly": {
+            "description": "Odpowiedź w stylu Tyler Durden + Sokrates",
+            "prompt_file": "zwykly_prompt.json",
+            "requires_flux": true,
+            "wave": 1,
+            "enabled": true
+        },
+        "smierc": {
+            "description": "Sekwencja śmierci wieloetapowa",
+            "prompt_file": "requiem_WYSLANNIK_system_8_.txt",
+            "requires_flux": true,
+            "wave": 2,
+            "enabled": true
+        },
+        "generator_pdf": {
+            "description": "Generowanie spersonalizowanych PDF",
+            "prompt_file": "prompt_pdf_egzamin.txt",
+            "requires_flux": true,
+            "wave": 2,
+            "enabled": true
+        },
+        "biznes": {
+            "description": "Profesjonalna odpowiedź biznesowa",
+            "prompt_file": "prompt_biznesowy.txt",
+            "requires_flux": false,
+            "wave": 2,
+            "enabled": true
+        },
+        "scrabble": {
+            "description": "Interaktywna gra Scrabble",
+            "prompt_file": "prompt_scrabble.txt",
+            "requires_flux": false,
+            "wave": 2,
+            "enabled": true
+        },
+        "emocje": {
+            "description": "Odpowiedź emocjonalna z analizą sentymentu",
+            "prompt_file": "emocje_prompt.json",
+            "requires_flux": true,
+            "wave": 2,
+            "enabled": true
+        }
+    },
+    "keyword_mappings": {
+        "KEYWORDS": "zwykly",
+        "KEYWORDS1": "biznes",
+        "KEYWORDS2": "scrabble",
+        "KEYWORDS3": "analiza",
+        "KEYWORDS4": "emocje",
+        "KEYWORDS_GENERATOR_PDF": "generator_pdf",
+        "KEYWORDS_JOKER": "all",
+        "KEYWORDS_SMIERC": "smierc"
+    },
+    "section_order": [
+        "nawiazanie",
+        "analiza",
+        "zwykly",
+        "smierc",
+        "generator_pdf",
+        "biznes",
+        "scrabble",
+        "emocje"
+    ],
+    "conditions": {
+        "known_user": "zwykly",
+        "previous_body": "nawiazanie",
+        "death_list": "smierc",
+        "disable_flux": "disable_flux"
+    },
+    "special_flags": {
+        "contains_keyword_joker": "all_responders",
+        "contains_flaga_test": "disable_flux"
+    },
+    "validation": {
+        "max_email_length": 10000,
+        "max_attachment_size": 10485760,
+        "allowed_attachment_types": [
+            "image/jpeg",
+            "image/png",
+            "application/pdf"
+        ]
+    },
+    "performance": {
+        "max_concurrent_pipelines": 5,
+        "memory_threshold_mb": 400,
+        "ai_timeout_sec": 60
+    }
+}

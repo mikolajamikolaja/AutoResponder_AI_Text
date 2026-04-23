@@ -12,6 +12,7 @@ OPTYMALIZACJE PAMIĘCI (512 MB):
   - Brak importów na poziomie modułu — lazy import wewnątrz funkcji
 """
 import gc
+import os
 import traceback
 
 from drive_utils import (
@@ -20,6 +21,7 @@ from drive_utils import (
     save_to_history_sheet,
 )
 from core.sheets_logger import log_wyslano
+from core.retry_manager import retry_on_failure
 
 SECTION_ORDER = [
     "nawiazanie",
@@ -161,10 +163,12 @@ def run_pipeline_async(
                 flask_app.logger.info("[async] START: %s", section_key)
                 result = fn()
                 flask_app.logger.info("[async] OK:    %s", section_key)
+                logger.log_section_result(section_key, success=True)
             except Exception as e:
                 flask_app.logger.error(
                     "[async] BŁĄD '%s': %s\n%s", section_key, e, traceback.format_exc()
                 )
+                logger.log_section_result(section_key, success=False)
                 if history_sheet_id and message_id:
                     try:
                         log_wyslano(
@@ -179,6 +183,7 @@ def run_pipeline_async(
                 continue
 
             if not result:
+                logger.log_section_result(section_key, success=False)
                 if history_sheet_id and message_id:
                     try:
                         log_wyslano(
