@@ -385,7 +385,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "pacjent")
     if not result:
         fb = cfg.get("fallback_dane_pacjenta", {})
@@ -410,7 +410,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "depozyt_leki")
     if not result:
         current_app.logger.warning("[psych-raport] sekcja_depozyt_leki → fallback")
@@ -574,7 +574,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "diagnozy")
     if not result:
         return {

@@ -2717,7 +2717,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=1500)
 
     if not raw:
         logger.warning("[ankieta] Brak danych od AI")
@@ -3090,7 +3090,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=1500)
     if not raw:
         return None
 
@@ -3292,7 +3292,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=1500)
     if not raw:
         logger.warning("[karta-rpg] Brak odpowiedzi od AI")
         return None
@@ -4275,8 +4275,8 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    # max_tokens=3000 było za mało dla pełnego JSON gry — zwiększone do 5000
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=5000)
+    # max_tokens=2500 — zmniejszone o połowę dla uniknięcia błędów parsowania
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=2500)
     if not raw:
         logger.warning("[gra] Brak odpowiedzi od AI")
         return None
@@ -4744,6 +4744,12 @@ def build_zwykly_section(
                 session_vars.get("USER_GENDER", "patient"),
                 test_mode=test_mode,
             )
+        if not isinstance(r_res, dict):
+            logger.error(
+                "[zwykly] Raport błąd: build_raport zwrócił %s zamiast dict",
+                type(r_res),
+            )
+            r_res = {}
         raport_pdf = r_res.get("raport_pdf")
         psych_photo_1 = r_res.get("psych_photo_1")
         psych_photo_2 = r_res.get("psych_photo_2")

@@ -53,6 +53,13 @@ from core.job_runner import run_pipeline_async, build_section_order
 
 app = Flask(__name__)
 
+
+# ── Health check dla GAS ────────────────────────────────────────────────────
+@app.route("/", methods=["GET"])
+def health_check():
+    return "System operacyjny Tyler v6: Aktywny", 200
+
+
 # ── Globalny licznik aktywnych pipeline'ów ────────────────────────────────────
 import threading as _threading
 
@@ -493,9 +500,29 @@ def _strip_html_to_text(html_value: str) -> str:
     return html.unescape(text).strip()
 
 
+def _file_exists_in_dir(dir_path: str, filename: str) -> bool:
+    """Sprawdza rekursywnie, czy plik istnieje w katalogu."""
+    for root, dirs, files in os.walk(dir_path):
+        if filename in files:
+            return True
+    return False
+
+
 def _upload_drive_item(item: dict, folder_id: str) -> bool:
     if not isinstance(item, dict) or not item.get("base64") or not item.get("filename"):
         return False
+
+    # ── Pomiń pliki z katalogów media/ i images/ (duplikacja) ──────────────────
+    filename = item["filename"]
+    if _file_exists_in_dir("media", filename) or _file_exists_in_dir(
+        "images", filename
+    ):
+        app.logger.info(
+            "[drive] Pomijam zapis na Drive: %s (istnieje w media/ lub images/)",
+            filename,
+        )
+        return False
+
     upload_result = upload_file_to_drive(
         item["base64"],
         item["filename"],
@@ -1040,9 +1067,11 @@ def webhook():
     else:
         requested_sections = []
 
-        if contains_keyword or in_history_status == "tak":
+        if (contains_keyword and not contains_keyword3) or in_history_status == "tak":
             requested_sections.append("zwykly")
-            logger.log_decision("zwykly", "known sender or keyword", "dodano")
+            logger.log_decision(
+                "zwykly", "known sender or keyword (but not keyword3)", "dodano"
+            )
 
         if wants_smierc:
             requested_sections.append("smierc")
