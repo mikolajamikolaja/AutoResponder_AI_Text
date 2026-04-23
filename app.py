@@ -36,7 +36,11 @@ import urllib.parse
 from flask import Flask, request, jsonify, current_app
 import requests as http_requests
 
-from drive_utils import upload_file_to_drive, update_sheet_with_data, save_to_history_sheet
+from drive_utils import (
+    upload_file_to_drive,
+    update_sheet_with_data,
+    save_to_history_sheet,
+)
 from core.logging_reporter import init_logger, get_logger
 
 # OPTYMALIZACJA PAMIĘCI: responders ładowane lazy (przy pierwszym żądaniu),
@@ -51,18 +55,22 @@ app = Flask(__name__)
 
 # ── Globalny licznik aktywnych pipeline'ów ────────────────────────────────────
 import threading as _threading
-_pipeline_lock   = _threading.Lock()
+
+_pipeline_lock = _threading.Lock()
 _active_pipelines = 0
+
 
 def _pipeline_start():
     global _active_pipelines
     with _pipeline_lock:
         _active_pipelines += 1
 
+
 def _pipeline_done():
     global _active_pipelines
     with _pipeline_lock:
         _active_pipelines = max(0, _active_pipelines - 1)
+
 
 # OPTYMALIZACJA: warmup HF usunięty ze startu serwera.
 # hf_tokens.warmup() wywoływane lazy przy pierwszym żądaniu wymagającym tokenu.
@@ -72,6 +80,7 @@ def _pipeline_done():
 def _lazy_responder(module_path: str, fn_name: str):
     """Importuje responder na żądanie — nie trzyma wszystkich w RAM od startu."""
     import importlib
+
     mod = importlib.import_module(module_path)
     return getattr(mod, fn_name)
 
@@ -92,9 +101,9 @@ def _get_valid_access_token() -> str:
     Zwraca ważny Gmail access_token.
     Jeśli wygasł — odświeża przez refresh_token.
     """
-    access_token  = os.getenv("GMAIL_ACCESS_TOKEN", "").strip()
+    access_token = os.getenv("GMAIL_ACCESS_TOKEN", "").strip()
     refresh_token = os.getenv("GMAIL_REFRESH_TOKEN", "").strip()
-    client_id     = os.getenv("GMAIL_CLIENT_ID", "").strip()
+    client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
 
     if access_token:
@@ -111,7 +120,8 @@ def _get_valid_access_token() -> str:
                 if "gmail.send" not in granted:
                     app.logger.error(
                         "[oauth] ⚠ access_token nie ma scope gmail.send! "
-                        "Wejdź na /oauth/init i autoryzuj ponownie. Scope: %s", granted
+                        "Wejdź na /oauth/init i autoryzuj ponownie. Scope: %s",
+                        granted,
                     )
                     raise RuntimeError(
                         "GMAIL_ACCESS_TOKEN nie ma scope gmail.send. "
@@ -140,10 +150,10 @@ def _get_valid_access_token() -> str:
         r2 = http_requests.post(
             "https://oauth2.googleapis.com/token",
             data={
-                "client_id":     client_id,
+                "client_id": client_id,
                 "client_secret": client_secret,
                 "refresh_token": refresh_token,
-                "grant_type":    "refresh_token",
+                "grant_type": "refresh_token",
             },
             timeout=15,
         )
@@ -171,27 +181,34 @@ def _get_valid_access_token() -> str:
 # OAUTH ENDPOINTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.route("/oauth/init", methods=["GET"])
 def oauth_init():
-    client_id    = os.getenv("GMAIL_CLIENT_ID", "").strip()
+    client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     redirect_uri = request.url_root.rstrip("/") + "/oauth/callback"
 
     if not client_id:
-        return "<h2>Błąd:</h2><p>Brak GMAIL_CLIENT_ID w zmiennych środowiskowych Render.</p>", 500
+        return (
+            "<h2>Błąd:</h2><p>Brak GMAIL_CLIENT_ID w zmiennych środowiskowych Render.</p>",
+            500,
+        )
 
     params = {
-        "client_id":     client_id,
-        "redirect_uri":  redirect_uri,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope":         " ".join(REQUIRED_OAUTH_SCOPES),
-        "access_type":   "offline",
-        "prompt":        "consent",
+        "scope": " ".join(REQUIRED_OAUTH_SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
     }
 
-    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(
+        params
+    )
     scope_items = "".join(f"<li><code>{s}</code></li>" for s in REQUIRED_OAUTH_SCOPES)
 
-    return f"""
+    return (
+        f"""
     <html><head><title>OAuth Init</title></head>
     <body style="font-family:monospace;padding:40px;max-width:900px">
     <h2>Autoryzacja Gmail OAuth 2.0</h2>
@@ -208,7 +225,9 @@ def oauth_init():
     <p style="color:red"><strong>Ważne:</strong> Na ekranie Google kliknij
     "Zezwól" na <em>wszystkie</em> uprawnienia.</p>
     </body></html>
-    """, 200
+    """,
+        200,
+    )
 
 
 @app.route("/oauth/callback", methods=["GET"])
@@ -219,11 +238,14 @@ def oauth_callback():
 
     code = request.args.get("code")
     if not code:
-        return "<p>Brak kodu autoryzacyjnego. Wróć do <a href='/oauth/init'>/oauth/init</a>.</p>", 400
+        return (
+            "<p>Brak kodu autoryzacyjnego. Wróć do <a href='/oauth/init'>/oauth/init</a>.</p>",
+            400,
+        )
 
-    client_id     = os.getenv("GMAIL_CLIENT_ID", "").strip()
+    client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
-    redirect_uri  = request.url_root.rstrip("/") + "/oauth/callback"
+    redirect_uri = request.url_root.rstrip("/") + "/oauth/callback"
 
     if not client_id or not client_secret:
         return "<p>Brak GMAIL_CLIENT_ID lub GMAIL_CLIENT_SECRET w env.</p>", 500
@@ -232,11 +254,11 @@ def oauth_callback():
         resp = http_requests.post(
             "https://oauth2.googleapis.com/token",
             data={
-                "client_id":     client_id,
+                "client_id": client_id,
                 "client_secret": client_secret,
-                "code":          code,
-                "grant_type":    "authorization_code",
-                "redirect_uri":  redirect_uri,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": redirect_uri,
             },
             timeout=15,
         )
@@ -246,19 +268,20 @@ def oauth_callback():
         app.logger.error("[oauth] Błąd wymiany kodu: %s", e)
         return f"<h2>Błąd wymiany kodu:</h2><pre>{e}</pre>", 500
 
-    access_token  = tokens.get("access_token", "BRAK")
+    access_token = tokens.get("access_token", "BRAK")
     refresh_token = tokens.get("refresh_token", "")
     scope_granted = tokens.get("scope", "")
-    expires_in    = tokens.get("expires_in", "?")
+    expires_in = tokens.get("expires_in", "?")
 
     app.logger.info("[oauth] Tokeny uzyskane — scope: %s", scope_granted)
 
     missing = [s for s in REQUIRED_OAUTH_SCOPES if s not in scope_granted]
     scope_status_html = (
         "<p style='color:green'>✅ Wszystkie scope'y przyznane.</p>"
-        if not missing else
-        "<p style='color:red'>⚠️ Brakujące scope'y: " + ", ".join(missing) +
-        ". <a href='/oauth/init'>Autoryzuj ponownie</a>.</p>"
+        if not missing
+        else "<p style='color:red'>⚠️ Brakujące scope'y: "
+        + ", ".join(missing)
+        + ". <a href='/oauth/init'>Autoryzuj ponownie</a>.</p>"
     )
 
     refresh_warning = ""
@@ -272,7 +295,8 @@ def oauth_callback():
         """
         refresh_token = "(nie zwrócony przez Google — uruchom /oauth/init ponownie)"
 
-    return f"""
+    return (
+        f"""
     <html><head><title>OAuth OK</title></head>
     <body style="font-family:monospace;padding:40px;max-width:900px">
     <h2>✅ OAuth zakończony</h2>
@@ -304,17 +328,19 @@ def oauth_callback():
     <hr>
     <p><a href="/oauth/status">➜ Sprawdź status tokenów</a></p>
     </body></html>
-    """, 200
+    """,
+        200,
+    )
 
 
 @app.route("/oauth/status", methods=["GET"])
 def oauth_status():
-    access_token  = os.getenv("GMAIL_ACCESS_TOKEN", "").strip()
+    access_token = os.getenv("GMAIL_ACCESS_TOKEN", "").strip()
     refresh_token = os.getenv("GMAIL_REFRESH_TOKEN", "").strip()
-    client_id     = os.getenv("GMAIL_CLIENT_ID", "").strip()
+    client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
 
-    token_info  = {}
+    token_info = {}
     token_error = None
     if access_token:
         try:
@@ -346,10 +372,10 @@ def oauth_status():
             r2 = http_requests.post(
                 "https://oauth2.googleapis.com/token",
                 data={
-                    "client_id":     client_id,
+                    "client_id": client_id,
                     "client_secret": client_secret,
                     "refresh_token": refresh_token,
-                    "grant_type":    "refresh_token",
+                    "grant_type": "refresh_token",
                 },
                 timeout=15,
             )
@@ -381,10 +407,13 @@ def oauth_status():
         f"<td style='padding:6px 12px'>{'✅ ustawiony' if val else '❌ BRAK'}</td></tr>"
     )
     error_html = (
-        f"<p style='color:red'>⚠ Błąd tokeninfo: {token_error}</p>" if token_error else ""
+        f"<p style='color:red'>⚠ Błąd tokeninfo: {token_error}</p>"
+        if token_error
+        else ""
     )
 
-    return f"""
+    return (
+        f"""
     <html><head><title>OAuth Status</title></head>
     <body style="font-family:monospace;padding:40px;max-width:900px">
     <h2>🔍 Status OAuth Tokenów</h2>
@@ -419,31 +448,42 @@ def oauth_status():
     <p><a href="/oauth/init">➜ Autoryzuj ponownie</a></p>
     <p><a href="/admin/hf-status">➜ Stan tokenów HF (FLUX)</a></p>
     </body></html>
-    """, 200
+    """,
+        200,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DIAGNOSTYKA TOKENÓW HF (FLUX)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.route("/admin/hf-status")
 def hf_status():
-    return jsonify({
-        "warmed_up": hf_tokens._warmed_up,
-        "tokens":    hf_tokens.status_report(),
-    })
+    return jsonify(
+        {
+            "warmed_up": hf_tokens._warmed_up,
+            "tokens": hf_tokens.status_report(),
+        }
+    )
 
 
 @app.route("/admin/hf-reset", methods=["POST"])
 def hf_reset():
     # force_reset ignoruje cooldown MIN_WARMUP_INTERVAL — używaj gdy tokeny faktycznie odnowiono
     hf_tokens.force_reset()
-    return jsonify({"status": "ok", "message": "Tokeny zresetowane — warm-up przy następnym żądaniu (bez cooldown)"})
+    return jsonify(
+        {
+            "status": "ok",
+            "message": "Tokeny zresetowane — warm-up przy następnym żądaniu (bez cooldown)",
+        }
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # POMOCNIKI
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _strip_html_to_text(html_value: str) -> str:
     if not html_value:
@@ -475,9 +515,23 @@ def _upload_drive_section_files(section_data: dict, folder_id: str) -> list:
         return uploads
 
     single_fields = [
-        "pdf", "emoticon", "cv_pdf", "log_psych", "ankieta_html", "ankieta_pdf",
-        "horoskop_pdf", "karta_rpg_pdf", "raport_pdf", "debug_txt", "explanation_txt",
-        "plakat_svg", "gra_html", "image", "image2", "prompt1_txt", "prompt2_txt",
+        "pdf",
+        "emoticon",
+        "cv_pdf",
+        "log_psych",
+        "ankieta_html",
+        "ankieta_pdf",
+        "horoskop_pdf",
+        "karta_rpg_pdf",
+        "raport_pdf",
+        "debug_txt",
+        "explanation_txt",
+        "plakat_svg",
+        "gra_html",
+        "image",
+        "image2",
+        "prompt1_txt",
+        "prompt2_txt",
     ]
     list_fields = ["triptych", "images", "videos", "docs", "docx_list"]
 
@@ -503,7 +557,9 @@ def _format_log_entry_data(data: object) -> list:
         lines = []
         for key, value in data.items():
             if isinstance(value, (dict, list)):
-                lines.append(f"  {key}: {json.dumps(value, ensure_ascii=False, indent=2)}")
+                lines.append(
+                    f"  {key}: {json.dumps(value, ensure_ascii=False, indent=2)}"
+                )
             else:
                 lines.append(f"  {key}: {value}")
         return lines
@@ -529,20 +585,20 @@ def _build_log_svg_content(logger) -> str:
             "Brak danych logowania</text></svg>"
         )
 
-    input_data      = next((e for e in entries if e["type"] == "INPUT"), None)
-    api_calls       = [e for e in entries if e["type"] == "API_CALL"]
+    input_data = next((e for e in entries if e["type"] == "INPUT"), None)
+    api_calls = [e for e in entries if e["type"] == "API_CALL"]
     section_results = [e for e in entries if e["type"] == "SECTION_RESULT"]
-    decisions       = [e for e in entries if e["type"] == "DECISION"]
+    decisions = [e for e in entries if e["type"] == "DECISION"]
 
-    deepseek_all     = [e for e in api_calls if e["data"].get("api") == "deepseek"]
+    deepseek_all = [e for e in api_calls if e["data"].get("api") == "deepseek"]
     deepseek_success = sum(1 for e in deepseek_all if e["data"].get("success"))
-    deepseek_fail    = len(deepseek_all) - deepseek_success
+    deepseek_fail = len(deepseek_all) - deepseek_success
 
-    sections_ok   = sum(1 for e in section_results if e["data"].get("success"))
+    sections_ok = sum(1 for e in section_results if e["data"].get("success"))
     sections_fail = len(section_results) - sections_ok
 
-    first_ts   = entries[0].get("timestamp", 0)
-    last_ts    = entries[-1].get("timestamp", 0)
+    first_ts = entries[0].get("timestamp", 0)
+    last_ts = entries[-1].get("timestamp", 0)
     total_time = last_ts - first_ts
 
     def escape_xml(text):
@@ -558,7 +614,7 @@ def _build_log_svg_content(logger) -> str:
 
     num_timeline_items = min(len(entries), 15)
     height = 200 + len(section_results) * 30 + num_timeline_items * 20 + 200
-    width  = 1200
+    width = 1200
 
     svg = f"""<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">
   <defs>
@@ -583,7 +639,7 @@ def _build_log_svg_content(logger) -> str:
 """
     y_pos = 60
 
-    sender_disp  = input_data["data"].get("sender", "?") if input_data else "?"
+    sender_disp = input_data["data"].get("sender", "?") if input_data else "?"
     subject_disp = input_data["data"].get("subject", "?") if input_data else "?"
     body_preview = (
         (input_data["data"].get("body_preview", "")[:35] + "...") if input_data else ""
@@ -601,7 +657,7 @@ def _build_log_svg_content(logger) -> str:
   <text x="30" y="{y_pos+20}" class="title">🎯 DECYZJE: {len(decisions)}</text>
 """
         for i, decision in enumerate(decisions[:4]):
-            result        = decision["data"].get("result", "?")
+            result = decision["data"].get("result", "?")
             decision_text = decision["data"].get("decision", "N/A")[:25]
             svg += f'  <text x="30" y="{y_pos+40+i*18}" class="text">• {decision_text} → {result}</text>\n'
         y_pos += 70 + min(len(decisions), 4) * 20
@@ -618,10 +674,10 @@ def _build_log_svg_content(logger) -> str:
   <text x="30" y="{y_pos+20}" class="title">⏱️ HARMONOGRAM PIERWSZYCH {num_timeline_items} ETAPÓW</text>
 """
     for i, entry in enumerate(entries[:num_timeline_items]):
-        ts         = entry.get("timestamp", 0)
+        ts = entry.get("timestamp", 0)
         entry_type = entry["type"][:18]
-        delta      = ts - first_ts
-        pct        = (delta / total_time * 100) if total_time > 0 else 0
+        delta = ts - first_ts
+        pct = (delta / total_time * 100) if total_time > 0 else 0
         svg += f'  <rect x="30" y="{y_pos+35+i*20}" width="{pct*8}" height="16" fill="#ffc107" opacity="0.6" stroke="none"/>\n'
         svg += f'  <text x="40" y="{y_pos+47+i*20}" class="text">+{delta:5.2f}s [{entry_type:18s}]</text>\n'
     y_pos += 80 + num_timeline_items * 20
@@ -634,7 +690,7 @@ def _build_log_svg_content(logger) -> str:
 """
     for i, (section_name, success) in enumerate(section_details):
         box_class = "success" if success else "error"
-        status    = "✓" if success else "✗"
+        status = "✓" if success else "✗"
         svg += f'  <rect x="30" y="{y_pos+35+i*28}" width="1140" height="24" class="{box_class}"/>\n'
         svg += f'  <text x="40" y="{y_pos+53+i*28}" class="text">{status} {(section_name or "UNKNOWN").upper()}</text>\n'
 
@@ -648,21 +704,22 @@ def _build_log_svg_content(logger) -> str:
 
 
 def _build_log_txt_content(logger, response_data) -> str:
-    api_calls        = [e for e in logger.entries if e["type"] == "API_CALL"]
-    deepseek_calls   = [e for e in api_calls if e["data"].get("api") == "deepseek"]
+    api_calls = [e for e in logger.entries if e["type"] == "API_CALL"]
+    deepseek_calls = [e for e in api_calls if e["data"].get("api") == "deepseek"]
     deepseek_success = sum(1 for e in deepseek_calls if e["data"].get("success"))
-    deepseek_total   = len(deepseek_calls)
+    deepseek_total = len(deepseek_calls)
 
     nouns_dict = response_data.get("zwykly", {}).get("nouns_dict", {})
     detected_nouns = [
-        v for v in (nouns_dict.values() if isinstance(nouns_dict, dict) else [])
+        v
+        for v in (nouns_dict.values() if isinstance(nouns_dict, dict) else [])
         if isinstance(v, str) and v.strip()
     ]
 
-    section_results  = [e for e in logger.entries if e["type"] == "SECTION_RESULT"]
+    section_results = [e for e in logger.entries if e["type"] == "SECTION_RESULT"]
     sections_success = sum(1 for e in section_results if e["data"].get("success"))
-    sections_total   = len(section_results)
-    keywords_used    = logger.metadata.get("keywords_used", False)
+    sections_total = len(section_results)
+    keywords_used = logger.metadata.get("keywords_used", False)
 
     lines = []
     lines.append("=" * 88)
@@ -675,15 +732,21 @@ def _build_log_txt_content(logger, response_data) -> str:
     lines.append("0. METADANE SESJI")
     keyword_labels = []
     for kw in [
-        "contains_keyword", "contains_keyword1", "contains_keyword2",
-        "contains_keyword3", "contains_keyword4", "contains_flaga_test",
+        "contains_keyword",
+        "contains_keyword1",
+        "contains_keyword2",
+        "contains_keyword3",
+        "contains_keyword4",
+        "contains_flaga_test",
         "contains_keyword_joker",
     ]:
         if logger.metadata.get(kw):
             keyword_labels.append(kw.upper())
     lines.append(f"- Status historia: {logger.metadata.get('in_history', '?')}")
     lines.append(f"- Status requiem:  {logger.metadata.get('in_requiem', '?')}")
-    lines.append(f"- Słowa kluczowe:  {', '.join(keyword_labels) if keyword_labels else 'NIE'}")
+    lines.append(
+        f"- Słowa kluczowe:  {', '.join(keyword_labels) if keyword_labels else 'NIE'}"
+    )
     if keywords_used:
         lines.append("- ⓘ KEYWORDS_TEST aktywny — FLUX wyłączony")
     lines.append("")
@@ -691,7 +754,9 @@ def _build_log_txt_content(logger, response_data) -> str:
     lines.append("1. API CALLS")
     if deepseek_total > 0:
         acc = deepseek_success / deepseek_total * 100
-        lines.append(f"- DeepSeek: {deepseek_total} prób | {deepseek_success} skutecznych ({acc:.1f}%)")
+        lines.append(
+            f"- DeepSeek: {deepseek_total} prób | {deepseek_success} skutecznych ({acc:.1f}%)"
+        )
     else:
         lines.append("- DeepSeek: 0 prób")
     lines.append(f"- RAZEM: {len(api_calls)}")
@@ -710,15 +775,21 @@ def _build_log_txt_content(logger, response_data) -> str:
         if not isinstance(section_data, dict):
             continue
         has_html = bool(section_data.get("reply_html", "").strip())
-        has_att  = bool(section_data.get("docx_list") or section_data.get("images"))
+        has_att = bool(section_data.get("docx_list") or section_data.get("images"))
         status = "✓" if (has_html or has_att) else "✗"
         lines.append(f"  {status} {section_name.upper()}")
         if has_html:
-            lines.append(f"      - HTML: {len(section_data.get('reply_html', ''))} znaków")
-        docs  = section_data.get("docx_list", [])
-        imgs  = section_data.get("images", [])
-        names = [d.get("filename") for d in docs if isinstance(d, dict) and d.get("filename")]
-        names += [d.get("filename") for d in imgs if isinstance(d, dict) and d.get("filename")]
+            lines.append(
+                f"      - HTML: {len(section_data.get('reply_html', ''))} znaków"
+            )
+        docs = section_data.get("docx_list", [])
+        imgs = section_data.get("images", [])
+        names = [
+            d.get("filename") for d in docs if isinstance(d, dict) and d.get("filename")
+        ]
+        names += [
+            d.get("filename") for d in imgs if isinstance(d, dict) and d.get("filename")
+        ]
         if names:
             lines.append(f"      - Pliki: {', '.join(names)}")
     lines.append("")
@@ -767,6 +838,7 @@ def _build_log_txt_content(logger, response_data) -> str:
 # STATUS — GAS sprawdza przed wysłaniem czy Render jest wolny
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.route("/status", methods=["GET"])
 def status():
     """
@@ -778,15 +850,21 @@ def status():
     """
     busy = _active_pipelines > 0
     app.logger.info("[status] active=%d busy=%s", _active_pipelines, busy)
-    return jsonify({
-        "busy":   busy,
-        "active": _active_pipelines,
-    }), 200
+    return (
+        jsonify(
+            {
+                "busy": busy,
+                "active": _active_pipelines,
+            }
+        ),
+        200,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # WEBHOOK GŁÓWNY — natychmiastowe 200, pipeline w daemon thread
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -801,32 +879,43 @@ def webhook():
         logger.log_decision("empty_body_check", "body.strip() == ''", False)
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
 
-    sender      = data.get("sender", "")
+    sender = data.get("sender", "")
     sender_name = data.get("sender_name", "")
-    subject     = data.get("subject", "")
-    message_id  = data.get("msg_id", "") or data.get("message_id", "")
+    subject = data.get("subject", "")
+    message_id = data.get("msg_id", "") or data.get("message_id", "")
     logger.log_input(sender, subject, body, sender_name)
 
     # ── Ochrona przed pętlą (admin email) ────────────────────────────────────
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     if admin_email and sender.strip().lower() == admin_email:
-        logger.log_decision("admin_email_block", f"sender == ADMIN_EMAIL ({sender})", True)
-        app.logger.warning("[AUTORESPONDER] 🔒 ZABLOKOWANO: Wiadomość od ADMIN_EMAIL (%s)", sender)
-        return jsonify({
-            "status": "blocked",
-            "reason": "sender_is_admin_email",
-            "sender": sender,
-        }), 200
+        logger.log_decision(
+            "admin_email_block", f"sender == ADMIN_EMAIL ({sender})", True
+        )
+        app.logger.warning(
+            "[AUTORESPONDER] 🔒 ZABLOKOWANO: Wiadomość od ADMIN_EMAIL (%s)", sender
+        )
+        return (
+            jsonify(
+                {
+                    "status": "blocked",
+                    "reason": "sender_is_admin_email",
+                    "sender": sender,
+                }
+            ),
+            200,
+        )
 
     # ── Parametry requestu ────────────────────────────────────────────────────
-    previous_body    = data.get("previous_body")    or None
+    previous_body = data.get("previous_body") or None
     previous_subject = data.get("previous_subject") or None
-    req_attachments  = data.get("attachments")      or []
-    save_to_drive    = bool(data.get("save_to_drive"))
-    test_mode        = bool(data.get("test_mode"))
-    disable_flux     = bool(data.get("disable_flux"))
+    req_attachments = data.get("attachments") or []
+    save_to_drive = bool(data.get("save_to_drive"))
+    test_mode = bool(data.get("test_mode"))
+    disable_flux = bool(data.get("disable_flux"))
     retry_responders = data.get("retry_responders") or []
-    attempt_count    = int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
+    attempt_count = (
+        int(data.get("attempt_count", 1)) if data.get("attempt_count") else 1
+    )
     skip_save_to_history = bool(data.get("skip_save_to_history"))
 
     keywords_used = False
@@ -836,15 +925,20 @@ def webhook():
         logger.log_decision("disable_flux", "disable_flux=True", "FLUX wyłączony")
 
     # ── Google Drive / Sheets ─────────────────────────────────────────────────
-    drive_folder_id  = os.getenv("DRIVE_FOLDER_ID")
-    smierc_sheet_id  = os.getenv("SMIERC_HISTORY_SHEET_ID")
+    drive_folder_id = os.getenv("DRIVE_FOLDER_ID")
+    smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
     history_sheet_id = os.getenv("HISTORY_SHEET_ID")
 
     # ── Sprawdzenie statusu użytkownika ───────────────────────────────────────
     from drive_utils import check_user_in_sheet
+
     if not test_mode:
-        in_history_status = "tak" if check_user_in_sheet(history_sheet_id, sender) else "nie"
-        in_requiem_status = "tak" if check_user_in_sheet(smierc_sheet_id, sender)  else "nie"
+        in_history_status = (
+            "tak" if check_user_in_sheet(history_sheet_id, sender) else "nie"
+        )
+        in_requiem_status = (
+            "tak" if check_user_in_sheet(smierc_sheet_id, sender) else "nie"
+        )
     else:
         in_history_status = "test_mode"
         in_requiem_status = "test_mode"
@@ -853,81 +947,90 @@ def webhook():
     logger.set_metadata("in_requiem", in_requiem_status)
 
     # ── Flagi żądania ─────────────────────────────────────────────────────────
-    wants_scrabble      = bool(data.get("wants_scrabble"))
-    wants_biznes        = bool(data.get("wants_biznes"))
-    wants_analiza       = bool(data.get("wants_analiza"))
-    wants_emocje        = bool(data.get("wants_emocje"))
+    wants_scrabble = bool(data.get("wants_scrabble"))
+    wants_biznes = bool(data.get("wants_biznes"))
+    wants_analiza = bool(data.get("wants_analiza"))
+    wants_emocje = bool(data.get("wants_emocje"))
     wants_generator_pdf = bool(data.get("wants_generator_pdf"))
-    wants_smierc        = bool(data.get("wants_smierc"))
-    wants_text_reply    = bool(data.get("wants_text_reply", True))
-    wants_nawiazanie    = bool(previous_body or previous_subject)
-    is_retry            = bool(retry_responders)
+    wants_smierc = bool(data.get("wants_smierc"))
+    wants_text_reply = bool(data.get("wants_text_reply", True))
+    wants_nawiazanie = bool(previous_body or previous_subject)
+    is_retry = bool(retry_responders)
 
-    contains_keyword       = bool(data.get("contains_keyword"))
-    contains_keyword1      = bool(data.get("contains_keyword1"))
-    contains_keyword2      = bool(data.get("contains_keyword2"))
-    contains_keyword3      = bool(data.get("contains_keyword3"))
-    contains_keyword4      = bool(data.get("contains_keyword4"))
-    contains_flaga_test    = bool(data.get("contains_flaga_test"))
+    contains_keyword = bool(data.get("contains_keyword"))
+    contains_keyword1 = bool(data.get("contains_keyword1"))
+    contains_keyword2 = bool(data.get("contains_keyword2"))
+    contains_keyword3 = bool(data.get("contains_keyword3"))
+    contains_keyword4 = bool(data.get("contains_keyword4"))
+    contains_flaga_test = bool(data.get("contains_flaga_test"))
     contains_keyword_joker = bool(data.get("contains_keyword_joker"))
-    matched_keywords       = data.get("matched_keywords") or {}
+    matched_keywords = data.get("matched_keywords") or {}
 
-    has_any_keyword = any([
-        contains_keyword, contains_keyword1, contains_keyword2,
-        contains_keyword3, contains_keyword4, contains_keyword_joker,
-    ])
+    has_any_keyword = any(
+        [
+            contains_keyword,
+            contains_keyword1,
+            contains_keyword2,
+            contains_keyword3,
+            contains_keyword4,
+            contains_keyword_joker,
+        ]
+    )
 
     for meta_key, meta_val in [
-        ("has_any_keyword",        has_any_keyword),
-        ("contains_keyword",       contains_keyword),
-        ("contains_keyword1",      contains_keyword1),
-        ("contains_keyword2",      contains_keyword2),
-        ("contains_keyword3",      contains_keyword3),
-        ("contains_keyword4",      contains_keyword4),
-        ("contains_flaga_test",    contains_flaga_test),
+        ("has_any_keyword", has_any_keyword),
+        ("contains_keyword", contains_keyword),
+        ("contains_keyword1", contains_keyword1),
+        ("contains_keyword2", contains_keyword2),
+        ("contains_keyword3", contains_keyword3),
+        ("contains_keyword4", contains_keyword4),
+        ("contains_flaga_test", contains_flaga_test),
         ("contains_keyword_joker", contains_keyword_joker),
     ]:
         logger.set_metadata(meta_key, meta_val)
     if matched_keywords:
         logger.set_metadata("matched_keywords", matched_keywords)
 
-    logger.log_variables_detected({
-        "sender":               sender,
-        "sender_name":          sender_name,
-        "has_previous_body":    bool(previous_body),
-        "num_attachments":      len(req_attachments),
-        "save_to_drive":        save_to_drive,
-        "test_mode":            test_mode,
-        "disable_flux":         disable_flux,
-        "contains_keyword":     contains_keyword,
-        "contains_keyword1":    contains_keyword1,
-        "contains_keyword2":    contains_keyword2,
-        "contains_keyword3":    contains_keyword3,
-        "contains_keyword4":    contains_keyword4,
-        "contains_flaga_test":  contains_flaga_test,
-        "contains_keyword_joker": contains_keyword_joker,
-        "wants_smierc":         wants_smierc,
-        "wants_analiza":        wants_analiza,
-        "wants_biznes":         wants_biznes,
-        "wants_scrabble":       wants_scrabble,
-        "wants_emocje":         wants_emocje,
-        "wants_generator_pdf":  wants_generator_pdf,
-        "is_retry":             is_retry,
-        "attempt_count":        attempt_count,
-        "skip_save_to_history": skip_save_to_history,
-    })
+    logger.log_variables_detected(
+        {
+            "sender": sender,
+            "sender_name": sender_name,
+            "has_previous_body": bool(previous_body),
+            "num_attachments": len(req_attachments),
+            "save_to_drive": save_to_drive,
+            "test_mode": test_mode,
+            "disable_flux": disable_flux,
+            "contains_keyword": contains_keyword,
+            "contains_keyword1": contains_keyword1,
+            "contains_keyword2": contains_keyword2,
+            "contains_keyword3": contains_keyword3,
+            "contains_keyword4": contains_keyword4,
+            "contains_flaga_test": contains_flaga_test,
+            "contains_keyword_joker": contains_keyword_joker,
+            "wants_smierc": wants_smierc,
+            "wants_analiza": wants_analiza,
+            "wants_biznes": wants_biznes,
+            "wants_scrabble": wants_scrabble,
+            "wants_emocje": wants_emocje,
+            "wants_generator_pdf": wants_generator_pdf,
+            "is_retry": is_retry,
+            "attempt_count": attempt_count,
+            "skip_save_to_history": skip_save_to_history,
+        }
+    )
 
     flask_app = app
 
     def run(fn, *args, **kwargs_inner):
         import gc
+
         with flask_app.app_context():
             result = fn(*args, **kwargs_inner)
             gc.collect()
             return result
 
     # ── Dane śmierci ──────────────────────────────────────────────────────────
-    smierc_etap     = int(data.get("etap", 1))
+    smierc_etap = int(data.get("etap", 1))
     smierc_data_str = data.get("data_smierci", "nieznanego dnia")
     smierc_historia = data.get("historia", [])
 
@@ -972,84 +1075,106 @@ def webhook():
     zwykly_attachments = req_attachments if "analiza" not in requested_sections else []
     effective_test_mode = disable_flux or test_mode
 
+    # Logowanie decyzji skip_dociekliwy
+    skip_dociekliwy_flag = "analiza" in requested_sections
+    app.logger.info(
+        "[skip_dociekliwy] Czy 'analiza' w pipeline? %s | skip_dociekliwy=%s | zwykly_attachments: %d",
+        "TAK" if "analiza" in requested_sections else "NIE",
+        skip_dociekliwy_flag,
+        len(zwykly_attachments),
+    )
+
     tasks: dict = {}
 
     for section_key in requested_sections:
 
         if section_key == "zwykly":
-            tasks["zwykly"] = lambda \
-                    _body=body, _prev=previous_body, _sender=sender, \
-                    _sname=sender_name, _att=zwykly_attachments, \
-                    _tm=effective_test_mode, \
-                    _skip=("analiza" in requested_sections): \
-                run(
-                    _lazy_responder('responders.zwykly', 'build_zwykly_section'),
-                    _body, _prev, _sender, _sname,
-                    test_mode=_tm,
-                    attachments=_att,
-                    skip_dociekliwy=_skip,
-                )
+            tasks[
+                "zwykly"
+            ] = lambda _body=body, _prev=previous_body, _sender=sender, _sname=sender_name, _att=zwykly_attachments, _tm=effective_test_mode, _skip=(
+                "analiza" in requested_sections
+            ): run(
+                _lazy_responder("responders.zwykly", "build_zwykly_section"),
+                _body,
+                _prev,
+                _sender,
+                _sname,
+                test_mode=_tm,
+                attachments=_att,
+                skip_dociekliwy=_skip,
+            )
 
         elif section_key == "smierc":
-            tasks["smierc"] = lambda \
-                    _sender=sender, _body=body, \
-                    _etap=smierc_etap, _ds=smierc_data_str, \
-                    _hist=smierc_historia, _tm=effective_test_mode: \
-                run(
-                    _lazy_responder('responders.smierc', 'build_smierc_section'),
-                    sender_email     = _sender,
-                    body             = _body,
-                    etap             = _etap,
-                    data_smierci_str = _ds,
-                    historia         = _hist,
-                    test_mode        = _tm,
+            tasks["smierc"] = (
+                lambda _sender=sender, _body=body, _etap=smierc_etap, _ds=smierc_data_str, _hist=smierc_historia, _tm=effective_test_mode: run(
+                    _lazy_responder("responders.smierc", "build_smierc_section"),
+                    sender_email=_sender,
+                    body=_body,
+                    etap=_etap,
+                    data_smierci_str=_ds,
+                    historia=_hist,
+                    test_mode=_tm,
                 )
+            )
 
         elif section_key == "analiza":
-            tasks["analiza"] = lambda \
-                    _body=body, _att=req_attachments, \
-                    _sender=sender, _sname=sender_name, \
-                    _tm=effective_test_mode: \
-                run(
-                    _lazy_responder('responders.dociekliwy', 'build_dociekliwy_section'),
-                    _body, _att,
-                    sender      = _sender,
-                    sender_name = _sname,
-                    test_mode   = _tm,
+            tasks["analiza"] = (
+                lambda _body=body, _att=req_attachments, _sender=sender, _sname=sender_name, _tm=effective_test_mode: run(
+                    _lazy_responder(
+                        "responders.dociekliwy", "build_dociekliwy_section"
+                    ),
+                    _body,
+                    _att,
+                    sender=_sender,
+                    sender_name=_sname,
+                    test_mode=_tm,
                 )
+            )
 
         elif section_key == "nawiazanie":
-            tasks["nawiazanie"] = lambda \
-                    _body=body, _prev=previous_body, \
-                    _prevs=previous_subject, _sender=sender, \
-                    _sname=sender_name: \
-                run(
-                    _lazy_responder('responders.nawiazanie', 'build_nawiazanie_section'),
-                    body             = _body,
-                    previous_body    = _prev,
-                    previous_subject = _prevs,
-                    sender           = _sender,
-                    sender_name      = _sname,
+            tasks["nawiazanie"] = (
+                lambda _body=body, _prev=previous_body, _prevs=previous_subject, _sender=sender, _sname=sender_name: run(
+                    _lazy_responder(
+                        "responders.nawiazanie", "build_nawiazanie_section"
+                    ),
+                    body=_body,
+                    previous_body=_prev,
+                    previous_subject=_prevs,
+                    sender=_sender,
+                    sender_name=_sname,
                 )
+            )
 
         elif section_key == "biznes":
-            tasks["biznes"] = lambda _body=body, _sname=sender_name: \
-                run(_lazy_responder('responders.biznes', 'build_biznes_section'),
-                    _body, sender_name=_sname)
+            tasks["biznes"] = lambda _body=body, _sname=sender_name: run(
+                _lazy_responder("responders.biznes", "build_biznes_section"),
+                _body,
+                sender_name=_sname,
+            )
 
         elif section_key == "scrabble":
-            tasks["scrabble"] = lambda _body=body: \
-                run(_lazy_responder('responders.scrabble', 'build_scrabble_section'), _body)
+            tasks["scrabble"] = lambda _body=body: run(
+                _lazy_responder("responders.scrabble", "build_scrabble_section"), _body
+            )
 
         elif section_key == "emocje":
-            tasks["emocje"] = lambda _body=body, _sname=sender_name, _tm=effective_test_mode: \
-                run(_lazy_responder('responders.emocje', 'build_emocje_section'),
-                    _body, sender_name=_sname, test_mode=_tm)
+            tasks["emocje"] = (
+                lambda _body=body, _sname=sender_name, _tm=effective_test_mode: run(
+                    _lazy_responder("responders.emocje", "build_emocje_section"),
+                    _body,
+                    sender_name=_sname,
+                    test_mode=_tm,
+                )
+            )
 
         elif section_key == "generator_pdf":
-            tasks["generator_pdf"] = lambda _body=body, _sname=sender_name: \
-                run(_lazy_responder('responders.generator_pdf', 'build_generator_pdf_section'),
-                    _body, sender_name=_sname)
+            tasks["generator_pdf"] = lambda _body=body, _sname=sender_name: run(
+                _lazy_responder(
+                    "responders.generator_pdf", "build_generator_pdf_section"
+                ),
+                _body,
+                sender_name=_sname,
+            )
 
         else:
             app.logger.warning("[pipeline] Nieznana sekcja ignorowana: %s", section_key)
@@ -1058,13 +1183,20 @@ def webhook():
     if _active_pipelines > 0:
         app.logger.warning(
             "[webhook] 🔒 BUSY — odrzucam message_id=%s sender=%s (active=%d)",
-            message_id, sender, _active_pipelines
+            message_id,
+            sender,
+            _active_pipelines,
         )
-        return jsonify({
-            "status":  "busy",
-            "reason":  "Pipeline already running. Try again later.",
-            "active":  _active_pipelines,
-        }), 503
+        return (
+            jsonify(
+                {
+                    "status": "busy",
+                    "reason": "Pipeline already running. Try again later.",
+                    "active": _active_pipelines,
+                }
+            ),
+            503,
+        )
 
     # ── Zapisz ODEBRANO do Sheets (natychmiast, przed wątkiem) ───────────────
     if history_sheet_id and message_id:
@@ -1075,13 +1207,25 @@ def webhook():
 
     # ── Odpal pipeline w tle — GAS dostaje 200 w < 1s ────────────────────────
     _pipeline_start()
+
     def _pipeline_wrapper():
         try:
             run_pipeline_async(
-                app, data, message_id, tasks, sender, sender_name,
-                previous_subject, drive_folder_id, history_sheet_id,
-                smierc_sheet_id, save_to_drive, skip_save_to_history,
-                logger, wyslij_odpowiedz, zbierz_zalaczniki_z_response,
+                app,
+                data,
+                message_id,
+                tasks,
+                sender,
+                sender_name,
+                previous_subject,
+                drive_folder_id,
+                history_sheet_id,
+                smierc_sheet_id,
+                save_to_drive,
+                skip_save_to_history,
+                logger,
+                wyslij_odpowiedz,
+                zbierz_zalaczniki_z_response,
                 _get_valid_access_token,
             )
         finally:
@@ -1093,19 +1237,27 @@ def webhook():
 
     app.logger.info(
         "[webhook] ✓ Accepted message_id=%s sender=%s sections=%s",
-        message_id, sender, build_section_order(requested_sections)
+        message_id,
+        sender,
+        build_section_order(requested_sections),
     )
 
-    return jsonify({
-        "status":     "accepted",
-        "message_id": message_id,
-        "sections":   build_section_order(requested_sections),
-    }), 200
+    return (
+        jsonify(
+            {
+                "status": "accepted",
+                "message_id": message_id,
+                "sections": build_section_order(requested_sections),
+            }
+        ),
+        200,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # WEBHOOK GIF
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 @app.route("/webhook_gif", methods=["POST"])
 def webhook_gif():
@@ -1113,24 +1265,41 @@ def webhook_gif():
     import gc
     from responders.gif_maker import make_gif
 
-    data     = request.json or {}
+    data = request.json or {}
     png1_b64 = data.get("png1_base64")
     png2_b64 = data.get("png2_base64")
 
     if not png1_b64 and not png2_b64:
         return jsonify({"error": "Brak png1_base64 i png2_base64"}), 400
 
-    app.logger.info("/webhook_gif — odebrano PNG: png1=%s png2=%s", bool(png1_b64), bool(png2_b64))
+    app.logger.info(
+        "/webhook_gif — odebrano PNG: png1=%s png2=%s", bool(png1_b64), bool(png2_b64)
+    )
 
     gif1_b64 = make_gif(png1_b64) if png1_b64 else None
     gif2_b64 = make_gif(png2_b64) if png2_b64 else None
 
-    app.logger.info("/webhook_gif — GIFy: gif1=%s gif2=%s", bool(gif1_b64), bool(gif2_b64))
+    app.logger.info(
+        "/webhook_gif — GIFy: gif1=%s gif2=%s", bool(gif1_b64), bool(gif2_b64)
+    )
 
-    result = jsonify({
-        "gif1": {"base64": gif1_b64, "content_type": "image/gif", "filename": "komiks_ai.gif"},
-        "gif2": {"base64": gif2_b64, "content_type": "image/gif", "filename": "komiks_ai_retro.gif"},
-    }), 200
+    result = (
+        jsonify(
+            {
+                "gif1": {
+                    "base64": gif1_b64,
+                    "content_type": "image/gif",
+                    "filename": "komiks_ai.gif",
+                },
+                "gif2": {
+                    "base64": gif2_b64,
+                    "content_type": "image/gif",
+                    "filename": "komiks_ai_retro.gif",
+                },
+            }
+        ),
+        200,
+    )
     del gif1_b64, gif2_b64, png1_b64, png2_b64
     gc.collect()
     return result

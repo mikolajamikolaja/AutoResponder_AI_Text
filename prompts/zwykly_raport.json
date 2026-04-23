@@ -42,8 +42,8 @@
         "stan_cywilny": "Z emaila lub wywnioskowany z absurdem Monty Pythona. Jeśli brak → '__BRAK__'",
         "numer_ubezpieczenia": "Losowy PL-PSY-XXXXX"
       },
-      "powod_przyjecia": "MINIMUM 15 zdań. KAŻDE zdanie nawiązuje do konkretnego słowa z emaila. Styl: Szwejk + Monty Python. Tyler w podtekście. Jeśli email za krótki → '__BRAK__'",
-      "cytaty_z_przyjecia": "Lista MINIMUM 4 cytatów. Każdy = PARAFRAZA REALNEGO zdania z emaila + komentarz kliniczny MINIMUM 15 zdań w stylu Szwejka. Format: '\"[cytat]\" — Nota kliniczna nr [X]/2026: [komentarz 15+ zdań]'. ZAKAZ cytatu 'Nie pamiętam co napisałem' jeśli nie ma go w emailu. Jeśli email za krótki na 4 cytaty → tyle ile się da, reszta '__BRAK__'"
+      "powod_przyjecia": "MINIMUM 15 zdań. KAŻDE zdanie nawiązuje do konkretnego słowa z emaila. Formalna dokumentacja medyczna z biurokratyczną powagą wobec nonsensu, nihilizm w podtekście. Jeśli email za krótki → '__BRAK__'",
+      "cytaty_z_przyjecia": "Lista MINIMUM 4 cytatów. Każdy = PARAFRAZA REALNEGO zdania z emaila + komentarz kliniczny MINIMUM 15 zdań. Format: '\"[cytat]\" — Nota kliniczna nr [X]/2026: [komentarz 15+ zdań]'. ZAKAZ cytatu 'Nie pamiętam co napisałem' jeśli nie ma go w emailu. ABSOLUTNY ZAKAZ wymieniania w komentarzu jakichkolwiek imion literackich, autorów, postaci ani nazw stylów pisarskich (zakaz: 'Szwejk', 'Monty Python', 'Tyler Durden', 'Fight Club', 'Haszek', 'kafkowski', 'absurdystyczny', 'poczucie humoru', 'styl'). Komentarz kliniczny MUSI brzmieć jak autentyczna nota psychiatryczna — żartobliwość ma wynikać z treści, nie z meta-komentarza. Jeśli email za krótki na 4 cytaty → tyle ile się da, reszta '__BRAK__'"
     },
     "instrukcje": "Powód przyjęcia: min. 15 zdań. Każdy cytat: min. 15 zdań komentarza. Wiek: poetycki, nigdy 'nieokreślony'. Brak danych z emaila → '__BRAK__'. Zwróć TYLKO czysty JSON."
   },
@@ -55,7 +55,7 @@
           "[rzecz] — [żartobliwa cecha udziwniona nawiązująca do emaila, zwięzła i dosadna] — [jedno zdanie dlaczego to szkodzi pacjentowi]",
           "(TYLKO unoszalne lub miniatury — nieunoszalne pomiń. Jeśli brak → [\"__BRAK__\"])"
         ],
-        "protokol_depozytu": "4-5 zdań. Oficjalny protokół Szwejka. Jeśli brak danych → '__BRAK__'"
+        "protokol_depozytu": "4-5 zdań. Oficjalny protokół w tonie formalnej biurokratycznej powagi wobec absurdu. Jeśli brak danych → '__BRAK__'"
       },
       "farmakologia": {
         "leki": "Lista obiektów: [{nazwa: 'NazwaLeku Xmg — nawiązuje do rzeczownika z emaila', rzeczownik_zrodlowy: 'słowo z emaila (wyświetli się jako Przedmioty odebrane)', wskazanie: '2 zdania nawiązujące do emaila', dawkowanie: 'żartobliwe, nawiązuje do emaila — NIE: 1x dziennie'}]. JEDEN lek per rzeczownik. Jeśli brak → [{nazwa: '__BRAK__', ...}]",
@@ -71,7 +71,7 @@
         {
           "dzien": 1,
           "data": "DD.MM.YYYY",
-          "zdarzenie": "Min. 4-5 zdań w stylu Dzielnego Wojaka Szwejka. Nawiązuje do emaila. Brak → '__BRAK__'",
+          "zdarzenie": "Min. 4-5 zdań w tonie formalnej dokumentacji medycznej z biurokratyczną powagą wobec absurdów. Nawiązuje do emaila. Brak → '__BRAK__'",
           "lek": "Nazwa leku z farmakologii + dawka lub '__BRAK__'",
           "stan_pacjenta": "Jedno zdanie nihilistyczne nawiązujące do zdarzenia lub '__BRAK__'",
           "nota_lekarska": "2-3 zdania nieoficjalnej obserwacji lub '__BRAK__'"
@@ -117,7 +117,7 @@
     "schema": {
       "wypis": {
         "dzien_wypisu": "Dzień 15, DD.MM.YYYY",
-        "stan_przy_wypisie": "Min. 5 zdań nawiązujących do emaila. Styl Szwejka. Brak → '__BRAK__'",
+        "stan_przy_wypisie": "Min. 5 zdań nawiązujących do emaila. Formalna dokumentacja medyczna z biurokratyczną powagą wobec absurdów. Brak → '__BRAK__'",
         "powod_wypisu": "Min. 8 zdań. STYL KORPORACYJNEGO ZWOLNIENIA z pracy: komisja, alokacja zasobów, restrukturyzacja, efektywność kosztowa, 'cenimy wkład pacjenta', 'decyzja niezwiązana z wynikami leczenia', 'życzymy powodzenia w dalszej drodze'. Nawiązuje do emaila. Brak → '__BRAK__'",
         "zalecenia_po_wypisie": "Lista MINIMUM 15 punktów. Każdy nawiązuje do innego słowa z emaila, absurdalny, z medyczną powagą. Brak → ['__BRAK__']",
         "opis_pozegnania": "4-5 zdań. Jak pacjent wyszedł, absurdalne i melancholijne. Brak → '__BRAK__'"
