@@ -17,8 +17,8 @@ class ResponderManager:
 
     def __init__(self, config_path: str = "config_responders.json"):
         self.config_path = config_path
-        self.config = self._load_config()
         self.logger = get_logger()
+        self.config = self._load_config()
 
     def _load_config(self) -> Dict[str, Any]:
         """Ładuje konfigurację z JSON z walidacją schematu."""
