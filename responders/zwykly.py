@@ -34,6 +34,10 @@ from datetime import datetime
 # Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
 logger = logging.getLogger(__name__)
 
+from core.logging_reporter import get_logger
+
+execution_logger = get_logger()
+
 from core.ai_client import (
     call_deepseek,
     extract_clean_text,
@@ -3509,14 +3513,26 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
 
 
 def _generate_psychiatric_photo(
-    body: str, nouns_dict: dict, sender_name: str = ""
+    body: str, nouns_dict: dict, sender_name: str = "", test_mode: bool = False
 ) -> str | None:
     """
     Generuje zdjęcie pacjenta psychiatrycznego w kaftanie bezpieczeństwa przez FLUX.
     Używa promptu z zwykly_psychiatryczny_obrazek.json.
     Podmienia {{OBJECTS}} na rzeczowniki z emaila.
     Zwraca base64 JPG lub None.
+
+    Parametr test_mode:
+    - Jeśli test_mode=True (disable_flux=True z KEYWORDS_TEST),
+      zwracamy zastępczy obrazek zamiast odpytywać tokeny HF.
     """
+    # ── KEYWORDS_TEST (disable_flux) → test_mode ─────────────────────────────
+    if test_mode:
+        logger.info("[psych-photo] test_mode=True — pomijam FLUX, używam zastepczy.jpg")
+        sub = _load_substitute_image()
+        if sub:
+            return sub.get("base64")
+        return None
+
     try:
         with open(PSYCHIATRYCZNY_OBRAZEK_JSON_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -3638,6 +3654,7 @@ def _build_raport_psychiatryczny(
     res_text: str,
     nouns_dict: dict = None,
     sender_name: str = "",
+    test_mode: bool = False,
 ) -> dict | None:
     """
     Generuje raport psychiatryczny jako DOCX (python-docx).
@@ -3892,6 +3909,7 @@ def _build_raport_psychiatryczny(
             body=body,
             nouns_dict=nouns_dict or {},
             sender_name=sender_name,
+            test_mode=test_mode,
         )
 
         if photo_b64:
@@ -4464,6 +4482,22 @@ def build_zwykly_section(
 
     logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2)")
     app_obj = flask_app._get_current_object()
+
+    # Szczegółowe logowanie dla programisty
+    execution_logger.log_input(sender_email, "zwykly_request", body, sender_name)
+    execution_logger.log_pipeline_step(
+        "zwykly_start",
+        {
+            "body_length": len(body or ""),
+            "previous_body_length": len(previous_body or ""),
+            "sender_email": sender_email,
+            "sender_name": sender_name,
+            "test_mode": test_mode,
+            "attachments_count": len(attachments or []),
+            "skip_dociekliwy": skip_dociekliwy,
+        },
+    )
+    execution_logger.log_memory_usage()
 
     # --- INICJALIZACJA ---
     res_text = emotion_key = provider = None

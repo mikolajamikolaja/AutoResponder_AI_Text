@@ -21,6 +21,9 @@ cryptography>=42.0.0
 reportlab>=4.1.0
 openpyxl>=3.1.0
 
+# Monitorowanie systemu (logging_reporter.py)
+psutil>=5.9.0
+
 # Ankiety PDF
 fpdf2>=2.7.4
 

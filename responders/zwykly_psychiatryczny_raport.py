@@ -46,78 +46,186 @@ from core.hf_token_manager import get_active_tokens, mark_dead, is_dead
 # ─────────────────────────────────────────────────────────────────────────────
 # ŚCIEŻKI
 # ─────────────────────────────────────────────────────────────────────────────
-BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 RAPORT_JSON = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 SUBSTITUTE_IMAGE_PATH = os.path.join(BASE_DIR, "images", "zastepczy.jpg")
 
+
+def _strip_json_text(raw: str) -> str:
+    text = raw.strip()
+    text = re.sub(r"^```[a-zA-Z0-9]*\s*", "", text, flags=re.M)
+    text = re.sub(r"```\s*$", "", text, flags=re.M)
+    return text.strip()
+
+
+def _fix_unicode_escapes(raw: str) -> str:
+    """Naprawia nieprawidłowe sekwencje escape Unicode w JSON."""
+    # Usuwa niekompletne \uXXXX (mniej niż 4 cyfry hex)
+    raw = re.sub(r"\\u[0-9a-fA-F]{0,3}(?![0-9a-fA-F])", "", raw)
+    # Usuwa pojedyncze backslash na końcu linii (mogą powodować problemy)
+    raw = re.sub(r"\\\s*$", "", raw, flags=re.M)
+    # Zamienia nieprawidłowe escape sequences na bezpieczne wersje
+    raw = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r"\\\\", raw)
+    return raw
+
+
+def _normalize_json_text(raw: str) -> str:
+    raw = raw.replace("\r\n", "\n")
+    raw = re.sub(r"//[^\n]*", "", raw)
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
+    raw = _fix_unicode_escapes(raw)
+    return raw.strip()
+
+
+def _wrap_section_list(section: str, data: object) -> object:
+    if not isinstance(data, list):
+        return data
+    if section == "zalecenia_7b":
+        return {"notatki_pielegniarek": data}
+    if section == "zalecenia_7c":
+        if (
+            data
+            and isinstance(data[0], dict)
+            and data[0].get("data")
+            and data[0].get("tresc")
+        ):
+            return {"notatki_sprzataczki": data}
+        return {"incydenty_specjalne": data}
+    return data
+
+
+def _extract_best_json(raw: str) -> tuple[object | None, str | None]:
+    decoder = json.JSONDecoder()
+    best_obj = None
+    best_text = None
+    best_len = 0
+    for match in re.finditer(r"[\[{]", raw):
+        start = match.start()
+        try:
+            obj, end = decoder.raw_decode(raw[start:])
+            if end > best_len:
+                best_len = end
+                best_obj = obj
+                best_text = raw[start : start + end]
+        except json.JSONDecodeError:
+            continue
+    return best_obj, best_text
+
+
+def _repair_truncated_json(raw: str) -> str:
+    raw = raw.strip()
+    start = next((i for i, c in enumerate(raw) if c in "{["), 0)
+    raw = raw[start:]
+    raw = re.sub(r"//[^\n]*", "", raw)
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
+
+    in_string = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+
+    if in_string:
+        raw += '"'
+
+    raw = re.sub(r",\s*$", "", raw)
+
+    stack = []
+    in_string = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if ch == "{":
+                stack.append("}")
+            elif ch == "[":
+                stack.append("]")
+            elif ch in "}]" and stack and stack[-1] == ch:
+                stack.pop()
+
+    if stack:
+        raw += "".join(reversed(stack))
+    return raw
+
+
 def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     if not raw:
         return None
-    try:
-        clean = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-        clean = re.sub(r'```\s*$', '', clean, flags=re.M)
-        m = re.search(r'[\[{].*[\]}]', clean, re.DOTALL)
-        if m:
-            clean = m.group(0)
-        result = json.loads(clean.strip())
-        current_app.logger.info("[psych-raport] JSON OK sekcja=%s", section)
-        return result
-    except json.JSONDecodeError as e:
-        current_app.logger.warning("[psych-raport] JSON błąd sekcja=%s: %s — próba naprawy uciętego JSON",
-                                   section, e)
-        try:
-            raw_stripped = re.sub(r'^```[a-z]*', '', raw.strip(), flags=re.M)
-            raw_stripped = re.sub(r'```\s*$', '', raw_stripped, flags=re.M).strip()
-            start = next((i for i, c in enumerate(raw_stripped) if c in '{['), None)
-            if start is None:
-                return None
-            fragment = raw_stripped[start:]
-            opens    = fragment.count('{') - fragment.count('}')
-            opens_sq = fragment.count('[') - fragment.count(']')
-            lines = fragment.rstrip().splitlines()
-            while lines:
-                last = lines[-1].rstrip()
-                if last.endswith((',', '{', '[')):
-                    lines[-1] = last.rstrip(',')
-                    break
-                if last.endswith('"') and last.count('"') % 2 == 1:
-                    lines.pop()
-                    continue
-                break
-            repaired = '\n'.join(lines)
-            repaired += (']' * max(opens_sq, 0)) + ('}' * max(opens, 0))
-            result = json.loads(repaired)
-            current_app.logger.warning("[psych-raport] JSON naprawiony sekcja=%s (ucięty output)", section)
-            return result
-        except Exception as e2:
-            # Loguj surowy output w całości — w trzech fragmentach żeby obejść limit linii logu
-            raw_len = len(raw) if raw else 0
-            current_app.logger.warning(
-                "[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw_len=%d",
-                section, e2, raw_len,
-            )
-            # Podziel na kawałki po 800 znaków żeby w Render logu było widać cały surowy output
-            chunk_size = 800
-            for idx in range(0, raw_len, chunk_size):
-                current_app.logger.warning(
-                    "[psych-raport] raw[%d:%d] sekcja=%s >>> %s",
-                    idx, idx + chunk_size, section, raw[idx:idx + chunk_size],
-                )
-            return None
-    except Exception as e:
-        raw_len = len(raw) if raw else 0
-        current_app.logger.warning(
-            "[psych-raport] JSON błąd ogólny sekcja=%s: %s | raw_len=%d",
-            section, e, raw_len,
-        )
-        chunk_size = 800
-        for idx in range(0, raw_len, chunk_size):
-            current_app.logger.warning(
-                "[psych-raport] raw[%d:%d] sekcja=%s >>> %s",
-                idx, idx + chunk_size, section, raw[idx:idx + chunk_size],
-            )
+
+    clean = _normalize_json_text(_strip_json_text(raw))
+    if not clean:
         return None
+
+    try:
+        result = json.loads(clean)
+        current_app.logger.info("[psych-raport] JSON OK sekcja=%s", section)
+        return _wrap_section_list(section, result)
+    except json.JSONDecodeError as e:
+        current_app.logger.warning(
+            "[psych-raport] JSON błąd sekcja=%s: %s — próba naprawy uciętego JSON",
+            section,
+            e,
+        )
+
+    extracted, extracted_text = _extract_best_json(clean)
+    if extracted is not None:
+        current_app.logger.warning(
+            "[psych-raport] JSON ekstrakcja sekcja=%s → %s znaków",
+            section,
+            len(extracted_text or ""),
+        )
+        return _wrap_section_list(section, extracted)
+
+    repaired = _repair_truncated_json(clean)
+    try:
+        result = json.loads(repaired)
+        current_app.logger.warning(
+            "[psych-raport] JSON naprawiony sekcja=%s (ucięty output)",
+            section,
+        )
+        return _wrap_section_list(section, result)
+    except Exception:
+        extracted, extracted_text = _extract_best_json(repaired)
+        if extracted is not None:
+            current_app.logger.warning(
+                "[psych-raport] JSON naprawiony po ekstrakcji sekcja=%s → %s znaków",
+                section,
+                len(extracted_text or ""),
+            )
+            return _wrap_section_list(section, extracted)
+
+    raw_len = len(raw) if raw else 0
+    current_app.logger.warning(
+        "[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw_len=%d",
+        section,
+        e,
+        raw_len,
+    )
+    chunk_size = 800
+    for idx in range(0, raw_len, chunk_size):
+        current_app.logger.warning(
+            "[psych-raport] raw[%d:%d] sekcja=%s >>> %s",
+            idx,
+            idx + chunk_size,
+            section,
+            raw[idx : idx + chunk_size],
+        )
+    return None
 
 
 def _merge_dicts(base: dict, override: dict) -> dict:
@@ -135,15 +243,17 @@ def _merge_dicts(base: dict, override: dict) -> dict:
 
 def _load_substitute_image() -> dict | None:
     if not os.path.exists(SUBSTITUTE_IMAGE_PATH):
-        current_app.logger.warning("[psych-test] Brak pliku zastępczego: %s", SUBSTITUTE_IMAGE_PATH)
+        current_app.logger.warning(
+            "[psych-test] Brak pliku zastępczego: %s", SUBSTITUTE_IMAGE_PATH
+        )
         return None
     try:
         with open(SUBSTITUTE_IMAGE_PATH, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("ascii")
         return {
-            "base64":       b64,
+            "base64": b64,
             "content_type": "image/jpeg",
-            "filename":     "zastepczy.jpg",
+            "filename": "zastepczy.jpg",
         }
     except Exception as e:
         current_app.logger.warning("[psych-test] Błąd odczytu zastepczy.jpg: %s", e)
@@ -250,6 +360,7 @@ def _add_text_below_image(image_obj: dict, text: str, panel_index: int) -> dict:
 # ŁADOWANIE CFG
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _load_cfg() -> dict:
     try:
         with open(RAPORT_JSON, encoding="utf-8") as f:
@@ -262,6 +373,7 @@ def _load_cfg() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # DEEPSEEK #1 — dane pacjenta + powód + cytaty
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
     sec = cfg.get("deepseek_1_pacjent", {})
@@ -286,6 +398,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 # DEEPSEEK #2 — depozyt + leki
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
     sec = cfg.get("deepseek_2_depozyt_leki", {})
     system = sec.get("system", "")
@@ -303,14 +416,22 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         current_app.logger.warning("[psych-raport] sekcja_depozyt_leki → fallback")
         return {
             "depozyt": {
-                "lista_przedmiotow": list(nouns_dict.values()) if nouns_dict else ["przedmiot nieznany"],
-                "protokol_depozytu": "Odebrano przedmioty niebezpieczne. Pacjent protestował."
+                "lista_przedmiotow": (
+                    list(nouns_dict.values()) if nouns_dict else ["przedmiot nieznany"]
+                ),
+                "protokol_depozytu": "Odebrano przedmioty niebezpieczne. Pacjent protestował.",
             },
             "farmakologia": {
-                "leki": [{"nazwa": "Nihilizyna 500mg", "rzeczownik_zrodlowy": "email",
-                          "wskazanie": "nadmierny optymizm", "dawkowanie": "2x dziennie po każdej nadziei"}],
-                "nota_farmaceutyczna": "Farmakoterapia wdrożona. Rokowanie: złe."
-            }
+                "leki": [
+                    {
+                        "nazwa": "Nihilizyna 500mg",
+                        "rzeczownik_zrodlowy": "email",
+                        "wskazanie": "nadmierny optymizm",
+                        "dawkowanie": "2x dziennie po każdej nadziei",
+                    }
+                ],
+                "nota_farmaceutyczna": "Farmakoterapia wdrożona. Rokowanie: złe.",
+            },
         }
     return result
 
@@ -319,8 +440,10 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
 # DEEPSEEK #3/#4 — tygodnie hospitalizacji (CHUNKI po 3-4 dni)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
-                    data_przyjecia: str) -> list:
+
+def _sekcja_tydzien(
+    cfg: dict, body: str, leki: list, tydzien: int, data_przyjecia: str
+) -> list:
     """
     Generuje 2 wybrane dni hospitalizacji (skrócona wersja):
       tydzien=1 → dni 1 i 3
@@ -342,8 +465,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
         numery_dni = [14, 30]
 
     daty = {
-        d: (base_date + timedelta(days=d - 1)).strftime("%d.%m.%Y")
-        for d in numery_dni
+        d: (base_date + timedelta(days=d - 1)).strftime("%d.%m.%Y") for d in numery_dni
     }
     daty_str = "\n".join(f"Dzień {d}: {dt}" for d, dt in daty.items())
     leki_str = json.dumps(leki, ensure_ascii=False, indent=2) if leki else "[]"
@@ -355,7 +477,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
             "zdarzenie": "Min. 4-5 zdań. Formalna biurokratyczna powaga wobec absurdalnej sytuacji. Nawiązuje do emaila. Brak → '__BRAK__'",
             "lek": "Nazwa leku + dawka lub '__BRAK__'",
             "stan_pacjenta": "Jedno zdanie nihilistyczne lub '__BRAK__'",
-            "nota_lekarska": "2-3 zdania lub '__BRAK__'"
+            "nota_lekarska": "2-3 zdania lub '__BRAK__'",
         }
         for d in numery_dni
     ]
@@ -388,7 +510,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
             "zdarzenie": "__BRAK__",
             "lek": "__BRAK__",
             "stan_pacjenta": "__BRAK__",
-            "nota_lekarska": "__BRAK__"
+            "nota_lekarska": "__BRAK__",
         }
         for d in numery_dni
     ]
@@ -397,6 +519,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
 # ─────────────────────────────────────────────────────────────────────────────
 # DEEPSEEK #5 — wypis (dzień 15)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
     sec = cfg.get("deepseek_5_wypis", {})
@@ -416,13 +539,19 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
     raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "wypis")
     if not result:
-        return {"wypis": {
-            "dzien_wypisu": f"Dzień 15, {data_wypisu}",
-            "stan_przy_wypisie": "Pacjent osiągnął akceptowalny poziom beznadziei.",
-            "powod_wypisu": "Wyczerpanie budżetu nadziei.",
-            "zalecenia_po_wypisie": ["Unikać optymizmu.", "Nie planować remontów.", "Nie pisać emaili."],
-            "opis_pozegnania": "Pacjent wyszedł bez słowa. Drzwi zostawił otwarte."
-        }}
+        return {
+            "wypis": {
+                "dzien_wypisu": f"Dzień 15, {data_wypisu}",
+                "stan_przy_wypisie": "Pacjent osiągnął akceptowalny poziom beznadziei.",
+                "powod_wypisu": "Wyczerpanie budżetu nadziei.",
+                "zalecenia_po_wypisie": [
+                    "Unikać optymizmu.",
+                    "Nie planować remontów.",
+                    "Nie pisać emaili.",
+                ],
+                "opis_pozegnania": "Pacjent wyszedł bez słowa. Drzwi zostawił otwarte.",
+            }
+        }
     return result
 
 
@@ -430,14 +559,18 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 # DEEPSEEK #6 — łacińskie diagnozy
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
     sec = cfg.get("deepseek_6_diagnozy_lacina", {})
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
     user = (
         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        + (f"POPRZEDNI EMAIL (dla diagnozy_dodatkowej):\n{previous_body[:1000]}\n\n"
-           if previous_body else "")
+        + (
+            f"POPRZEDNI EMAIL (dla diagnozy_dodatkowej):\n{previous_body[:1000]}\n\n"
+            if previous_body
+            else ""
+        )
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
@@ -449,17 +582,19 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
                 "nazwa_lacinska": "Syndroma Emaili Desperati",
                 "nazwa_polska": "Desperackie Emailowanie",
                 "kod_dsm": "DSM-TD-2026-001",
-                "opis_kliniczny": "Przewlekłe wysyłanie emaili z objawami nadziei."
+                "opis_kliniczny": "Przewlekłe wysyłanie emaili z objawami nadziei.",
             },
             "diagnoza_dodatkowa": {
                 "nazwa_lacinska": "Morbus Optimismus Pathologicus",
                 "nazwa_polska": "Patologiczny Optymizm",
                 "kod_dsm": "DSM-TD-2026-002",
-                "opis_kliniczny": "Choroba współistniejąca. Brak rokowań."
+                "opis_kliniczny": "Choroba współistniejąca. Brak rokowań.",
             },
-            "objawy": ["Nadmierny optymizm epistolarny",
-                       "Fiksacja na punkcie nierealnych planów",
-                       "Urojenia poprawy sytuacji"]
+            "objawy": [
+                "Nadmierny optymizm epistolarny",
+                "Fiksacja na punkcie nierealnych planów",
+                "Urojenia poprawy sytuacji",
+            ],
         }
     return result
 
@@ -467,6 +602,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # DEEPSEEK #7 — zalecenia + notatki + rokowanie (TRZY OSOBNE WYWOŁANIA)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
     """
@@ -483,21 +619,31 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
     zdarzenia = []
     for d in (dni_1_7 or []) + (dni_8_14 or []):
         if isinstance(d, dict) and d.get("zdarzenie") not in (None, "", "__BRAK__"):
-            zdarzenia.append(f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:120]}")
+            zdarzenia.append(
+                f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:120]}"
+            )
     zdarzenia_str = "\n".join(zdarzenia[:14]) if zdarzenia else "(brak)"
 
     email_fragment = body[:MAX_DLUGOSC_EMAIL]
 
     # ── deepseek_7a — ZALECENIA + ROKOWANIE ──────────────────────────────────────
-    schema_7a = json.dumps({
-        "zalecenia_tylera": sec_7.get("schema", {}).get("zalecenia_tylera", {
-            "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIE OBOWIĄZKOWE",
-            "zadanie_1": "...",
-            "podpis": "Tyler Durden"
-        }),
-        "rokowanie": sec_7.get("schema", {}).get("rokowanie",
-            "Min. 5-6 zdań. Bezlitosne. Nawiązuje do emaila.")
-    }, ensure_ascii=False, indent=2)
+    schema_7a = json.dumps(
+        {
+            "zalecenia_tylera": sec_7.get("schema", {}).get(
+                "zalecenia_tylera",
+                {
+                    "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIE OBOWIĄZKOWE",
+                    "zadanie_1": "...",
+                    "podpis": "Tyler Durden",
+                },
+            ),
+            "rokowanie": sec_7.get("schema", {}).get(
+                "rokowanie", "Min. 5-6 zdań. Bezlitosne. Nawiązuje do emaila."
+            ),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
     user_7a = (
         f"EMAIL PACJENTA (PRIORYTET — każde pole MUSI nawiązywać do treści emaila):\n{email_fragment}\n\n"
@@ -511,10 +657,16 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
     result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
 
     # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
-    schema_7b = json.dumps({
-        "notatki_pielegniarek": sec_7.get("schema", {}).get("notatki_pielegniarek",
-            "Lista MINIMUM 10 obiektów: {imie_pielegniarki, data, tresc}")
-    }, ensure_ascii=False, indent=2)
+    schema_7b = json.dumps(
+        {
+            "notatki_pielegniarek": sec_7.get("schema", {}).get(
+                "notatki_pielegniarek",
+                "Lista MINIMUM 10 obiektów: {imie_pielegniarki, data, tresc}",
+            )
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
     user_7b = (
         f"EMAIL PACJENTA:\n{email_fragment}\n\n"
@@ -530,12 +682,18 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
 
     # ── deepseek_7c — NOTATKI SPRZĄTACZKI + INCYDENTY ────────────────────────────
-    schema_7c = json.dumps({
-        "notatki_sprzataczki": sec_7.get("schema", {}).get("notatki_sprzataczki",
-            "Lista MINIMUM 10 obiektów: {data, tresc}"),
-        "incydenty_specjalne": sec_7.get("schema", {}).get("incydenty_specjalne",
-            "Lista MINIMUM 10 incydentów po 4-5 zdań")
-    }, ensure_ascii=False, indent=2)
+    schema_7c = json.dumps(
+        {
+            "notatki_sprzataczki": sec_7.get("schema", {}).get(
+                "notatki_sprzataczki", "Lista MINIMUM 10 obiektów: {data, tresc}"
+            ),
+            "incydenty_specjalne": sec_7.get("schema", {}).get(
+                "incydenty_specjalne", "Lista MINIMUM 10 incydentów po 4-5 zdań"
+            ),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
     user_7c = (
         f"EMAIL PACJENTA:\n{email_fragment}\n\n"
@@ -563,12 +721,12 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
             "zalecenia_tylera": {
                 "naglowek": "ZALECENIA TERAPEUTYCZNE — PROTOKÓŁ AWARYJNY",
                 "zadanie_1": "Zidentyfikować i wyeliminować główne źródło złudzeń opisanych w wiadomości.",
-                "podpis": "Dr. Tyler Durden, Ordynator Oddziału Beznadziei"
+                "podpis": "Dr. Tyler Durden, Ordynator Oddziału Beznadziei",
             },
             "rokowanie": "Trudne. Pacjent przejawia objawy niezdrowego optymizmu.",
             "notatki_pielegniarek": [],
             "notatki_sprzataczki": [],
-            "incydenty_specjalne": []
+            "incydenty_specjalne": [],
         }
     return result
 
@@ -577,11 +735,20 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
 # DEEPSEEK #8 — prompty FLUX
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
-                          sender_name: str, gender: str, test_mode: bool = False) -> dict:
+
+def _sekcja_flux_prompty(
+    cfg: dict,
+    body: str,
+    nouns_dict: dict,
+    sender_name: str,
+    gender: str,
+    test_mode: bool = False,
+) -> dict:
     sec = cfg.get("deepseek_8_flux_prompty", {})
     if test_mode:
-        current_app.logger.info("[psych-raport] test_mode — pomijam generowanie promptów FLUX")
+        current_app.logger.info(
+            "[psych-raport] test_mode — pomijam generowanie promptów FLUX"
+        )
         return {"prompt_pacjent": "", "prompt_przedmioty": ""}
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
@@ -611,7 +778,7 @@ def _sekcja_flux_prompty(cfg: dict, body: str, nouns_dict: dict,
                 f"with the following objects laid out as evidence: {nouns_str}. Each object has "
                 f"a small numbered evidence tag. Cold harsh fluorescent lighting, "
                 f"1990s police evidence room aesthetic, hyper-realistic, sterile white background."
-            )
+            ),
         }
     return result
 
@@ -627,8 +794,8 @@ _DEEPSEEK_SKIP = {
     "notatki_pielegniarek",
     "notatki_sprzataczki",
     "incydenty_specjalne",
-    "cytaty_z_przyjecia",   # długie, DeepSeek generuje je już z właściwym stylem
-    "wypis",                # też długie, styl już OK z DeepSeek
+    "cytaty_z_przyjecia",  # długie, DeepSeek generuje je już z właściwym stylem
+    "wypis",  # też długie, styl już OK z DeepSeek
 }
 
 
@@ -644,11 +811,14 @@ def _deepseek_tone_check(cfg: dict, raport: dict) -> dict:
         f"INSTRUKCJE:\n{instrukcje}\n\n"
         f"Zwróć TYLKO czysty JSON z poprawkami (ta sama struktura kluczy)."
     )
-    current_app.logger.info("[psych-raport] DeepSeek tone check START (slim=%d kluczy)",
-                            len(raport_slim))
+    current_app.logger.info(
+        "[psych-raport] DeepSeek tone check START (slim=%d kluczy)", len(raport_slim)
+    )
     raw = call_deepseek(system, user, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[psych-raport] DeepSeek tone check → brak odpowiedzi, skip")
+        current_app.logger.warning(
+            "[psych-raport] DeepSeek tone check → brak odpowiedzi, skip"
+        )
         return raport
     result = _parse_json_safe(raw, "deepseek_tone")
     if not result or not isinstance(result, dict):
@@ -661,6 +831,7 @@ def _deepseek_tone_check(cfg: dict, raport: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # DEEPSEEK #2 — completeness check
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
     sec = cfg.get("deepseek_2_completeness_check", {})
@@ -675,23 +846,30 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
         f"INSTRUKCJE:\n{instrukcje}\n\n"
         f"Zwróć TYLKO czysty JSON z uzupełnionymi nawiązaniami do emaila."
     )
-    current_app.logger.info("[psych-raport] DeepSeek completeness check START (slim=%d kluczy)",
-                            len(raport_slim))
+    current_app.logger.info(
+        "[psych-raport] DeepSeek completeness check START (slim=%d kluczy)",
+        len(raport_slim),
+    )
     raw = call_deepseek(system, user, MODEL_TYLER)
     if not raw:
-        current_app.logger.warning("[psych-raport] DeepSeek completeness → brak odpowiedzi, skip")
+        current_app.logger.warning(
+            "[psych-raport] DeepSeek completeness → brak odpowiedzi, skip"
+        )
         return raport
     result = _parse_json_safe(raw, "deepseek_completeness")
     if not result or not isinstance(result, dict):
         return raport
     merged = _merge_dicts(raport, result)
-    current_app.logger.info("[psych-raport] DeepSeek completeness OK — merge zastosowany")
+    current_app.logger.info(
+        "[psych-raport] DeepSeek completeness OK — merge zastosowany"
+    )
     return merged
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DEEPSEEK #3 — relacje świadków
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
     """
@@ -700,16 +878,18 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
     """
     sec = cfg.get("deepseek_3_relacje_swiadkow", {})
     if not sec:
-        current_app.logger.warning("[psych-raport] Brak konfiguracji deepseek_3_relacje_swiadkow")
+        current_app.logger.warning(
+            "[psych-raport] Brak konfiguracji deepseek_3_relacje_swiadkow"
+        )
         return {"relacje_swiadkow": []}
-    
+
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    
+
     # Przygotuj kontekst z raportu: imię pacjenta, stan cywilny, kluczowe zachowania
     imie_pacjenta = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
     stan_cywilny = raport.get("dane_pacjenta", {}).get("stan_cywilny", "")
-    
+
     user = (
         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"INFORMACJE O PACJENCIE:\n"
@@ -718,14 +898,16 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON z listą relacji świadków."
     )
-    
+
     raw = call_deepseek(system, user, MODEL_TYLER)
     result = _parse_json_safe(raw, "relacje_swiadkow")
-    
+
     if not result or not isinstance(result, dict):
-        current_app.logger.warning("[psych-raport] _sekcja_relacje_swiadkow → brak wyników")
+        current_app.logger.warning(
+            "[psych-raport] _sekcja_relacje_swiadkow → brak wyników"
+        )
         return {"relacje_swiadkow": []}
-    
+
     return result
 
 
@@ -738,7 +920,10 @@ def _hf_credit_exhausted(resp: requests.Response) -> bool:
     if resp.status_code != 402:
         return False
     text = (resp.text or "").lower()
-    return "depleted your monthly included credits" in text or "purchase pre-paid credits" in text
+    return (
+        "depleted your monthly included credits" in text
+        or "purchase pre-paid credits" in text
+    )
 
 
 def _substitute_or_none(label: str) -> str | None:
@@ -763,16 +948,38 @@ def _substitute_or_none(label: str) -> str | None:
     return substitute.get("base64")
 
 
-def _generate_flux(prompt: str, label: str,
-                   steps: int = 28, guidance: float = 7.0,
-                   width: int = 1024, height: int = 1024,
-                   test_mode: bool = False) -> str | None:
+def _generate_flux(
+    prompt: str,
+    label: str,
+    steps: int = 28,
+    guidance: float = 7.0,
+    width: int = 1024,
+    height: int = 1024,
+    test_mode: bool = False,
+) -> str | None:
     """Generuje obrazek FLUX. Zwraca base64 JPG lub None."""
     if os.getenv("HF_TOKENS_ACTIVE", "tak").strip().lower() == "nie":
         current_app.logger.info(
             "[psych-flux] HF_TOKENS_ACTIVE=nie — używam zastepczy.jpg (%s)", label
         )
         return _substitute_or_none(label)
+
+    if test_mode:
+        substitute = _load_substitute_image()
+        if substitute:
+            # Dodaj tekst na dole jak w obrazkach Flux
+            caption = "pacjent" if label == "photo_pacjent" else "przedmioty"
+            substitute = _add_text_below_image(
+                substitute, f"Zdjęcie zastępcze - {caption}", 0
+            )
+            current_app.logger.info(
+                "[psych-flux] test_mode — używam zastepczy.jpg dla %s", label
+            )
+            return substitute.get("base64")
+        current_app.logger.warning(
+            "[psych-flux] test_mode — brak zastepczy.jpg, pomijam %s", label
+        )
+        return None
 
     tokens = get_active_tokens()
     if not tokens:
@@ -781,40 +988,21 @@ def _generate_flux(prompt: str, label: str,
         )
         return _substitute_or_none(label)
 
-    seed    = random.randint(0, 2 ** 32 - 1)
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "num_inference_steps": steps,
-            "guidance_scale":      guidance,
-            "width":               width,
-            "height":              height,
-            "seed":                seed,
-        }
-    }
-    if test_mode:
-        substitute = _load_substitute_image()
-        if substitute:
-            # Dodaj tekst na dole jak w obrazkach Flux
-            caption = "pacjent" if label == "photo_pacjent" else "przedmioty"
-            substitute = _add_text_below_image(substitute, f"Zdjęcie zastępcze - {caption}", 0)
-            current_app.logger.info("[psych-flux] test_mode — używam zastepczy.jpg dla %s", label)
-            return substitute.get("base64")
-        current_app.logger.warning("[psych-flux] test_mode — brak zastepczy.jpg, pomijam %s", label)
-        return None
-
     current_app.logger.info("[psych-flux] %s — prompt %.120s...", label, prompt)
 
     for name, token in tokens:
         headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
         try:
-            resp = requests.post(HF_API_URL, headers=headers,
-                                 json=payload, timeout=HF_TIMEOUT)
+            resp = requests.post(
+                HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT
+            )
             if resp.status_code == 200:
-                current_app.logger.info("[psych-flux] %s OK token=%s (%dB)",
-                                        label, name, len(resp.content))
+                current_app.logger.info(
+                    "[psych-flux] %s OK token=%s (%dB)", label, name, len(resp.content)
+                )
                 try:
                     from PIL import Image as PILImage
+
                     pil = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
                     buf = io.BytesIO()
                     pil.save(buf, format="JPEG", quality=92, optimize=True)
@@ -826,27 +1014,35 @@ def _generate_flux(prompt: str, label: str,
                 mark_dead(name)
                 current_app.logger.warning(
                     "[psych-flux] %s 402 token=%s — wyczerpane kredyty, dodano do czarnej listy",
-                    label, name
+                    label,
+                    name,
                 )
                 if _hf_credit_exhausted(resp):
                     current_app.logger.warning(
                         "[psych-flux] %s 402 wskazuje na globalne wyczerpanie kredytów — kończę próby",
-                        label
+                        label,
                     )
                     break
             elif resp.status_code in (401, 403):
                 mark_dead(name)
                 current_app.logger.warning(
                     "[psych-flux] %s HTTP %d token=%s — nieważny, dodano do czarnej listy",
-                    label, resp.status_code, name
+                    label,
+                    resp.status_code,
+                    name,
                 )
             elif resp.status_code == 429:
-                current_app.logger.warning("[psych-flux] %s 429 token=%s → następny", label, name)
+                current_app.logger.warning(
+                    "[psych-flux] %s 429 token=%s → następny", label, name
+                )
             else:
-                current_app.logger.warning("[psych-flux] %s HTTP %d token=%s",
-                                           label, resp.status_code, name)
+                current_app.logger.warning(
+                    "[psych-flux] %s HTTP %d token=%s", label, resp.status_code, name
+                )
         except Exception as e:
-            current_app.logger.warning("[psych-flux] %s wyjątek token=%s: %s", label, name, e)
+            current_app.logger.warning(
+                "[psych-flux] %s wyjątek token=%s: %s", label, name, e
+            )
 
     current_app.logger.error(
         "[psych-flux] %s — wszystkie tokeny zawiodły — używam zastepczy.jpg", label
@@ -854,24 +1050,38 @@ def _generate_flux(prompt: str, label: str,
     return _substitute_or_none(label)
 
 
-def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str, test_mode: bool = False) -> tuple:
+def _generate_photos_parallel(
+    prompt_pacjent: str, prompt_przedmioty: str, test_mode: bool = False
+) -> tuple:
     """
     Generuje oba zdjęcia równolegle. Zwraca (photo_pacjent, photo_przedmioty).
     """
     from flask import current_app as flask_app
 
-    ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     app_obj = flask_app._get_current_object()
 
     def gen_pacjent():
         with app_obj.app_context():
-            return _generate_flux(prompt_pacjent, "photo_pacjent", steps=28, guidance=7, test_mode=test_mode)
+            return _generate_flux(
+                prompt_pacjent,
+                "photo_pacjent",
+                steps=28,
+                guidance=7,
+                test_mode=test_mode,
+            )
 
     def gen_przedmioty():
         with app_obj.app_context():
-            return _generate_flux(prompt_przedmioty, "photo_przedmioty", steps=28, guidance=7, test_mode=test_mode)
+            return _generate_flux(
+                prompt_przedmioty,
+                "photo_przedmioty",
+                steps=28,
+                guidance=7,
+                test_mode=test_mode,
+            )
 
-    b64_pacjent    = None
+    b64_pacjent = None
     b64_przedmioty = None
 
     try:
@@ -894,14 +1104,14 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str, test_
             return None
         if isinstance(b64, dict):
             return {
-                "base64":       b64.get("base64"),
+                "base64": b64.get("base64"),
                 "content_type": b64.get("content_type", "image/jpeg"),
-                "filename":     b64.get("filename", f"psych_{suffix}_{ts}.jpg"),
+                "filename": b64.get("filename", f"psych_{suffix}_{ts}.jpg"),
             }
         return {
-            "base64":       b64,
+            "base64": b64,
             "content_type": "image/jpeg",
-            "filename":     f"psych_{suffix}_{ts}.jpg",
+            "filename": f"psych_{suffix}_{ts}.jpg",
         }
 
     return _wrap(b64_pacjent, "pacjent"), _wrap(b64_przedmioty, "przedmioty")
@@ -911,8 +1121,13 @@ def _generate_photos_parallel(prompt_pacjent: str, prompt_przedmioty: str, test_
 # BUDOWANIE DOCX
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_docx(raport: dict, photo_pacjent_b64: str | None,
-                photo_przedmioty_b64: str | None, cfg: dict) -> str | None:
+
+def _build_docx(
+    raport: dict,
+    photo_pacjent_b64: str | None,
+    photo_przedmioty_b64: str | None,
+    cfg: dict,
+) -> str | None:
     """
     Buduje DOCX z raportem psychiatrycznym.
     Zwraca base64 DOCX lub None.
@@ -926,21 +1141,24 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         return None
 
     szpital = cfg.get("szpital", {})
-    doc     = Document()
+    doc = Document()
 
     for section in doc.sections:
-        section.top_margin    = Cm(2)
+        section.top_margin = Cm(2)
         section.bottom_margin = Cm(2)
-        section.left_margin   = Cm(2.5)
-        section.right_margin  = Cm(2.5)
+        section.left_margin = Cm(2.5)
+        section.right_margin = Cm(2.5)
 
     # Dodaj stopkę z numerami stron (XML — python-docx nie ma add_field na Run)
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
     from docx.oxml import OxmlElement
+
     section = doc.sections[0]
     footer = section.footer
-    footer_paragraph = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    footer_paragraph = (
+        footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    )
     footer_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_paragraph.clear()
 
@@ -949,36 +1167,36 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         run = paragraph.add_run()
         run.font.size = Pt(9)
         run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
-        fld = OxmlElement('w:fldChar')
-        fld.set(qn('w:fldCharType'), 'begin')
+        fld = OxmlElement("w:fldChar")
+        fld.set(qn("w:fldCharType"), "begin")
         run._r.append(fld)
-        instr = OxmlElement('w:instrText')
-        instr.set(qn('xml:space'), 'preserve')
-        instr.text = ' ' + field_name + ' '
+        instr = OxmlElement("w:instrText")
+        instr.set(qn("xml:space"), "preserve")
+        instr.text = " " + field_name + " "
         run._r.append(instr)
-        fld2 = OxmlElement('w:fldChar')
-        fld2.set(qn('w:fldCharType'), 'separate')
+        fld2 = OxmlElement("w:fldChar")
+        fld2.set(qn("w:fldCharType"), "separate")
         run._r.append(fld2)
-        fld3 = OxmlElement('w:fldChar')
-        fld3.set(qn('w:fldCharType'), 'end')
+        fld3 = OxmlElement("w:fldChar")
+        fld3.set(qn("w:fldCharType"), "end")
         run._r.append(fld3)
 
-    _add_page_field(footer_paragraph, 'PAGE')
-    sep_run = footer_paragraph.add_run(' / ')
+    _add_page_field(footer_paragraph, "PAGE")
+    sep_run = footer_paragraph.add_run(" / ")
     sep_run.font.size = Pt(9)
     sep_run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
-    _add_page_field(footer_paragraph, 'NUMPAGES')
+    _add_page_field(footer_paragraph, "NUMPAGES")
 
-    RED   = RGBColor(0x99, 0x1A, 0x1A)
-    DARK  = RGBColor(0x0D, 0x0D, 0x0D)
-    GREY  = RGBColor(0x66, 0x66, 0x66)
+    RED = RGBColor(0x99, 0x1A, 0x1A)
+    DARK = RGBColor(0x0D, 0x0D, 0x0D)
+    GREY = RGBColor(0x66, 0x66, 0x66)
     LGREY = RGBColor(0x99, 0x99, 0x99)
 
     def heading(text, level=1, color=DARK, size=14):
         h = doc.add_heading(text, level=level)
         h.alignment = WD_ALIGN_PARAGRAPH.LEFT
         for run in h.runs:
-            run.font.size      = Pt(size)
+            run.font.size = Pt(size)
             run.font.color.rgb = color
         return h
 
@@ -987,9 +1205,9 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         if align:
             p.alignment = align
         r = p.add_run(str(text))
-        r.bold           = bold
-        r.italic         = italic
-        r.font.size      = Pt(size)
+        r.bold = bold
+        r.italic = italic
+        r.font.size = Pt(size)
         r.font.color.rgb = color
         return p
 
@@ -997,21 +1215,21 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         if value in (None, "", [], {}, "__BRAK__"):
             value = "[brak danych]"
             val_color = LGREY
-        p  = doc.add_paragraph()
+        p = doc.add_paragraph()
         rl = p.add_run(f"{label}: ")
-        rl.bold            = True
-        rl.font.size       = Pt(size)
-        rl.font.color.rgb  = label_color
+        rl.bold = True
+        rl.font.size = Pt(size)
+        rl.font.color.rgb = label_color
         rv = p.add_run(str(value))
-        rv.font.size       = Pt(size)
-        rv.font.color.rgb  = val_color
+        rv.font.size = Pt(size)
+        rv.font.color.rgb = val_color
 
     def separator():
         p = doc.add_paragraph()
-        p.paragraph_format.space_after  = Pt(2)
+        p.paragraph_format.space_after = Pt(2)
         p.paragraph_format.space_before = Pt(2)
         r = p.add_run("─" * 72)
-        r.font.size      = Pt(7)
+        r.font.size = Pt(7)
         r.font.color.rgb = LGREY
 
     def insert_photo(b64: str, caption: str, width_cm: float = 14.0):
@@ -1019,13 +1237,13 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             return
         try:
             img_bytes = base64.b64decode(b64)
-            stream    = io.BytesIO(img_bytes)
+            stream = io.BytesIO(img_bytes)
             doc.add_picture(stream, width=Cm(width_cm))
             cap = doc.add_paragraph(caption)
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             for r in cap.runs:
-                r.font.size      = Pt(8)
-                r.font.italic    = True
+                r.font.size = Pt(8)
+                r.font.italic = True
                 r.font.color.rgb = GREY
         except Exception as e:
             current_app.logger.warning("[psych-docx] Błąd wstawiania zdjęcia: %s", e)
@@ -1033,22 +1251,24 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # ══════════════════════════════════════════════════════════════════════════
     # NAGŁÓWEK SZPITALA
     # ══════════════════════════════════════════════════════════════════════════
-    h1 = doc.add_heading(szpital.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"), 1)
+    h1 = doc.add_heading(
+        szpital.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"), 1
+    )
     h1.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for r in h1.runs:
-        r.font.size      = Pt(14)
+        r.font.size = Pt(14)
         r.font.color.rgb = DARK
 
     p_adr = doc.add_paragraph(szpital.get("adres", ""))
     p_adr.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for r in p_adr.runs:
-        r.font.size      = Pt(9)
+        r.font.size = Pt(9)
         r.font.color.rgb = GREY
 
     p_odd = doc.add_paragraph(szpital.get("oddzial", ""))
     p_odd.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for r in p_odd.runs:
-        r.font.size      = Pt(9)
+        r.font.size = Pt(9)
         r.font.color.rgb = GREY
 
     doc.add_paragraph()
@@ -1058,13 +1278,15 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     for r in tyt.runs:
         r.font.size = Pt(12)
 
-    nr         = raport.get("numer_historii_choroby", "NY-2026-00000")
+    nr = raport.get("numer_historii_choroby", "NY-2026-00000")
     data_przyj = raport.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
-    nr_p = doc.add_paragraph(f"Nr: {nr}  |  Data przyjęcia: {data_przyj}  |  "
-                              f"Lekarz prowadzący: {szpital.get('lekarz', 'Dr. T. Durden')}")
+    nr_p = doc.add_paragraph(
+        f"Nr: {nr}  |  Data przyjęcia: {data_przyj}  |  "
+        f"Lekarz prowadzący: {szpital.get('lekarz', 'Dr. T. Durden')}"
+    )
     nr_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for r in nr_p.runs:
-        r.font.size      = Pt(9)
+        r.font.size = Pt(9)
         r.font.color.rgb = GREY
 
     separator()
@@ -1075,17 +1297,19 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     heading("I. DANE PACJENTA", 2, RED, 11)
     dp = raport.get("dane_pacjenta", {})
     field("Imię i nazwisko", dp.get("imie_nazwisko", ""))
-    field("Wiek",            dp.get("wiek", ""))
-    field("Adres",           dp.get("adres", ""))
-    field("Zawód",           dp.get("zawod", ""))
-    field("Stan cywilny",    dp.get("stan_cywilny", ""))
-    field("Nr ubezpieczenia",dp.get("numer_ubezpieczenia", ""))
+    field("Wiek", dp.get("wiek", ""))
+    field("Adres", dp.get("adres", ""))
+    field("Zawód", dp.get("zawod", ""))
+    field("Stan cywilny", dp.get("stan_cywilny", ""))
+    field("Nr ubezpieczenia", dp.get("numer_ubezpieczenia", ""))
     doc.add_paragraph()
 
     if photo_pacjent_b64:
         heading("DOKUMENTACJA FOTOGRAFICZNA — PRZYJĘCIE", 3, GREY, 9)
-        insert_photo(photo_pacjent_b64,
-                     "Fot. 1 — Pacjent w kaftanie bezpieczeństwa. Oddział B. Materiał dowodowy.")
+        insert_photo(
+            photo_pacjent_b64,
+            "Fot. 1 — Pacjent w kaftanie bezpieczeństwa. Oddział B. Materiał dowodowy.",
+        )
         doc.add_paragraph()
 
     separator()
@@ -1096,7 +1320,12 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     heading("II. POWÓD PRZYJĘCIA", 2, RED, 11)
     powod = raport.get("powod_przyjecia") or ""
     if not powod or powod == "__BRAK__":
-        para("[brak danych — sekcja nie została wygenerowana]", italic=True, color=LGREY, size=9)
+        para(
+            "[brak danych — sekcja nie została wygenerowana]",
+            italic=True,
+            color=LGREY,
+            size=9,
+        )
     else:
         para(powod, size=10)
     doc.add_paragraph()
@@ -1107,7 +1336,12 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     heading("III. CYTATY Z IZBY PRZYJĘĆ", 2, RED, 11)
     cytaty = raport.get("cytaty_z_przyjecia")
     if not cytaty or cytaty == "__BRAK__":
-        para("[brak danych — cytaty nie zostały wygenerowane]", italic=True, color=LGREY, size=9)
+        para(
+            "[brak danych — cytaty nie zostały wygenerowane]",
+            italic=True,
+            color=LGREY,
+            size=9,
+        )
     elif isinstance(cytaty, list):
         for c in cytaty:
             if c and str(c).strip() not in ("", "__BRAK__"):
@@ -1133,24 +1367,34 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                     continue
                 p_item = doc.add_paragraph(style="List Bullet")
                 r_item = p_item.add_run(str(item))
-                r_item.font.size      = Pt(10)
+                r_item.font.size = Pt(10)
                 r_item.font.color.rgb = DARK
         else:
-            para("[brak danych — lista przedmiotów nie została wygenerowana]",
-                 italic=True, color=LGREY, size=9)
+            para(
+                "[brak danych — lista przedmiotów nie została wygenerowana]",
+                italic=True,
+                color=LGREY,
+                size=9,
+            )
         if proto and proto != "__BRAK__":
             doc.add_paragraph()
             para(proto, italic=True, color=GREY, size=9)
     else:
-        para("[brak danych — sekcja depozytu nie została wygenerowana]",
-             italic=True, color=LGREY, size=9)
+        para(
+            "[brak danych — sekcja depozytu nie została wygenerowana]",
+            italic=True,
+            color=LGREY,
+            size=9,
+        )
     doc.add_paragraph()
 
     if photo_przedmioty_b64:
         heading("DOKUMENTACJA FOTOGRAFICZNA — DOWODY RZECZOWE", 3, GREY, 9)
-        insert_photo(photo_przedmioty_b64,
-                     "Fot. 2 — Przedmioty skonfiskowane przy przyjęciu. "
-                     "Protokół dowodów rzeczowych, Oddział B.")
+        insert_photo(
+            photo_przedmioty_b64,
+            "Fot. 2 — Przedmioty skonfiskowane przy przyjęciu. "
+            "Protokół dowodów rzeczowych, Oddział B.",
+        )
         doc.add_paragraph()
 
     separator()
@@ -1159,21 +1403,27 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # SEKCJA 5 — FARMAKOLOGIA
     # ══════════════════════════════════════════════════════════════════════════
     heading("V. FARMAKOLOGIA — PEŁNA LISTA LEKÓW ZASTOSOWANYCH", 2, RED, 11)
-    farm       = raport.get("farmakologia", {})
+    farm = raport.get("farmakologia", {})
     leki_lista = farm.get("leki", []) if isinstance(farm, dict) else []
 
     # Filtruj leki z wartością __BRAK__
-    leki_lista = [l for l in leki_lista if isinstance(l, dict) and l.get("nazwa", "") != "__BRAK__"]
+    leki_lista = [
+        l
+        for l in leki_lista
+        if isinstance(l, dict) and l.get("nazwa", "") != "__BRAK__"
+    ]
 
     if leki_lista:
         t = doc.add_table(rows=1, cols=4)
         t.style = "Table Grid"
         hdr = t.rows[0].cells
-        for i, label in enumerate(["Nazwa leku", "Przedmioty odebrane", "Wskazanie", "Dawkowanie"]):
+        for i, label in enumerate(
+            ["Nazwa leku", "Przedmioty odebrane", "Wskazanie", "Dawkowanie"]
+        ):
             hdr[i].text = ""
             r = hdr[i].paragraphs[0].add_run(label)
-            r.bold           = True
-            r.font.size      = Pt(9)
+            r.bold = True
+            r.font.size = Pt(9)
             r.font.color.rgb = RED
         for lek in leki_lista:
             if not isinstance(lek, dict):
@@ -1189,8 +1439,12 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                         r.font.size = Pt(9)
         doc.add_paragraph()
     else:
-        para("[brak danych — lista leków nie została wygenerowana]",
-             italic=True, color=LGREY, size=9)
+        para(
+            "[brak danych — lista leków nie została wygenerowana]",
+            italic=True,
+            color=LGREY,
+            size=9,
+        )
         doc.add_paragraph()
 
     nota_farm = farm.get("nota_farmaceutyczna", "") if isinstance(farm, dict) else ""
@@ -1205,23 +1459,24 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # ══════════════════════════════════════════════════════════════════════════
     heading("VI. PRZEBIEG HOSPITALIZACJI — DNI 1, 3, 14, 30", 2, RED, 11)
 
-    dni_all = (raport.get("hospitalizacja_tydzien_1", []) or []) + \
-              (raport.get("hospitalizacja_tydzien_2", []) or [])
+    dni_all = (raport.get("hospitalizacja_tydzien_1", []) or []) + (
+        raport.get("hospitalizacja_tydzien_2", []) or []
+    )
 
     for d in dni_all:
         if not isinstance(d, dict):
             continue
         dzien = d.get("dzien", "")
-        data  = d.get("data", "")
+        data = d.get("data", "")
         zdarz = d.get("zdarzenie", "")
-        lek   = d.get("lek", "")
-        stan  = d.get("stan_pacjenta", "")
-        nota  = d.get("nota_lekarska", "")
+        lek = d.get("lek", "")
+        stan = d.get("stan_pacjenta", "")
+        nota = d.get("nota_lekarska", "")
 
         p_day = doc.add_paragraph(style="List Bullet")
         r_day = p_day.add_run(f"Dzień {dzien}  [{data}]")
-        r_day.bold           = True
-        r_day.font.size      = Pt(10)
+        r_day.bold = True
+        r_day.font.size = Pt(10)
         r_day.font.color.rgb = RED
 
         lines = []
@@ -1235,15 +1490,15 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
             p_line = doc.add_paragraph()
             p_line.paragraph_format.left_indent = Pt(24)
             r_line = p_line.add_run(line)
-            r_line.font.size      = Pt(9)
+            r_line.font.size = Pt(9)
             r_line.font.color.rgb = DARK
 
         if nota and nota != "__BRAK__":
             p_nota = doc.add_paragraph()
             p_nota.paragraph_format.left_indent = Pt(24)
             r_nota = p_nota.add_run(f"↳ {nota}")
-            r_nota.italic         = True
-            r_nota.font.size      = Pt(8)
+            r_nota.italic = True
+            r_nota.font.size = Pt(8)
             r_nota.font.color.rgb = GREY
 
     doc.add_paragraph()
@@ -1284,12 +1539,12 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         heading("Diagnoza Wstępna:", 3, DARK, 10)
         p_diag = doc.add_paragraph()
         r1 = p_diag.add_run(dw.get("nazwa_lacinska", ""))
-        r1.bold           = True
-        r1.font.size      = Pt(11)
+        r1.bold = True
+        r1.font.size = Pt(11)
         r1.font.color.rgb = RED
         if dw.get("nazwa_polska"):
             r2 = p_diag.add_run(f" (pol. {dw['nazwa_polska']})")
-            r2.font.size      = Pt(10)
+            r2.font.size = Pt(10)
             r2.font.color.rgb = DARK
         if dw.get("kod_dsm"):
             field("Kod DSM", dw["kod_dsm"], size=9)
@@ -1302,12 +1557,12 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         heading("Diagnoza Dodatkowa (współistniejąca):", 3, DARK, 10)
         p_dd = doc.add_paragraph()
         r1 = p_dd.add_run(dd.get("nazwa_lacinska", ""))
-        r1.bold           = True
-        r1.font.size      = Pt(11)
+        r1.bold = True
+        r1.font.size = Pt(11)
         r1.font.color.rgb = RED
         if dd.get("nazwa_polska"):
             r2 = p_dd.add_run(f" (pol. {dd['nazwa_polska']})")
-            r2.font.size      = Pt(10)
+            r2.font.size = Pt(10)
             r2.font.color.rgb = DARK
         if dd.get("opis_kliniczny"):
             para(dd["opis_kliniczny"], size=10)
@@ -1343,12 +1598,16 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
     # SEKCJA 10 — ROKOWANIE
     # ══════════════════════════════════════════════════════════════════════════
     heading("X. ROKOWANIE", 2, RED, 11)
-    rokowanie = raport.get("rokowanie", "").strip() if isinstance(raport.get("rokowanie"), str) else ""
+    rokowanie = (
+        raport.get("rokowanie", "").strip()
+        if isinstance(raport.get("rokowanie"), str)
+        else ""
+    )
     if not rokowanie or rokowanie == "__BRAK__":
         rokowanie = "---brak---"
     p_rok = doc.add_paragraph()
     r_rok = p_rok.add_run(rokowanie)
-    r_rok.font.size      = Pt(10)
+    r_rok.font.size = Pt(10)
     r_rok.font.color.rgb = RED
     doc.add_paragraph()
     separator()
@@ -1383,7 +1642,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                     tresc = sw.get("tresc", "")
                     if tresc == "__BRAK__":
                         continue
-                    
+
                     # Nagłówek świadka
                     header_parts = []
                     if imie and imie != "__BRAK__":
@@ -1392,7 +1651,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                         header_parts.append(f"({zawod})")
                     if data and data != "__BRAK__":
                         header_parts.append(data)
-                    
+
                     if header_parts:
                         p_hdr = doc.add_paragraph()
                         p_hdr.paragraph_format.left_indent = Pt(12)
@@ -1400,7 +1659,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                         r_hdr.bold = True
                         r_hdr.font.size = Pt(8)
                         r_hdr.font.color.rgb = DARK
-                    
+
                     if tresc:
                         para(tresc, italic=True, color=GREY, size=8)
                 else:
@@ -1427,8 +1686,8 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         if isinstance(notatki_p, list):
             for n in notatki_p:
                 if isinstance(n, dict):
-                    imie  = n.get("imie_pielegniarki", "")
-                    data  = n.get("data", "")
+                    imie = n.get("imie_pielegniarki", "")
+                    data = n.get("data", "")
                     tresc = n.get("tresc", "")
                     if tresc == "__BRAK__":
                         continue
@@ -1437,7 +1696,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                         p_hdr = doc.add_paragraph()
                         p_hdr.paragraph_format.left_indent = Pt(12)
                         r_hdr = p_hdr.add_run("  ".join(header_parts))
-                        r_hdr.bold      = True
+                        r_hdr.bold = True
                         r_hdr.font.size = Pt(8)
                         r_hdr.font.color.rgb = DARK
                     if tresc:
@@ -1455,7 +1714,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
         if isinstance(notatki_s, list):
             for n in notatki_s:
                 if isinstance(n, dict):
-                    data  = n.get("data", "")
+                    data = n.get("data", "")
                     tresc = n.get("tresc", "")
                     if tresc == "__BRAK__":
                         continue
@@ -1463,7 +1722,7 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
                         p_hdr = doc.add_paragraph()
                         p_hdr.paragraph_format.left_indent = Pt(12)
                         r_hdr = p_hdr.add_run(data)
-                        r_hdr.bold      = True
+                        r_hdr.bold = True
                         r_hdr.font.size = Pt(8)
                         r_hdr.font.color.rgb = DARK
                     if tresc:
@@ -1488,9 +1747,16 @@ def _build_docx(raport: dict, photo_pacjent_b64: str | None,
 # GŁÓWNA FUNKCJA PUBLICZNA
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_raport(body: str, previous_body: str | None, res_text: str,
-                 nouns_dict: dict, sender_name: str = "",
-                 gender: str = "patient", test_mode: bool = False) -> dict:
+
+def build_raport(
+    body: str,
+    previous_body: str | None,
+    res_text: str,
+    nouns_dict: dict,
+    sender_name: str = "",
+    gender: str = "patient",
+    test_mode: bool = False,
+) -> dict:
     """
     Główna funkcja modułu.
 
@@ -1508,7 +1774,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     current_app.logger.info("[psych-raport] START build_raport")
     app_obj = flask_app._get_current_object()
     cfg = _load_cfg()
-    ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # ══════════════════════════════════════════════════════════════════════════
     # RUNDA 1 — niezależne sekcje DeepSeek równolegle
@@ -1527,12 +1793,14 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
 
     def _r1_flux():
         with app_obj.app_context():
-            return _sekcja_flux_prompty(cfg, body, nouns_dict, sender_name, gender, test_mode=test_mode)
+            return _sekcja_flux_prompty(
+                cfg, body, nouns_dict, sender_name, gender, test_mode=test_mode
+            )
 
-    sekcja_pacjent  = {}
+    sekcja_pacjent = {}
     sekcja_dep_leki = {}
     sekcja_diagnozy = {}
-    sekcja_flux     = {}
+    sekcja_flux = {}
 
     for name, fn in [
         ("pacjent", _r1_pacjent),
@@ -1543,19 +1811,21 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         try:
             result = fn()
             if name == "pacjent":
-                sekcja_pacjent  = result
+                sekcja_pacjent = result
             elif name == "depozyt":
                 sekcja_dep_leki = result
             elif name == "diagnozy":
                 sekcja_diagnozy = result
             elif name == "flux":
-                sekcja_flux     = result
+                sekcja_flux = result
             current_app.logger.info("[psych-raport] Runda1 %s OK", name)
         except Exception as e:
             current_app.logger.error("[psych-raport] Runda1 %s błąd: %s", name, e)
 
-    data_przyjecia = sekcja_pacjent.get("data_przyjecia", datetime.now().strftime("%d.%m.%Y"))
-    leki_lista     = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
+    data_przyjecia = sekcja_pacjent.get(
+        "data_przyjecia", datetime.now().strftime("%d.%m.%Y")
+    )
+    leki_lista = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
 
     # ══════════════════════════════════════════════════════════════════════════
     # RUNDA 2 — tygodnie + wypis równolegle
@@ -1574,8 +1844,8 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         with app_obj.app_context():
             return _sekcja_wypis(cfg, body, data_przyjecia)
 
-    dni_1_7      = []
-    dni_8_14     = []
+    dni_1_7 = []
+    dni_8_14 = []
     sekcja_wypis = {}
 
     for name, fn in [
@@ -1586,13 +1856,16 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         try:
             result = fn()
             if name == "tydzien1":
-                dni_1_7      = result
+                dni_1_7 = result
             elif name == "tydzien2":
-                dni_8_14     = result
+                dni_8_14 = result
             elif name == "wypis":
                 sekcja_wypis = result
-            current_app.logger.info("[psych-raport] Runda2 %s OK (%s elementów)",
-                                    name, len(result) if isinstance(result, list) else "?")
+            current_app.logger.info(
+                "[psych-raport] Runda2 %s OK (%s elementów)",
+                name,
+                len(result) if isinstance(result, list) else "?",
+            )
         except Exception as e:
             current_app.logger.error("[psych-raport] Runda2 %s błąd: %s", name, e)
 
@@ -1613,15 +1886,17 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     # ── Scal wszystkie sekcje ─────────────────────────────────────────────────
     raport = {}
     raport.update(sekcja_pacjent)
-    raport["depozyt"]                  = sekcja_dep_leki.get("depozyt", {})
-    raport["farmakologia"]             = sekcja_dep_leki.get("farmakologia", {})
+    raport["depozyt"] = sekcja_dep_leki.get("depozyt", {})
+    raport["farmakologia"] = sekcja_dep_leki.get("farmakologia", {})
     raport["hospitalizacja_tydzien_1"] = dni_1_7
     raport["hospitalizacja_tydzien_2"] = dni_8_14
     raport.update(sekcja_wypis)
     raport.update(sekcja_diagnozy)
     raport.update(sekcja_zalecenia)
 
-    current_app.logger.info("[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport))
+    current_app.logger.info(
+        "[psych-raport] Scalono %d kluczy przed DeepSeek", len(raport)
+    )
 
     # ── DeepSeek tone check ───────────────────────────────────────────────────
     raport = _deepseek_tone_check(cfg, raport)
@@ -1636,38 +1911,45 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
         relacje_result = _sekcja_relacje_swiadkow(cfg, body, raport)
         if relacje_result and "relacje_swiadkow" in relacje_result:
             raport["relacje_swiadkow"] = relacje_result["relacje_swiadkow"]
-            current_app.logger.info("[psych-raport] Relacje świadków OK (%d relacji)",
-                                    len(relacje_result["relacje_swiadkow"]))
+            current_app.logger.info(
+                "[psych-raport] Relacje świadków OK (%d relacji)",
+                len(relacje_result["relacje_swiadkow"]),
+            )
         else:
             raport["relacje_swiadkow"] = []
             current_app.logger.warning("[psych-raport] Brak relacji świadków")
     except Exception as e:
-        current_app.logger.error("[psych-raport] Błąd generowania relacji świadków: %s", e)
+        current_app.logger.error(
+            "[psych-raport] Błąd generowania relacji świadków: %s", e
+        )
         raport["relacje_swiadkow"] = []
 
     # ── FLUX — oba zdjęcia równolegle ─────────────────────────────────────────
-    prompt_pacjent    = sekcja_flux.get("prompt_pacjent", "")
+    prompt_pacjent = sekcja_flux.get("prompt_pacjent", "")
     prompt_przedmioty = sekcja_flux.get("prompt_przedmioty", "")
-    photo_1, photo_2  = _generate_photos_parallel(prompt_pacjent, prompt_przedmioty, test_mode=test_mode)
-    current_app.logger.info("[psych-raport] FLUX photo1=%s photo2=%s",
-                            bool(photo_1), bool(photo_2))
+    photo_1, photo_2 = _generate_photos_parallel(
+        prompt_pacjent, prompt_przedmioty, test_mode=test_mode
+    )
+    current_app.logger.info(
+        "[psych-raport] FLUX photo1=%s photo2=%s", bool(photo_1), bool(photo_2)
+    )
 
     # ── Buduj DOCX (zawsze — nawet bez zdjęć) ────────────────────────────────
     photo_1_b64 = photo_1["base64"] if photo_1 else None
     photo_2_b64 = photo_2["base64"] if photo_2 else None
-    docx_b64    = _build_docx(raport, photo_1_b64, photo_2_b64, cfg)
+    docx_b64 = _build_docx(raport, photo_1_b64, photo_2_b64, cfg)
 
     if not docx_b64:
         current_app.logger.error("[psych-raport] DOCX nie wygenerowany")
         return {"raport_pdf": None, "psych_photo_1": photo_1, "psych_photo_2": photo_2}
 
     imie = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
-    safe = re.sub(r'[^a-zA-Z0-9_-]', '_', imie)[:30]
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", imie)[:30]
 
     raport_pdf_dict = {
-        "base64":       docx_b64,
+        "base64": docx_b64,
         "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "filename":     f"raport_psychiatryczny_{safe}_{ts}.docx",
+        "filename": f"raport_psychiatryczny_{safe}_{ts}.docx",
     }
 
     current_app.logger.info(
@@ -1678,7 +1960,7 @@ def build_raport(body: str, previous_body: str | None, res_text: str,
     )
 
     return {
-        "raport_pdf":    raport_pdf_dict,
+        "raport_pdf": raport_pdf_dict,
         "psych_photo_1": photo_1,
         "psych_photo_2": photo_2,
     }

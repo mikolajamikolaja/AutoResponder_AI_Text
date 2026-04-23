@@ -22,14 +22,17 @@ import re
 import json
 import base64
 import logging
+import time
 from typing import Optional
 
 import requests
 from flask import current_app
 
 from .analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive
+from core.logging_reporter import get_logger
 
 logger = logging.getLogger(__name__)
+execution_logger = get_logger()
 
 # ── KLUCZE API ────────────────────────────────────────────────────────────────
 
@@ -44,8 +47,21 @@ MAX_RUNDY = 2  # Zmniejszone z 3 → j.w.
 
 def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str]:
     if not _DEEPSEEK_KEY:
+        execution_logger.log_debug_info("DEEPSEEK", "Brak klucza API", "WARNING")
         return None
+
+    start_time = time.time()
     try:
+        execution_logger.log_debug_info(
+            "DEEPSEEK_REQUEST",
+            {
+                "prompt_length": len(prompt),
+                "system_length": len(system),
+                "max_tokens": max_tokens,
+                "prompt_preview": prompt[:200] + "..." if len(prompt) > 200 else prompt,
+            },
+        )
+
         resp = requests.post(
             "https://api.deepseek.com/v1/chat/completions",
             headers={
@@ -63,12 +79,50 @@ def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional
             },
             timeout=90,
         )
+
+        duration = time.time() - start_time
+
         if resp.status_code == 200:
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        logger.error(
-            "[dociekliwy] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200]
-        )
+            response_text = resp.json()["choices"][0]["message"]["content"].strip()
+
+            # Loguj pełną odpowiedź AI dla debugowania
+            execution_logger.log_ai_response(
+                ai_name="DeepSeek",
+                prompt=prompt,
+                response=response_text,
+                tokens_used=max_tokens,  # Przybliżone
+                duration_sec=duration,
+            )
+
+            execution_logger.log_api_call(
+                api_name="DeepSeek",
+                model="deepseek-chat",
+                tokens_used=max_tokens,
+                duration_sec=duration,
+                success=True,
+            )
+
+            return response_text
+        else:
+            execution_logger.log_api_call(
+                api_name="DeepSeek",
+                model="deepseek-chat",
+                duration_sec=duration,
+                success=False,
+                error=f"HTTP {resp.status_code}: {resp.text[:200]}",
+            )
+            logger.error(
+                "[dociekliwy] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200]
+            )
     except Exception as e:
+        duration = time.time() - start_time
+        execution_logger.log_api_call(
+            api_name="DeepSeek",
+            model="deepseek-chat",
+            duration_sec=duration,
+            success=False,
+            error=str(e),
+        )
         logger.error("[dociekliwy] DeepSeek error: %s", e)
     return None
 
@@ -674,6 +728,22 @@ def build_dociekliwy_section(
         len(body or ""),
         len(attachments or []),
     )
+
+    # Loguj dane wejściowe dla programisty
+    execution_logger.log_input(sender, "dociekliwy_request", body, sender_name)
+    execution_logger.log_pipeline_step(
+        "dociekliwy_start",
+        {
+            "body_length": len(body or ""),
+            "attachments_count": len(attachments or []),
+            "sender": sender,
+            "sender_name": sender_name,
+            "test_mode": test_mode,
+        },
+    )
+
+    # Loguj użycie pamięci na początku
+    execution_logger.log_memory_usage()
 
     if not body or not body.strip():
         logger.warning("[ERYK] Pusta wiadomość — skipping")
