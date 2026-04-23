@@ -374,6 +374,22 @@ class ExecutionLogger:
             },
         )
 
+    def info(self, msg: str):
+        """Standardowa metoda logowania informacji (kompatybilność z logging.Logger)."""
+        self.logger.info(msg)
+
+    def error(self, msg: str):
+        """Standardowa metoda logowania błędów (kompatybilność z logging.Logger)."""
+        self.logger.error(msg)
+
+    def warning(self, msg: str):
+        """Standardowa metoda logowania ostrzeżeń (kompatybilność z logging.Logger)."""
+        self.logger.warning(msg)
+
+    def debug(self, msg: str):
+        """Standardowa metoda logowania debug (kompatybilność z logging.Logger)."""
+        self.logger.debug(msg)
+
     def log_debug_info(self, category: str, data: Any, level: str = "DEBUG"):
         """Ogólna metoda do logowania informacji debugowania."""
         entry = {"category": category, "level": level}
