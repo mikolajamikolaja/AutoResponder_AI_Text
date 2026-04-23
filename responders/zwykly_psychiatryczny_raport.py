@@ -91,12 +91,32 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
             current_app.logger.warning("[psych-raport] JSON naprawiony sekcja=%s (ucięty output)", section)
             return result
         except Exception as e2:
-            current_app.logger.warning("[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw=%.150s",
-                                       section, e2, raw)
+            # Loguj surowy output w całości — w trzech fragmentach żeby obejść limit linii logu
+            raw_len = len(raw) if raw else 0
+            current_app.logger.warning(
+                "[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw_len=%d",
+                section, e2, raw_len,
+            )
+            # Podziel na kawałki po 800 znaków żeby w Render logu było widać cały surowy output
+            chunk_size = 800
+            for idx in range(0, raw_len, chunk_size):
+                current_app.logger.warning(
+                    "[psych-raport] raw[%d:%d] sekcja=%s >>> %s",
+                    idx, idx + chunk_size, section, raw[idx:idx + chunk_size],
+                )
             return None
     except Exception as e:
-        current_app.logger.warning("[psych-raport] JSON błąd sekcja=%s: %s | raw=%.150s",
-                                   section, e, raw)
+        raw_len = len(raw) if raw else 0
+        current_app.logger.warning(
+            "[psych-raport] JSON błąd ogólny sekcja=%s: %s | raw_len=%d",
+            section, e, raw_len,
+        )
+        chunk_size = 800
+        for idx in range(0, raw_len, chunk_size):
+            current_app.logger.warning(
+                "[psych-raport] raw[%d:%d] sekcja=%s >>> %s",
+                idx, idx + chunk_size, section, raw[idx:idx + chunk_size],
+            )
         return None
 
 
@@ -332,7 +352,7 @@ def _sekcja_tydzien(cfg: dict, body: str, leki: list, tydzien: int,
         {
             "dzien": d,
             "data": daty[d],
-            "zdarzenie": "Min. 4-5 zdań. Styl Szwejka. Nawiązuje do emaila. Brak → '__BRAK__'",
+            "zdarzenie": "Min. 4-5 zdań. Formalna biurokratyczna powaga wobec absurdalnej sytuacji. Nawiązuje do emaila. Brak → '__BRAK__'",
             "lek": "Nazwa leku + dawka lub '__BRAK__'",
             "stan_pacjenta": "Jedno zdanie nihilistyczne lub '__BRAK__'",
             "nota_lekarska": "2-3 zdania lub '__BRAK__'"
@@ -522,7 +542,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
         f"SCHEMAT JSON (wypełnij TYLKO klucze notatki_sprzataczki i incydenty_specjalne):\n{schema_7c}\n\n"
         f"notatki_sprzataczki: DOKŁADNIE 3 obiekty. Każdy: data (DD.MM.YYYY), "
-        f"tresc (2-3 zdania — co znalazła sprzątając salę, gwarą polską, humor Szwejka/Monty Python, "
+        f"tresc (2-3 zdania — co znalazła sprzątając salę, gwarą polską, absurdalny humor biurokratycznej powagi wobec nonsensu, "
         f"nawiązuje do emaila pacjenta). KAŻDA notatka musi mówić o INNYM znalezisku.\n"
         f"incydenty_specjalne: DOKŁADNIE 2 incydenty, każdy 4-5 zdań, NAPRAWDĘ absurdalnych i śmiesznych, "
         f"nawiązujących do emaila. KAŻDY incydent INNY motyw. "
