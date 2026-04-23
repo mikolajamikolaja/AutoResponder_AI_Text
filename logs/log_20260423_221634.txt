@@ -1,0 +1,37 @@
+================================================================================
+RAPORT WYKONANIA PROGRAMU
+Data/Czas: 2026-04-23 22:16:34
+================================================================================
+
+[00:00] INPUT
+  sender: test@test.com
+  sender_name: 
+  subject: 
+  body_length: 4
+  body_preview: test
+
+[00:00] VARIABLES_DETECTED
+  sender: test@test.com
+  sender_name: 
+  has_previous_body: False
+  num_attachments: 0
+  save_to_drive: False
+  test_mode: False
+  disable_flux: False
+  contains_keyword: False
+  contains_keyword1: False
+  contains_keyword2: False
+  contains_keyword3: False
+  contains_keyword4: False
+  contains_flaga_test: False
+  contains_keyword_joker: False
+  wants_smierc: False
+  wants_analiza: False
+  wants_biznes: False
+  wants_scrabble: False
+  wants_emocje: False
+  wants_generator_pdf: False
+  is_retry: False
+  attempt_count: 1
+  skip_save_to_history: False
+

@@ -51,13 +51,17 @@ class ResourceManager:
         """Rejestruje rozpoczęcie pipeline'u."""
         with self._lock:
             self._active_pipelines += 1
-            self.logger.info(f"Pipeline start: active={self._active_pipelines}")
+            self.logger.log_debug_info(
+                "pipeline", f"Pipeline start: active={self._active_pipelines}"
+            )
 
     def pipeline_end(self):
         """Rejestruje zakończenie pipeline'u."""
         with self._lock:
             self._active_pipelines = max(0, self._active_pipelines - 1)
-            self.logger.info(f"Pipeline end: active={self._active_pipelines}")
+            self.logger.log_debug_info(
+                "pipeline", f"Pipeline end: active={self._active_pipelines}"
+            )
 
     def monitor_resources(self):
         """Loguje aktualne użycie zasobów."""

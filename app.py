@@ -32,8 +32,9 @@ import json
 import re
 import threading
 import urllib.parse
+from datetime import datetime
 
-from flask import Flask, request, jsonify, current_app
+from flask import Flask, request, jsonify, current_app, send_from_directory
 import requests as http_requests
 
 from drive_utils import (
@@ -49,12 +50,36 @@ from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
 from core.hf_token_manager import hf_tokens
 from core.responder_manager import ResponderManager, PipelineBuilder
-from core.user_manager import UserManager
+
+# from core.user_manager import UserManager  # Lazy import w webhook
 from core.resource_manager import ResourceManager
 from core.validator import Validator
 from core.sheets_logger import log_odebrano
 
 app = Flask(__name__)
+
+# ── Czas startu aplikacji ───────────────────────────────────────────────────
+start_time = datetime.now()
+
+# ── Globalne liczniki ──────────────────────────────────────────────────────
+total_emails_processed = 0
+last_error_time = None
+last_error_message = None
+
+
+def update_stats():
+    """Aktualizuje globalne statystyki."""
+    global total_emails_processed
+    total_emails_processed += 1
+
+
+def log_error(error_msg):
+    """Loguje błąd i zapisuje ostatni błąd."""
+    global last_error_time, last_error_message
+    last_error_time = datetime.now()
+    last_error_message = str(error_msg)
+    app.logger.error(f"System error: {error_msg}")
+
 
 # ── Inicjalizacja managerów ─────────────────────────────────────────────────
 responder_manager = ResponderManager()
@@ -73,10 +98,220 @@ resource_manager = ResourceManager(
 # ── Health check dla GAS ────────────────────────────────────────────────────
 @app.route("/", methods=["GET"])
 def health_check():
-    return "System operacyjny Tyler v6: Aktywny", 200
+    """Zwraca status systemu w formacie HTML lub JSON w zależności od Accept header."""
+    try:
+        mem_info = resource_manager.get_memory_usage()
+        uptime = datetime.now() - start_time
+
+        # Oblicz uptime w czytelnej formie
+        uptime_seconds = int(uptime.total_seconds())
+        uptime_str = f"{uptime_seconds // 3600}h {(uptime_seconds % 3600) // 60}m {uptime_seconds % 60}s"
+
+        status_data = {
+            "status": "active",
+            "version": "Tyler v6",
+            "active_pipelines": _active_pipelines,
+            "memory_usage_mb": round(mem_info["rss_mb"], 2),
+            "memory_percent": round(mem_info["percent"], 2),
+            "uptime": uptime_str,
+            "total_emails_processed": total_emails_processed,
+            "timestamp": datetime.now().isoformat(),
+            "last_error": (
+                {
+                    "time": last_error_time.isoformat() if last_error_time else None,
+                    "message": (
+                        last_error_message[:100] + "..."
+                        if last_error_message and len(last_error_message) > 100
+                        else last_error_message
+                    ),
+                }
+                if last_error_message
+                else None
+            ),
+            "config": {
+                "max_concurrent_pipelines": responder_manager.config.get(
+                    "performance", {}
+                ).get("max_concurrent_pipelines", 5),
+                "memory_threshold_mb": responder_manager.config.get(
+                    "performance", {}
+                ).get("memory_threshold_mb", 400),
+                "enabled_responders": [
+                    k
+                    for k, v in responder_manager.config.get("responders", {}).items()
+                    if v.get("enabled", False)
+                ],
+            },
+        }
+
+        # Jeśli klient żąda JSON (np. GAS), zwróć JSON
+        if request.headers.get("Accept", "").find("application/json") != -1:
+            return jsonify(status_data), 200
+
+        # W przeciwnym razie zwróć HTML z meta refresh
+        html_response = f"""
+        <!DOCTYPE html>
+        <html lang="pl">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <meta http-equiv="refresh" content="30">
+            <link rel="icon" type="image/x-icon" href="/favicon.ico">
+            <title>AutoResponder AI Text - Status</title>
+            <style>
+                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }}
+                .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }}
+                h1 {{ color: #333; margin-bottom: 30px; text-align: center; font-size: 2.5em; }}
+                .status-header {{ text-align: center; margin-bottom: 30px; }}
+                .status-badge {{ display: inline-block; padding: 10px 20px; background: #28a745; color: white; border-radius: 25px; font-weight: bold; font-size: 18px; }}
+                .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+                .metric {{ background: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 5px solid #007bff; transition: transform 0.2s; }}
+                .metric:hover {{ transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }}
+                .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }}
+                .metric .value {{ font-size: 28px; font-weight: bold; color: #333; }}
+                .metric .unit {{ font-size: 16px; color: #666; font-weight: normal; }}
+                .active {{ border-left-color: #28a745; }}
+                .warning {{ border-left-color: #ffc107; }}
+                .danger {{ border-left-color: #dc3545; }}
+                .error-section {{ background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 10px; padding: 20px; margin: 20px 0; }}
+                .error-section h3 {{ color: #856404; margin-top: 0; }}
+                .config-section {{ background: #f8f9fa; border-radius: 10px; padding: 20px; margin: 20px 0; }}
+                .config-section h3 {{ margin-top: 0; color: #495057; }}
+                .config-list {{ display: flex; flex-wrap: wrap; gap: 10px; }}
+                .config-tag {{ background: #007bff; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; }}
+                .footer {{ text-align: center; margin-top: 30px; color: #666; font-size: 14px; }}
+                .footer a {{ color: #007bff; text-decoration: none; }}
+                .footer a:hover {{ text-decoration: underline; }}
+                @media (max-width: 768px) {{
+                    .container {{ padding: 20px; }}
+                    h1 {{ font-size: 2em; }}
+                    .metrics-grid {{ grid-template-columns: 1fr; }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 AutoResponder AI Text - Tyler v6</h1>
+                <div class="status-header">
+                    <span class="status-badge">System Aktywny</span>
+                </div>
+                
+                <div class="metrics-grid">
+                    <div class="metric active">
+                        <h3>Aktywne Pipeline'y</h3>
+                        <div class="value">{status_data['active_pipelines']}</div>
+                    </div>
+                    <div class="metric">
+                        <h3>Użycie Pamięci</h3>
+                        <div class="value">{status_data['memory_usage_mb']}<span class="unit"> MB</span></div>
+                    </div>
+                    <div class="metric">
+                        <h3>% Pamięci</h3>
+                        <div class="value">{status_data['memory_percent']}<span class="unit"> %</span></div>
+                    </div>
+                    <div class="metric">
+                        <h3>Uptime</h3>
+                        <div class="value">{status_data['uptime']}</div>
+                    </div>
+                    <div class="metric">
+                        <h3>Przetworzone Emaile</h3>
+                        <div class="value">{status_data['total_emails_processed']}</div>
+                    </div>
+                    <div class="metric">
+                        <h3>Maks. Współbieżność</h3>
+                        <div class="value">{status_data['config']['max_concurrent_pipelines']}</div>
+                    </div>
+                </div>
+                
+                {"".join(f'''
+                <div class="error-section">
+                    <h3>⚠️ Ostatni Błąd</h3>
+                    <p><strong>Czas:</strong> {status_data["last_error"]["time"]}</p>
+                    <p><strong>Błąd:</strong> {status_data["last_error"]["message"]}</p>
+                </div>
+                ''' for _ in [None] if status_data.get('last_error'))}
+                
+                <div class="config-section">
+                    <h3>⚙️ Konfiguracja Systemu</h3>
+                    <p><strong>Próg Pamięci:</strong> {status_data['config']['memory_threshold_mb']} MB</p>
+                    <p><strong>Aktywne Respondery:</strong></p>
+                    <div class="config-list">
+                        {"".join(f'<span class="config-tag">{responder}</span>' for responder in status_data["config"]["enabled_responders"])}
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>Ostatnia aktualizacja: {status_data['timestamp'][:19]} | 
+                    <a href="/status">API JSON</a> | 
+                    Auto-refresh co 30 sekund</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return html_response, 200
+
+    except Exception as e:
+        log_error(str(e))
+        return f"Błąd systemu: {str(e)}", 500
 
 
-# ── Globalny licznik aktywnych pipeline'ów ────────────────────────────────────
+# ── Szczegółowy status systemu ──────────────────────────────────────────────
+@app.route("/status", methods=["GET"])
+def system_status():
+    """Zwraca szczegółowy status systemu w formacie JSON."""
+    try:
+        mem_info = resource_manager.get_memory_usage()
+        uptime = datetime.now() - start_time
+        uptime_seconds = int(uptime.total_seconds())
+        uptime_str = f"{uptime_seconds // 3600}h {(uptime_seconds % 3600) // 60}m {uptime_seconds % 60}s"
+
+        status = {
+            "status": "active",
+            "version": "Tyler v6",
+            "active_pipelines": _active_pipelines,
+            "memory_usage_mb": round(mem_info["rss_mb"], 2),
+            "memory_percent": round(mem_info["percent"], 2),
+            "uptime": uptime_str,
+            "total_emails_processed": total_emails_processed,
+            "timestamp": datetime.now().isoformat(),
+            "last_error": (
+                {
+                    "time": last_error_time.isoformat() if last_error_time else None,
+                    "message": last_error_message,
+                }
+                if last_error_message
+                else None
+            ),
+            "config": {
+                "max_concurrent_pipelines": responder_manager.config.get(
+                    "performance", {}
+                ).get("max_concurrent_pipelines", 5),
+                "memory_threshold_mb": responder_manager.config.get(
+                    "performance", {}
+                ).get("memory_threshold_mb", 400),
+                "enabled_responders": [
+                    k
+                    for k, v in responder_manager.config.get("responders", {}).items()
+                    if v.get("enabled", False)
+                ],
+            },
+        }
+        return jsonify(status), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ── Favicon ──────────────────────────────────────────────────────────────────
+@app.route("/favicon.ico", methods=["GET"])
+def favicon():
+    """Zwraca favicon.ico z katalogu images."""
+    try:
+        return send_from_directory("images", "favicon.ico", mimetype="image/x-icon")
+    except Exception as e:
+        app.logger.warning(f"Favicon error: {e}")
+        return "", 404
+
+
 import threading as _threading
 
 _pipeline_lock = _threading.Lock()
@@ -541,17 +776,31 @@ def _upload_drive_item(item: dict, folder_id: str) -> bool:
         )
         return False
 
-    upload_result = upload_file_to_drive(
-        item["base64"],
-        item["filename"],
-        item.get("content_type", "application/octet-stream"),
-        folder_id,
-    )
-    if not upload_result:
+    # ── Optymalizacja pamięci: dekoduj base64 tylko przy uploadzie ───────────
+    import base64
+
+    try:
+        raw_bytes = base64.b64decode(item["base64"])
+        # Natychmiast usuń base64 z pamięci
+        del item["base64"]
+
+        upload_result = upload_file_to_drive(
+            raw_bytes,  # Przekaż surowe bajty zamiast base64
+            filename,
+            item.get("content_type", "application/octet-stream"),
+            folder_id,
+        )
+
+        # Wyczyść surowe bajty z pamięci
+        del raw_bytes
+
+        if not upload_result:
+            return False
+        item["drive_url"] = upload_result["url"]
+        return True
+    except Exception as e:
+        app.logger.error(f"[drive] Błąd dekodowania base64 dla {filename}: {e}")
         return False
-    item["drive_url"] = upload_result["url"]
-    item.pop("base64", None)
-    return True
 
 
 def _upload_drive_section_files(section_data: dict, folder_id: str) -> list:
@@ -924,6 +1173,25 @@ def webhook():
         logger.log_decision("empty_body_check", "body.strip() == ''", False)
         return jsonify({"status": "ignored", "reason": "empty body"}), 200
 
+    # ── Limit długości emaila (jedna strona maszynopisu ~2000 znaków) ────────
+    MAX_EMAIL_LENGTH = 2500  # ~1 strona maszynopisu z marginesem
+    if len(body) > MAX_EMAIL_LENGTH:
+        logger.log_decision(
+            "email_too_long", f"len(body)={len(body)} > {MAX_EMAIL_LENGTH}", False
+        )
+        return (
+            jsonify(
+                {
+                    "status": "ignored",
+                    "reason": f"email too long ({len(body)} chars, max {MAX_EMAIL_LENGTH})",
+                }
+            ),
+            200,
+        )
+
+    # Aktualizuj statystyki przetworzonych emaili
+    update_stats()
+
     sender = data.get("sender", "")
     sender_name = data.get("sender_name", "")
     subject = data.get("subject", "")
@@ -978,7 +1246,9 @@ def webhook():
     smierc_sheet_id = os.getenv("SMIERC_HISTORY_SHEET_ID")
     history_sheet_id = os.getenv("HISTORY_SHEET_ID")
 
-    # ── Inicjalizacja user manager ────────────────────────────────────────────
+    # ── Inicjalizacja user manager (lazy import) ─────────────────────────────
+    from core.user_manager import UserManager
+
     user_manager = UserManager(history_sheet_id, smierc_sheet_id)
 
     # ── Sprawdzenie statusu użytkownika ───────────────────────────────────────
@@ -1335,7 +1605,16 @@ def webhook_gif():
     )
 
     gif1_b64 = make_gif(png1_b64) if png1_b64 else None
+    # Natychmiast wyczyść wejściowy base64 z pamięci
+    if png1_b64:
+        png1_b64 = None
+        gc.collect()
+
     gif2_b64 = make_gif(png2_b64) if png2_b64 else None
+    # Natychmiast wyczyść wejściowy base64 z pamięci
+    if png2_b64:
+        png2_b64 = None
+        gc.collect()
 
     app.logger.info(
         "/webhook_gif — GIFy: gif1=%s gif2=%s", bool(gif1_b64), bool(gif2_b64)
