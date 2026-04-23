@@ -21,13 +21,56 @@ class ResponderManager:
         self.logger = get_logger()
 
     def _load_config(self) -> Dict[str, Any]:
-        """Ładuje konfigurację z JSON."""
+        """Ładuje konfigurację z JSON z walidacją schematu."""
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+
+            # Walidacja schematu
+            if not isinstance(config, dict):
+                raise ValueError("Config must be a dictionary")
+
+            required_keys = ["responders", "keyword_mappings", "section_order"]
+            for key in required_keys:
+                if key not in config:
+                    raise ValueError(f"Missing required key: {key}")
+
+            if not isinstance(config["responders"], dict):
+                raise ValueError("responders must be a dictionary")
+
+            if not isinstance(config["keyword_mappings"], dict):
+                raise ValueError("keyword_mappings must be a dictionary")
+
+            if not isinstance(config["section_order"], list):
+                raise ValueError("section_order must be a list")
+
+            # Walidacja responderów
+            for responder_name, responder_config in config["responders"].items():
+                if not isinstance(responder_config, dict):
+                    raise ValueError(
+                        f"Responder {responder_name} config must be a dict"
+                    )
+                if "enabled" not in responder_config:
+                    raise ValueError(
+                        f"Responder {responder_name} missing 'enabled' key"
+                    )
+                if not isinstance(responder_config["enabled"], bool):
+                    raise ValueError(
+                        f"Responder {responder_name} 'enabled' must be boolean"
+                    )
+
+            self.logger.info("Config validation passed")
+            return config
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Invalid JSON in config file: {e}")
+            raise RuntimeError(f"Config JSON parse error: {e}")
+        except ValueError as e:
+            self.logger.error(f"Config validation failed: {e}")
+            raise RuntimeError(f"Config validation failed: {e}")
         except Exception as e:
-            self.logger.error(f"Błąd ładowania konfiguracji: {e}")
-            return {}
+            self.logger.error(f"Error loading config: {e}")
+            raise RuntimeError(f"Config load error: {e}")
 
     def get_responder_config(self, responder_name: str) -> Optional[Dict[str, Any]]:
         """Zwraca konfigurację konkretnego respondera."""

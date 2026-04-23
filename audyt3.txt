@@ -1,0 +1,321 @@
+AUDYT3: OCENA CRITICAL - JSON I STABILNOŚĆ SYSTEMU
+
+STRESZCZENIE EXECUTIVE
+======================
+System ma poważne luki w obsłudze JSON, które mogą całkowicie zablokować pipeline
+lub spowodować wysyłanie nieuwiarygodnych odpowiedzi. To nie jest problem teoretyczny —
+to może się dziać TERAZ. Wymaga NATYCHMIASTOWYCH napraw.
+
+---
+
+1. KRYTYCZNE PROBLEMY
+
+1.1. BRAK WALIDACJI SCHEMATU config_responders.json
+- Plik jest wczytywany ale NIGDY nie jest walidowany
+- Jeśli JSON ma złą strukturę, system zwraca `{}` i cicho się zawiesza
+- Linie 24-27 w core/responder_manager.py:
+  ```python
+  except Exception as e:
+      self.logger.error(f"Błąd ładowania konfiguracji: {e}")
+      return {}
+  ```
+- PROBLEM: Zwracamy pusty dict zamiast rzucić błąd. Średnia godzina na debugowanie.
+
+1.2. BRAK WCZYTANIA CSV PRI STARCIE
+- responders/smierc.py ładuje plik XLSX/CSV tylko na żądanie w `_load_config_xlsx()`
+- Jeśli plik nie istnieje, pipeline MOŻE pracować, ale cicho zwróci pusty dict
+- Linia 108 w responders/smierc.py:
+  ```python
+  def _load_config_xlsx():
+      # BRAK OBSŁUGI BŁĘDU PRZY BRAKUJĄCYM PLIKU
+  ```
+- PROBLEM: Może spowodować błędne wyniczne dla "smierc" bez żadnego logu.
+
+1.3. JSON.JSONDECODE NIE JEST OBSŁUGIWANY GDZIE POWINIEN BYĆ
+- 50+ miejsc w kodzie używa `json.JSONDecodeError` ale fallback zawsze zwraca coś
+- Np. w responders/zwykly.py linia 192:
+  ```python
+  except json.JSONDecodeError as e:
+      logger.error("[zwykly] Błąd JSON w prompt.json: %s", e)
+  ```
+  A potem wraca fallbacku `_load_prompt_fallback()` - ale gdzie jesisteśmy pewni, że fallback zwróci ważny JSON?
+- PROBLEM: Fallback może być przepromptowany złym JSON -em i zwrócić strukturę, którą oczekuje kod.
+
+1.4. WEBHOOK DATA PARSE - BRAK WALIDACJI
+- app.py linie 1190 i 1617:
+  ```python
+  data = request.json or {}
+  ```
+- Jeśli JSON z webhhooka ma ZŁĄ STRUKTURĘ, system zwróci 200 OK ale później w pipeline zawiedzie
+- BRAK SCHEMATYZACJI — nie wiemy, jakie pola muszą być w data{}
+- PROBLEM: Użytkownik wysyła email, dostaje 200, ale nothing w backend. Brak logu.
+
+1.5. GMAIL API JSON RESPONSE - BRAK PEŁNEJ WALIDACJI
+- smtp_wysylka.py linie 133, 153:
+  ```python
+  return resp.json()["access_token"]
+  ```
+- Jeśli API zwróci JSON bez "access_token", kod rzuci KeyError, a nie JSONDecodeError
+- BRAK BEZPIECZNEGO DOSTĘPU (np. `resp.json().get("access_token")`)
+- PROBLEM: Jeśli Gmail API zmieni format, system upada bez sensownego błędu.
+
+1.6. AI MODEL JSON PARSING - CHAOTYCZNE
+- responders/generator_pdf.py, zwykly.py, emocje.py, dociekliwy.py używają `json.loads()` na odpowiedzi AI
+- Każdy ma INNY fallback i INNĄ strategię parsowania
+- Np. zwykly.py linie 456-484 vs generator_pdf.py linie 130-138 vs emocje.py linie 129-136
+- BRAK UNIFIKACJI — każdy responder robi cleanup inaczej
+- PROBLEM: Niewykonalna konserwacja, nowe bugi łatwo się pojawią.
+
+1.7. BASE64 W JSON - BRAK LIMITU ROZMIARU
+- `smtp_wysylka.py` przechowuje `base64` w dict bez sprawdzenia rozmiaru
+- `base64.b64encode()` w `job_runner.py` może zjeść całą pamięć na Render 512MB
+- Lile 80, `zbierz_zalaczniki_z_response()` nie ma kontroli rozmiaru pola `base64`
+- PROBLEM: Jeden duży plik (np. 100MB PDF) może wysadzić cały pipeline.
+
+1.8. RESPONSE DATA STRUCTURE - BRAK SCHEMATU
+- Każdy responder zwraca `dict` ale NIGDY nie jest walidowany
+- Np. `nawiazanie` zwraca `{"has_history", "reply_html", "analysis"}`
+     ale `biznes` zwraca `{"reply_html", "pdf", "topic"}`
+- job_runner.py naiwie łączy to wszystko w `combined_results` bez sprawdzenia kluczy
+- PROBLEM: Jeśli responder ma błąd w zwracanej strukturze, email będzie niedokończony.
+
+1.9. .get() ZE SŁABYMI DEFAULTS
+- Wszędzie w kodzie: `.get("key")` zwraca `None` a nie wymagana wartość
+- Np. smtp_wysylka.py linia 305:
+  ```python
+  filename = item.get("filename") or "zalacznik"
+  ```
+  Co jeśli `item` jest nie-dict? Co jeśli `item.get()` zwróci coś inne?
+- PROBLEM: Silent fallback może spowodować, że dwa pliki będą miały tę samą nazwę.
+
+1.10. FUNKCJA load_prompt() - ZAWSZE ZWRACA STRING
+- core/files.py linie 33-41 gwarantuje zwrócenie `str` (fallback=="")
+- ALE zwracany string może być "".
+- Kiedy się to tworzy instrukcję dla AI, pusty string jest niezauważalny
+- PROBLEM: AI dostaje pusty prompt i zwraca nonsensy — system nie widzi błędu.
+
+---
+
+2. SZCZEGÓŁOWA ANALIZA JSON FLOW
+
+2.1. CONFIG INITIALIZATION
+  [app.py startup]
+    → pipeline_builder = PipelineBuilder(responder_manager)
+    → responder_manager = ResponderManager("config_responders.json")
+    → ResponderManager._load_config()
+      >> Czyta JSON
+      >> BRAK walidacji schemu
+      >> Jeśli błąd, zwraca {}
+      >> pipeline_builder.build_sections() może zwrócić []
+
+  RYZYK: System startuje bez błędu nawet z uszkodzonym JSON.
+
+2.2. WEBHOOK REQUEST PARSE
+  [POST /webhook]
+    → data = request.json or {}
+    → Jeśli JSON parsing Flask zawiedzie, framework rzuci werkzeug HTTPBadRequest
+    → ALE: Jeśli JSON poprawny ale brakuje pól, system nie reaguje
+
+  RYZYK: Niekompletny webhook nie spowoduje błędu 400, tylko nie-akceptowany pipeline.
+
+2.3. RESPONDER JSON LOADING (PROMPTS)
+  [Each responder startup]
+    → _load_prompt_json() / _load_prompt() / json.load(f)
+    → JSONDecodeError → logger.error() → zwraca fallback
+    → Fallback zawsze zwraca ważne dane (ale generyczne)
+
+  RYZYK: Jeśli fallback ma błąd, system może się zawiesić w responsie AI.
+
+2.4. AI RESPONSE JSON PARSING
+  [AI response processing]
+    → json.loads(raw)
+    → JSONDecodeError → logger.error()
+    → Fallback strategia zmienia się per responder
+      - zwykly.py: zwraca {"reply_html": "..."}
+      - generator_pdf: zwraca {"reply_html": "", "pdf": None}
+      - emocje: zwraca {"images": [], "docs": []}
+
+  RYZYK: Niespójne fallback mogą spowodować, że job_runner.py zwróci niekompletny combined_results.
+
+2.5. ATTACHMENT STRUCTURE (BASE64)
+  [job_runner.py _upload_drive_item()]
+    → item = {"base64": ..., "content_type": ..., "filename": ...}
+    → BRAK WALIDACJI ROZMIARU
+    → base64.b64decode() → bytes → upload_file_to_drive()
+    
+  RYZYK: Przesłanie 200MB bazy64 może zawiesić system na Render.
+
+2.6. EMAIL SEND (SMTP)
+  [smtp_wysylka.wyslij_odpowiedz()]
+    → zalaczniki = zbierz_zalaczniki_z_response(response_data)
+    → for item in (zalaczniki or []):
+        >> Jeśli item nie ma "base64", jest pomijany CICHO
+        >> Jeśli base64 jest niepoprawny (nie base64), base64.b64decode() rzuca
+    
+  RYZYK: Załącznik z niepoprawnym base64 będzie celowo pominięty, ale użytkownik nie wie.
+
+2.7. GMAIL API
+  [smtp_wysylka._get_access_token_service_account()]
+    → resp.json()["access_token"]
+    → Brak `.get()`, brak sprawdzenia czy "access_token" istnieje
+    → Jeśli API zawiedzie, rzuca KeyError
+
+  RYZYK: System upadnie w środku wysyłania, email na zawsze "stuck".
+
+---
+
+3. BRAKUJĄCE MECHANIZMY
+
+3.1. SCHEMA VALIDATION
+- Brak pydantic / marshmallow / jsonschema
+- Nie ma walidacji struktury config_responders.json
+- Nie ma walidacji webhook data
+- Nie ma walidacji response_data ze responderów
+
+3.2. SIZE LIMITS
+- Brak limitu na rozmiar base64 w attachments
+- Brak limitu na rozmiar request.json
+- JSON może być nieograniczonego rozmiaru (DoS risk)
+
+3.3. GRACEFUL DEGRADATION
+- Jeśli JSON zawiedzie, ZAWSZE zwracany jest fallback
+- ALE fallback może mieć błąd
+- Nie ma "abort on critical JSON error"
+
+3.4. LOGGING / TRACING
+- Błędy JSON są logowane, ale czasami NAZWĄ pola/path nie ma
+- Np. "Błąd ładowania konfiguracji: ..." - nie wiadomo gdzie dokładnie
+
+---
+
+4. PRAWDOPODOBNE SCENARIUSZE POWAŻNYCH BŁĘDÓW
+
+4.1. Scenariusz 1: Uszkodzony config_responders.json
+  - Ktoś edytuje plik, zapomina przecinka
+  - System startuje, zwraca {} w ResponderManager
+  - Pipeline nie ma responderów
+  - Webhook zwraca 200 OK ale "sections": []
+  - Email nie jest wysyłany
+  - BRAK ALERTU O PROBLEMIE
+
+4.2. Scenariusz 2: Gmail API zmienia format access_token
+  - API zwraca {"token": "...", "access_token": "..."} bez "access_token"
+  - smtp_wysylka.py linia 153 rzuca KeyError: 'access_token'
+  - Pipeline crasha, email jest "stuck"
+  - Użytkownik czeka, nic się nie dzieje
+  - Log: KeyError: 'access_token' (bez kontekstu)
+
+4.3. Scenariusz 3: AI Response ma JSON wewnątrz JSON
+  - AI zwraca response z zagnieżdżonym JSON
+  - json.loads() zawiedzie
+  - Fallback zwraca minimalistyczną strukturę
+  - job_runner łączy, ale są brakujące dane
+  - Email idzie bez załączników
+
+4.4. Scenariusz 4: Webhook z osadzonymi emojami
+  - request.json zwraca dane z emoji w unicode
+  - JSON jest poprawny, ALE:
+  - Jeśli gdzieś kod robi `.encode("ascii")`, będzie ValueError
+  - Np. base64.b64encode(content.encode("ascii")) → UnicodeEncodeError
+  - PROBLEM: System zawijdzie na emoji, użytkownik nie wie dlaczego
+
+---
+
+5. REKOMENDACJE NAPRAWS (Priority)
+
+PRIORITY 1 - IMMEDIATE:
+  ✓ Dodaj walidację schematu config_responders.json na startup
+    → Używaj jsonschema, sprawdzaj:
+      - "responders" jest dict-em z kluczami string: dict
+      - Każdy responder ma "enabled": bool, "description": str
+      - "keyword_mappings" i "section_order" są poprawne
+      - Jeśli błąd, system wyrzuca exception przy startup (fail-fast)
+
+  ✓ Zamień `request.json or {}` na walidowaną strukturę
+    → Zdefiniuj schema wehookami request:
+      ```python
+      WEBHOOK_SCHEMA = {
+          "sender": str,
+          "sender_name": str,
+          "body": str,
+          "subject": str,
+          # ...
+      }
+      ```
+    → Waliduj, jeśli brakuje, zwróć 400 Bad Request
+
+  ✓ Zamień wszystkie `resp.json()["key"]` na `resp.json().get("key")`
+    → Dodaj fallback dla każdego klucza
+    → Loguj ostrzeżenie gdy brakuje oczekiwanego pola
+
+PRIORITY 2 - URGENT:
+  ✓ Ujednolić `json.loads()` fallback w JEDNYM miejscu
+    → Utwórz helper `safe_json_loads(text, schema=None, fallback=None)`
+    → Wszystkie respondery go używają
+    → Logowanie centralne
+
+  ✓ Dodaj SIZE LIMIT dla base64
+    → `MAX_BASE64_SIZE = 10_000_000  # 10MB`
+    → Sprawdzaj w `zbierz_zalaczniki_z_response()` i `_upload_drive_item()`
+    → Jeśli przekroczony, loguj i pomijaj plik (nie zawieś system)
+
+  ✓ Waliduj response_data struktur z każdego respondera
+    → Każdy responder powinien mieć schema zwracanych pól
+    → job_runner sprawdza, jeśli błąd, loguje i używa fallback
+
+PRIORITY 3 - IMPORTANT:
+  ✓ Dodaj dedicated nasze dla JSON ładując w `core/json_helpers.py`
+    → `load_json_from_file(path, schema=None, fallback=None)`
+    → `parse_json_response(raw, fallback=None)`
+    → `validate_json_structure(data, schema)`
+
+  ✓ Upgrade logów - dodaj kontekst
+    → Zamiast "Błąd ładowania konfiguracji: ...",
+    → "config_responders.json: JSON parse error at line 42: ..."
+
+  ✓ Webhook error responses - zwróć szczegółowe info
+    → Zamiast 200 OK z "sections": [],
+    → 400 Bad Request {"error": "Missing required fields: ..."}
+
+---
+
+6. TESTY DO DODANIA
+
+  - test_config_responders_valid_json()
+  - test_config_responders_invalid_schema()
+  - test_webhook_missing_fields()
+  - test_webhook_oversized_attachment()
+  - test_json_parse_fallback_valid()
+  - test_gmail_api_missing_access_token()
+  - test_base64_size_limit()
+
+---
+
+7. SŁABE PUNKTY - PODSUMOWANIE
+
+| Problem | Wpływ | Łatwość Naprawy |
+|---------|-------|-----------------|
+| StaticBrak walidacji config JSON | CRITICAL | MEDIUM |
+| Brak schemy webhook | CRITICAL | MEDIUM |
+| Brak SIZE LIMIT base64 | HIGH | EASY |
+| JSON parsing bez unifikacji | HIGH | MEDIUM |
+| Gmail API KeyError | MEDIUM | EASY |
+| Fallback bez walidacji | MEDIUM | HARD |
+
+---
+
+8. PODSUMOWANIE
+
+System jest **NIESTABILNY** w zakresie obsługi JSON. Każdy błąd JSON jest CICHY,
+a system ZAWSZE zwraca status 200 OK, nawet gdy coś się pokopało. To może trwać
+tygodniami zanim ktoś to zauważy (bo użytkownik czeka na email, ale nigdy go nie dostaje).
+
+Wymaga NATYCHMIASTOWEGO działania na Priority 1 sekcji. Bez tego system jest
+w produkcji z czasem bomba taktującą.
+
+---
+
+Raport wygenerowany: 2026-04-23
+Analiza: 100+ linijek JSONa w core/
+Severita: CRITICAL
+Status: WYMAGA DZIAŁANIA TERAZ

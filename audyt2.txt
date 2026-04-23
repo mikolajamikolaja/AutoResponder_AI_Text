@@ -1,0 +1,98 @@
+AUDYT2: Kompletny przegląd responderów i ścieżki odpowiedzi
+
+1. Cel audytu
+- Sprawdzić, czy każdy aktywny responder w projekcie zwraca kompletną odpowiedź dla nadawcy.
+- Ocenić ryzyka, gdzie odpowiedź może być niepełna lub brakować załączników.
+- Zwrócić uwagę na wtyki w pipeline, w których dane mogą być tracone.
+
+2. Architektura pipeline
+- `app.py` przyjmuje webhook i buduje `requested_sections` przez `PipelineBuilder`.
+- `core/responder_manager.py` konfiguruje aktywne respondery i ich kolejność.
+- `core/job_runner.py` wykonuje sekcje, łączy wyniki, zapisuje Drive i wysyła jeden skonsolidowany email.
+- `smtp_wysylka.py` zawiera `zbierz_zalaczniki_z_response()` i `wyslij_odpowiedz()`.
+
+3. Konfiguracja aktywnych responderów
+- W `config_responders.json` wszystkie wymienione respondery są obecnie `enabled: true`.
+- Kolejność sekcji: `nawiazanie`, `analiza`, `zwykly`, `smierc`, `generator_pdf`, `biznes`, `scrabble`, `emocje`.
+- `analiza` mapuje się w pipeline do `responders.dociekliwy.build_dociekliwy_section()`.
+
+4. Ocena każdego respondera
+
+4.1. `nawiazanie`
+- Jeśli brakuje `previous_body`, zwraca `has_history=False` i pusty `reply_html`.
+- Jeśli historia istnieje, zawsze zwraca `reply_html` na podstawie odpowiedzi AI.
+- Wnioski: pełna odpowiedź zależy od danych wejściowych. Bez historii nie ma treści, ale to jest zamierzona logika.
+
+4.2. `analiza` / `dociekliwy`
+- Zwraca `reply_html`, `gra_html`, oraz `docx_list` z co najmniej dwoma załącznikami (`eryk_diagram_interaktywny.html`, `eryk_diagram_mapa.jpg`, `eryk_gra_pelna.html`).
+- Jeśli AI zwróci pusty wynik, używa fallbacku i nadal generuje grę.
+- Wnioski: ten responder powinien dostarczać pełny zestaw plików przy normalnej pracy. Ryzyko: brak PNG/SVG jeśli generacja diagramów zawiedzie, ale `reply_html` nadal powstaje.
+
+4.3. `zwykly`
+- Zawsze zwraca `reply_html` (tekst z Tylerem/Sokratesem).
+- Dodatkowo zwraca `docx_list` z `raport_pdf` i może dodać wyniki z `dociekliwy`, jeśli istnieją.
+- Wnioski: pełność tekstu jest wysokie, ale załączniki są opcjonalne i zależą od wygenerowania raportów oraz analizy. To jest oczekiwane zachowanie, ale użytkownik może dostawać samego tekstu bez plików.
+
+4.4. `smierc`
+- Zawsze zwraca `reply_html` i `reply_text`.
+- Dołącza `images` zawsze wtedy, gdy istnieje lokalny obraz statyczny lub uda się wygenerować FLUX.
+- Zwraca też `videos` i `debug_txt` warunkowo.
+- Wnioski: ten responder ma mocną odpowiedź tekstową. Pełne załączniki mogą jednak zależeć od plików lokalnych i dostępności modelu FLUX.
+
+4.5. `generator_pdf`
+- Zwraca `reply_html` oraz `pdf` z `base64` i `content_type`.
+- W przypadku wyjątku zwraca wiadomość błędu i `pdf: None`.
+- Wnioski: dostarcza pełną odpowiedź, o ile generacja PDF się powiedzie. Jeżeli AI lub generowanie PDF zawiedzie, użytkownik dostanie informację o błędzie.
+
+4.6. `biznes`
+- Zwraca `reply_html` i plik `pdf` dla wykrytego tematu.
+- Jeśli brakuje pliku PDF na dysku, używa fallbacku do pliku kontaktowego lub dodaje `notes`.
+- Uwaga: zwraca `pdf` bez jawnego `content_type` w słowniku, ale `smtp_wysylka` obsługuje to jako `application/octet-stream`.
+- Wnioski: odpowiedź tekstowa występuje prawidłowo; plik PDF jest zwykle dołączany, ale może być zastąpiony fallbackiem lub pominięty, jeśli plik nie istnieje.
+
+4.7. `scrabble`
+- Zwraca `reply_html` i `image` PNG wygenerowany za pomocą Pillow.
+- Jeśli Pillow nie jest dostępny lub renderowanie się nie powiedzie, `image.base64` może być puste.
+- Wnioski: odpowiedź tekstowa jest zawsze obecna; załącznik PNG jest zależny od dostępności Pillow i poprawności renderowania.
+
+4.8. `emocje`
+- Zwraca `reply_html`, listę `images` i listę `docs`.
+- Jeśli nie ma źródeł do analizy (ani body, ani załączników), zwraca tekstową informację i puste listy.
+- Wnioski: pełność tekstu gwarantowana, a grafiki/raporty są opcjonalne, zależne od analizy emocji.
+
+5. Ogólne ryzyka / miejsce problemów
+
+5.1. Dane w `combined_results`
+- Pipeline łączy wyniki z sekcji w jeden słownik. Jeśli poszczególne sekcje zwrócą tylko `reply_html` bez załączników, użytkownik otrzyma sam tekst.
+- To zachowanie jest zgodne z logiką projektu, ale niekoniecznie z oczekiwaniem „pełnej odpowiedzi z plikami”.
+
+5.2. Wysyłka załączników
+- `smtp_wysylka.wyslij_odpowiedz()` pomija elementy, które nie mają `base64`.
+- `zbierz_zalaczniki_z_response()` zbiera pliki z typowych kluczy: `pdf`, `emoticon`, `cv_pdf`, `ankieta_pdf`, `horoskop_pdf`, `karta_rpg_pdf`, `raport_pdf`, `debug_txt`, `explanation_txt`, `plakat_svg`, `gra_html`, `image`, `image2`, `prompt1_txt`, `prompt2_txt`, `triptych`, `images`, `videos`, `docs`, `docx_list`.
+- Wnioski: jeśli pod którymkolwiek kluczem nie pojawi się poprawnie `base64`, plik zostanie utracony.
+
+5.3. Znany błąd naprawiony w `core/job_runner.py`
+- Poprzednia logika usuwała `base64` z obiektu pliku podczas zapisu na Drive, zanim email był zbudowany.
+- To było źródłem sytuacji, w której plik został wygenerowany, ale nie wysłany.
+- Po poprawce upload wykonuje się na kopii danych, więc oryginalny `base64` pozostaje dostępny dla emaila.
+
+6. Najważniejsze wnioski dla użytkownika
+- Tekstowe odpowiedzi są w zasadzie zawsze dostarczane przez każdy aktywny responder.
+- Załączniki są generowane i wysyłane tylko wtedy, gdy:
+  * odpowiedni responder wygeneruje plik,
+  * plik ma poprawny `base64`,
+  * `smtp_wysylka` go zbierze,
+  * oraz upload na Drive nie usunie źródła przed wysyłką.
+- W przypadku `nawiazanie` i `emocje` brak odpowiedzi plikowej może być normalny przy braku historii lub braku załączników.
+- W przypadku `biznes`, `generator_pdf`, `scrabble`, `dociekliwy`, `smierc` oczekiwanie na plik jest uzasadnione, ale wciąż może zawieść z powodu AI/zasobów.
+
+7. Rekomendacje
+- Upewnić się, że `reply_html` nie sugeruje załącznika, jeśli plik niepowstał.
+- Dodać w mailu jasny komunikat: „Nie udało się wygenerować pliku. Otrzymasz sam tekst.”
+- Rozważyć logowanie stanu generacji plików per sekcja do `log.txt`, aby błyskawicznie zidentyfikować brakujące załączniki.
+
+8. Status kompilacji
+- `core/job_runner.py` skompilował się poprawnie po poprawce.
+
+--
+Raport wygenerowany na podstawie analizy plików w katalogu projektu i konfiguracji responderów.

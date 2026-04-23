@@ -51,29 +51,27 @@ def _upload_drive_item(item: dict, folder_id: str) -> bool:
     if not isinstance(item, dict) or not item.get("base64") or not item.get("filename"):
         return False
 
+    # Użyj kopii podczas uploadu, żeby nie usunąć base64 z oryginalnego obiektu
+    # który może być później użyty do wysyłki emaila.
+    item_copy = dict(item)
+    filename = item_copy["filename"]
+
     # ── Pomiń pliki z katalogów media/ i images/ (duplikacja) ──────────────────
-    filename = item["filename"]
     if _file_exists_in_dir("media", filename) or _file_exists_in_dir(
         "images", filename
     ):
-        # Usuń base64, ale nie zapisuj na dysku
-        item.pop("base64", None)
         return True  # Symuluj sukces, żeby nie blokować pipeline
 
     # Nie zapisuj obrazków zastępczych na dysku Google — unikaj powielania
     if "zastepczy" in filename.lower():
-        # Usuń base64, ale nie zapisuj na dysku
-        item.pop("base64", None)
         return True  # Symuluj sukces, żeby nie blokować pipeline
 
     result = upload_file_to_drive(
-        item["base64"],
-        item["filename"],
-        item.get("content_type", "application/octet-stream"),
+        item_copy["base64"],
+        item_copy["filename"],
+        item_copy.get("content_type", "application/octet-stream"),
         folder_id,
     )
-    # Usuń base64 natychmiast po uploadzie — to największy pożeracz pamięci
-    item.pop("base64", None)
     if not result:
         return False
     item["drive_url"] = result.get("url", "")
