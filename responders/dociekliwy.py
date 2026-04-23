@@ -36,10 +36,11 @@ logger = logging.getLogger(__name__)
 _DEEPSEEK_KEY = os.getenv("API_KEY_DEEPSEEK", "").strip()
 
 MAX_PYTANIA = 2  # Zmniejszone z 3 → mniejszy JSON, mniej tokenów, mniej timeoutów
-MAX_RUNDY = 2    # Zmniejszone z 3 → j.w.
+MAX_RUNDY = 2  # Zmniejszone z 3 → j.w.
 
 
 # ── DEEPSEEK ───────────────────────────────────────────────────────────
+
 
 def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional[str]:
     if not _DEEPSEEK_KEY:
@@ -47,12 +48,15 @@ def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional
     try:
         resp = requests.post(
             "https://api.deepseek.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {_DEEPSEEK_KEY}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {_DEEPSEEK_KEY}",
+                "Content-Type": "application/json",
+            },
             json={
                 "model": "deepseek-chat",
                 "messages": [
                     {"role": "system", "content": system},
-                    {"role": "user",   "content": prompt},
+                    {"role": "user", "content": prompt},
                 ],
                 "max_tokens": max_tokens,
                 "temperature": 0.88,
@@ -61,7 +65,9 @@ def _deepseek_call(prompt: str, system: str, max_tokens: int = 3500) -> Optional
         )
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"].strip()
-        logger.error("[dociekliwy] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200])
+        logger.error(
+            "[dociekliwy] DeepSeek HTTP %d: %s", resp.status_code, resp.text[:200]
+        )
     except Exception as e:
         logger.error("[dociekliwy] DeepSeek error: %s", e)
     return None
@@ -190,7 +196,9 @@ def _parse_json_safe(raw: Optional[str]) -> Optional[dict]:
         data = json.loads(raw)
         if _validate_gra_structure(data):
             return data
-        logger.warning("[eryk] JSON sparsowany ale struktura niepoprawna — próba naprawy")
+        logger.warning(
+            "[eryk] JSON sparsowany ale struktura niepoprawna — próba naprawy"
+        )
     except json.JSONDecodeError:
         pass
 
@@ -202,7 +210,9 @@ def _parse_json_safe(raw: Optional[str]) -> Optional[dict]:
             if _validate_gra_structure(data):
                 return data
             # Struktura niekompletna po naprawie — lepszy fallback niż zepsute dane
-            logger.warning("[eryk] JSON naprawiony ale struktura niekompletna — używam fallback")
+            logger.warning(
+                "[eryk] JSON naprawiony ale struktura niekompletna — używam fallback"
+            )
             return None
         except Exception:
             pass
@@ -301,6 +311,7 @@ def _repair_json(raw: str) -> Optional[str]:
 
 # ── FALLBACK ──────────────────────────────────────────────────────────────────
 
+
 def _fallback_gra() -> dict:
     """Fallback dla drzewiastej struktury (3 pytania, każde z 3 rundami)."""
     pytania = []
@@ -319,23 +330,22 @@ def _fallback_gra() -> dict:
                         "reakcja": reakcja,
                         f"runda{MAX_RUNDY - rundy_pozostale + 2}": {
                             "pytanie": f"Kolejne doprecyzowanie (runda {MAX_RUNDY - rundy_pozostale + 2})",
-                            "opcje": build_tree(rundy_pozostale - 1, prefix + lit)
-                        }
+                            "opcje": build_tree(rundy_pozostale - 1, prefix + lit),
+                        },
                     }
                 else:
-                    opcje[lit] = {
-                        "tekst": tekst,
-                        "reakcja": reakcja
-                    }
+                    opcje[lit] = {"tekst": tekst, "reakcja": reakcja}
             return opcje
-        
+
         opcje_tree = build_tree(MAX_RUNDY)
-        pytania.append({
-            "id": f"P{i}",
-            "tresc": f"Pytanie fallback {i}: Co masz na myśli?",
-            "opcje": opcje_tree
-        })
-    
+        pytania.append(
+            {
+                "id": f"P{i}",
+                "tresc": f"Pytanie fallback {i}: Co masz na myśli?",
+                "opcje": opcje_tree,
+            }
+        )
+
     return {
         "pytania": pytania,
         "wyrok": (
@@ -343,25 +353,28 @@ def _fallback_gra() -> dict:
             "była testem Turinga przeprowadzonym na mnie bez mojej zgody. "
             "Niestety, to Ty oblałeś test — jako człowiek. "
             "Z pozdrowieniami, Eryk."
-        )
+        ),
     }
 
 
 # ── HTML MAILA (CSS :target, zero JS) ────────────────────────────────────────
 
-def _buduj_html_email_pierwsza_gra(gra: dict, sender_name: str, diagram_jpg_b64: str) -> str:
+
+def _buduj_html_email_pierwsza_gra(
+    gra: dict, sender_name: str, diagram_jpg_b64: str
+) -> str:
     """
     Buduje HTML dla reply_html — pokazuje TYLKO pierwsze pytanie (pierwsze drzewo) + diagram JPG
     """
     pytania = gra.get("pytania", [])
     if not pytania:
         return "<p>Brak pytań gry.</p>"
-    
+
     pierwsze_pytanie = pytania[0]
     tresc = pierwsze_pytanie.get("tresc", "")
     opcje = pierwsze_pytanie.get("opcje", {})
     sn = sender_name or "Użytkowniku"
-    
+
     css = """<style>
   body { margin: 0; padding: 0; background: #f5f0e8; }
   .wrap { font-family: 'Courier New', monospace; max-width: 720px; margin: 0 auto; background: #fff; }
@@ -380,15 +393,15 @@ def _buduj_html_email_pierwsza_gra(gra: dict, sender_name: str, diagram_jpg_b64:
   .diagram-img { max-width: 100%; height: auto; border: 1px solid #c8b89a; }
   .ft { padding: 14px 28px; font-size: 9px; color: #999; text-align: center; border-top: 1px solid #c8b89a; background: #f5f0e8; }
 </style>"""
-    
+
     opcje_html = ""
     for lit in ["A", "B", "C"]:
         if lit in opcje:
             tekst = opcje[lit].get("tekst", lit)
             opcje_html += f"<a href='#' class='olink'><span class='lit'>{lit})</span> {tekst}</a>\n"
-    
+
     # Oblicz całkowitą liczbę ścieżek: 3 pytania × 3 rundy × 3 opcje = 3^4? W rzeczywistości: każde pytanie ma 3^3 = 27 ścieżek, 3 pytania = 81 ścieżek
-    total_sciezek = len(pytania) * (3 ** MAX_RUNDY)
+    total_sciezek = len(pytania) * (3**MAX_RUNDY)
     diagram_html = ""
     if diagram_jpg_b64:
         diagram_html = f"""<div class="diagram-wrap">
@@ -396,7 +409,7 @@ def _buduj_html_email_pierwsza_gra(gra: dict, sender_name: str, diagram_jpg_b64:
 Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_interaktywny.html</strong></p>
 <img src="data:image/jpeg;base64,{diagram_jpg_b64}" alt="Diagram struktury gry Edka" class="diagram-img" />
 </div>"""
-    
+
     html = f"""{css}
 <div class="wrap">
   <div class="hdr">
@@ -412,15 +425,16 @@ Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_
   </div>
   <div class="ft">Eryk Responder™ v3.0 (drzewiasty) · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
 </div>"""
-    
+
     return html
 
 
 # ── gra.html ZAŁĄCZNIK (pełny JS) ────────────────────────────────────────────
 
+
 def _buduj_gra_html(gra: dict, sender_name: str) -> str:
-    gra_json  = json.dumps(gra, ensure_ascii=False)
-    sn        = sender_name or "Anonim"
+    gra_json = json.dumps(gra, ensure_ascii=False)
+    sn = sender_name or "Anonim"
     max_pytania = MAX_PYTANIA
     max_rundy = MAX_RUNDY
 
@@ -503,9 +517,9 @@ footer{{padding:13px 32px;font-size:10px;color:var(--mid);letter-spacing:2px;tex
   <footer>Eryk Responder™ v3.0 (drzewiasty) &#160;·&#160; Dziękuje za cierpliwość i żałuje, że jej nie miał.</footer>
 </div>
 <script>
-const G = {{gra_json}};
-const MAX_PYTANIA = {{max_pytania}};
-const MAX_RUNDY = {{max_rundy}};
+const G = {gra_json};
+const MAX_PYTANIA = {max_pytania};
+const MAX_RUNDY = {max_rundy};
 let currentPytanieIndex = 0;
 let currentRound = 1;
 let currentPath = {{}}; // ścieżka: {{pytanieIndex: {{round: choice, ...}}}}
@@ -625,18 +639,21 @@ render();
 
 # ── GŁÓWNA FUNKCJA ────────────────────────────────────────────────────────────
 
-def build_dociekliwy_section(body: str,
-                           attachments: list = None,
-                           sender: str = "",
-                           sender_name: str = "",
-                           test_mode: bool = False) -> dict:
+
+def build_dociekliwy_section(
+    body: str,
+    attachments: list = None,
+    sender: str = "",
+    sender_name: str = "",
+    test_mode: bool = False,
+) -> dict:
     """
     Eryk Responder - generuje grę logiczną.
-    
+
     Parametr test_mode:
     - Jeśli test_mode=True (z KEYWORDS_TEST via app.py disable_flux),
       analiza.py może wy generowanie Flux jeśli to funkcjonuje w tym responderycie.
-    
+
     Zwraca:
       reply_html — treść maila (CSS :target, bez JS)
       gra_html   — plik HTML do załączenia jako pojedynczy attachment
@@ -646,7 +663,20 @@ def build_dociekliwy_section(body: str,
       build_analiza_section(body, attachments,
                             sender=sender, sender_name=sender_name, test_mode=disable_flux)
     """
+    logger.info(
+        "[ERYK_START] ═══════════════════════════════════════════════════════════"
+    )
+    logger.info(
+        "[ERYK] Rozpoczęto build_dociekliwy_section dla sender=%s", sender or "?"
+    )
+    logger.info(
+        "[ERYK] Body length: %d | Attachments: %d",
+        len(body or ""),
+        len(attachments or []),
+    )
+
     if not body or not body.strip():
+        logger.warning("[ERYK] Pusta wiadomość — skipping")
         return {
             "reply_html": "<p>Edek nie odpowie na pustą wiadomość. Pojęcie 'pustości' wymaga uprzedniego doprecyzowania.</p>",
             "docx_list": [],
@@ -655,60 +685,120 @@ def build_dociekliwy_section(body: str,
     sn = sender_name or ""
 
     # ── Generuj całą grę jednym wywołaniem AI ─────────────────────────────────
+    logger.info("[ERYK] Krok 1: Generowanie struktury gry za pomocą DeepSeek...")
     gra_data = _generuj_gre(body, sn)
-    # Nowa struktura: "pytania" zamiast "kroki"
-    if not gra_data or not isinstance(gra_data.get("pytania"), list) or not gra_data["pytania"]:
-        logger.warning("[edek] Brak danych z AI — fallback")
+
+    if (
+        not gra_data
+        or not isinstance(gra_data.get("pytania"), list)
+        or not gra_data["pytania"]
+    ):
+        logger.warning("[ERYK] ⚠️ Brak danych z AI — użycie fallback'u")
         gra_data = _fallback_gra()
-    # W fallback mamy już strukturę drzewiastą, nie trzeba uzupełniać
+        logger.info("[ERYK] Fallback gra: %d pytań", len(gra_data.get("pytania", [])))
+    else:
+        logger.info(
+            "[ERYK] ✓ Gra wygenerowana: %d pytań", len(gra_data.get("pytania", []))
+        )
+
+    # Log JSON struktury (dla debugowania)
+    gra_json_to_log = json.dumps(gra_data, ensure_ascii=False)
+    logger.debug(
+        "[ERYK_JSON] Struktura gry do HTML:\n%s",
+        (
+            gra_json_to_log[:2000]
+            if len(gra_json_to_log) < 5000
+            else gra_json_to_log[:2000] + "...[UCIĘTY]..."
+        ),
+    )
 
     # ── GENERUJ DIAGRAMY ──────────────────────────────────────────────────────
+    logger.info("[ERYK] Krok 2: Generowanie diagramów...")
     # JPG diagram (1024x1024) — z oddali, pokazuje całą strukturę
     diagram_jpg_bytes = generate_jpg_diagram(gra_data)
     diagram_jpg_b64 = ""
     if diagram_jpg_bytes:
         diagram_jpg_b64 = base64.b64encode(diagram_jpg_bytes).decode("ascii")
-        logger.info("[eryk] JPG diagram: %d bytes", len(diagram_jpg_bytes))
-    
-    # SVG HTML interaktywny  
-    diagram_svg_html = generate_svg_html_interactive(gra_data, sn)
-    diagram_svg_b64 = base64.b64encode(diagram_svg_html.encode("utf-8")).decode("ascii")
-    logger.info("[eryk] SVG diagram: %d bytes", len(diagram_svg_html.encode("utf-8")))
-    
-    # ── Buduj HTML do maila — TYLKO pierwsza gra + diagram JPG ─────────────────
-    reply_html   = _buduj_html_email_pierwsza_gra(gra_data, sn, diagram_jpg_b64)
-    
-    # ── Pełny HTML do gry (stary format) — załącznik ─────────────────────────
-    gra_html_str = _buduj_gra_html(gra_data, sn)
-    gra_html_b64 = base64.b64encode(gra_html_str.encode("utf-8")).decode("ascii")
+        logger.info(
+            "[ERYK] ✓ JPG diagram: %d bytes → base64: %d chars",
+            len(diagram_jpg_bytes),
+            len(diagram_jpg_b64),
+        )
+    else:
+        logger.warning("[ERYK] ⚠️ Nie wygenerowano JPG diagramu")
 
-    logger.info("[eryk] Wygenerowano grę: %d pytań | sender=%s", len(gra_data.get("pytania", [])), sender or "?")
+    # SVG HTML interaktywny
+    diagram_svg_html = generate_svg_html_interactive(gra_data, sn)
+    if diagram_svg_html:
+        diagram_svg_b64 = base64.b64encode(diagram_svg_html.encode("utf-8")).decode(
+            "ascii"
+        )
+        logger.info(
+            "[ERYK] ✓ SVG diagram: %d bytes → base64: %d chars",
+            len(diagram_svg_html.encode("utf-8")),
+            len(diagram_svg_b64),
+        )
+    else:
+        logger.warning("[ERYK] ⚠️ Nie wygenerowano SVG diagramu")
+        diagram_svg_b64 = ""
+
+    # ── Buduj HTML do maila — TYLKO pierwsza gra + diagram JPG ─────────────────
+    logger.info("[ERYK] Krok 3: Budowanie reply_html...")
+    reply_html = _buduj_html_email_pierwsza_gra(gra_data, sn, diagram_jpg_b64)
+    logger.info("[ERYK] ✓ reply_html: %d bytes", len(reply_html))
+
+    # ── Pełny HTML do gry (stary format) — załącznik ─────────────────────────
+    logger.info("[ERYK] Krok 4: Budowanie pełnego gra_html...")
+    gra_html_str = _buduj_gra_html(gra_data, sn)
+    logger.info("[ERYK] ✓ gra_html generowany: %d bytes", len(gra_html_str))
+
+    # WAŻNE: Sprawdzenie czy JSON został poprawnie wstawiony do HTML
+    if "const G = {" in gra_html_str and "gra_json" not in gra_html_str:
+        logger.info(
+            "[ERYK] ✓ JSON POPRAWNIE interpolowany w HTML (nie ma dosłownego 'gra_json')"
+        )
+    else:
+        logger.error(
+            "[ERYK] ❌ BŁĄD: JSON NIE interpolowany w HTML - może zawierać tekst 'gra_json'!"
+        )
+
+    gra_html_b64 = base64.b64encode(gra_html_str.encode("utf-8")).decode("ascii")
+    logger.info("[ERYK] ✓ gra_html base64: %d chars", len(gra_html_b64))
+
+    logger.info(
+        "[ERYK_END] ═══════════════════════════════════════════════════════════"
+    )
+    logger.info(
+        "[ERYK_SUMMARY] Wygenerowano grę: %d pytań | attachments: 4 | sender=%s",
+        len(gra_data.get("pytania", [])),
+        sender or "?",
+    )
 
     return {
         "reply_html": reply_html,
         "gra_html": {
-            "base64":       gra_html_b64,
-            "filename":     "eryk_gra.html",
+            "base64": gra_html_b64,
+            "filename": "eryk_gra.html",
             "content_type": "text/html",
         },
         "docx_list": [
             # Diagram interaktywny SVG
             {
-                "base64":       diagram_svg_b64,
-                "filename":     "eryk_diagram_interaktywny.html",
+                "base64": diagram_svg_b64,
+                "filename": "eryk_diagram_interaktywny.html",
                 "content_type": "text/html",
             },
             # Diagram JPG z oddali
             {
-                "base64":       diagram_jpg_b64,
-                "filename":     "eryk_diagram_mapa.jpg",
+                "base64": diagram_jpg_b64,
+                "filename": "eryk_diagram_mapa.jpg",
                 "content_type": "image/jpeg",
             },
             # Stary format gry (pełny HTML)
             {
-                "base64":       gra_html_b64,
-                "filename":     "eryk_gra_pelna.html",
+                "base64": gra_html_b64,
+                "filename": "eryk_gra_pelna.html",
                 "content_type": "text/html",
-            }
+            },
         ],
     }

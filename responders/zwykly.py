@@ -34,7 +34,12 @@ from datetime import datetime
 # Bezpieczny logger modułu — działa w wątkach bez kontekstu Flask
 logger = logging.getLogger(__name__)
 
-from core.ai_client import call_deepseek, extract_clean_text, sanitize_model_output, MODEL_TYLER
+from core.ai_client import (
+    call_deepseek,
+    extract_clean_text,
+    sanitize_model_output,
+    MODEL_TYLER,
+)
 from core.files import read_file_base64
 from core.html_builder import build_html_reply
 
@@ -67,13 +72,16 @@ KARTA_RPG_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_karta_rpg.json")
 RAPORT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 PLAKAT_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_plakat.json")
 GRA_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_gra.json")
-PSYCHIATRYCZNY_OBRAZEK_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_psychiatryczny_obrazek.json")
+PSYCHIATRYCZNY_OBRAZEK_JSON_PATH = os.path.join(
+    PROMPTS_DIR, "zwykly_psychiatryczny_obrazek.json"
+)
 NOUNS_JSON_PATH = os.path.join(PROMPTS_DIR, "zwykly_znajdz_rzeczowniki.json")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POMOCNIK: rejestracja czcionek z polskimi znakami
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _register_fonts() -> tuple:
     """
@@ -145,6 +153,7 @@ from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens
 # ŁADOWANIE prompt.json
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _strip_json_markdown(raw: str) -> str:
     """
     Usuwa opakowanie ```json ... ``` lub ``` ... ``` z odpowiedzi AI.
@@ -153,10 +162,10 @@ def _strip_json_markdown(raw: str) -> str:
     """
     clean = raw.strip()
     # Usuń znaczniki ```json lub ``` (z dowolnym językiem)
-    clean = re.sub(r'```[a-zA-Z]*', '', clean)
-    clean = re.sub(r'```', '', clean)
+    clean = re.sub(r"```[a-zA-Z]*", "", clean)
+    clean = re.sub(r"```", "", clean)
     # Wyciągnij pierwszy blok { ... }
-    m = re.search(r'\{.*\}', clean, re.DOTALL)
+    m = re.search(r"\{.*\}", clean, re.DOTALL)
     if m:
         return m.group(0).strip()
     return clean.strip()
@@ -173,7 +182,9 @@ def _load_prompt_json() -> dict:
         logger.info("[zwykly] prompt.json wczytany OK")
         return data
     except FileNotFoundError:
-        logger.error("[zwykly] Brak prompt.json: %s — używam fallbacku", PROMPT_JSON_PATH)
+        logger.error(
+            "[zwykly] Brak prompt.json: %s — używam fallbacku", PROMPT_JSON_PATH
+        )
     except json.JSONDecodeError as e:
         logger.error("[zwykly] Błąd JSON w prompt.json: %s", e)
     return _fallback_prompt_dict()
@@ -186,12 +197,12 @@ def _fallback_prompt_dict() -> dict:
         "output_schema": {
             "odpowiedz_tekstowa": "...",
             "kategoria_pdf": "Manifest Wolności",
-            "emocja": "radosc|smutek|zlosc|lek|nuda|spokoj"
+            "emocja": "radosc|smutek|zlosc|lek|nuda|spokoj",
         },
         "instrukcje": {
             "sokrates": "Odpowiedz mądrze, max 4 zdania, podpisz: Sokrates.",
             "tyler": "Styl nihilistyczny Fight Club. Podpisz: Tyler Durden.",
-            "zasady_nota": "Dostosuj zasady twórczo do spraw nadawcy."
+            "zasady_nota": "Dostosuj zasady twórczo do spraw nadawcy.",
         },
         "zasady_tylera": [
             "Pierwsza zasada: Nie mówi się o tym.",
@@ -201,21 +212,29 @@ def _fallback_prompt_dict() -> dict:
             "Piąta zasada: Jedna walka naraz.",
             "Szósta zasada: Żadnych koszul, żadnych butów.",
             "Siódma zasada: Walki trwają tak długo jak muszą.",
-            "Ósma zasada: Jeśli to twoja pierwsza noc, musisz walczyć."
+            "Ósma zasada: Jeśli to twoja pierwsza noc, musisz walczyć.",
         ],
         "manifesty": [
-            {"temat": "KONSUMPCJONIZM", "tresc": "Rzeczy, które posiadasz, w końcu zaczynają posiadać ciebie."},
+            {
+                "temat": "KONSUMPCJONIZM",
+                "tresc": "Rzeczy, które posiadasz, w końcu zaczynają posiadać ciebie.",
+            },
             {"temat": "HISTORIA", "tresc": "Jesteśmy średnimi dziećmi historii."},
             {"temat": "SAMODOSKONALENIE", "tresc": "Samodoskonalenie to masturbacja."},
             {"temat": "TOŻSAMOŚĆ", "tresc": "Nie jesteś swoją pracą."},
-            {"temat": "PROJEKT CHAOS", "tresc": "Pewnego dnia umrzesz. Jesteś trybem w maszynie."}
+            {
+                "temat": "PROJEKT CHAOS",
+                "tresc": "Pewnego dnia umrzesz. Jesteś trybem w maszynie.",
+            },
         ],
         "formatowanie_adresata": "Użyj formy: Drogi [Imię]-[Przymiotnik]-[Przydomek].",
-        "user_text_placeholder": "{{USER_TEXT}}"
+        "user_text_placeholder": "{{USER_TEXT}}",
     }
 
 
-def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name: str = "") -> str:
+def _render_prompt(
+    data: dict, body: str, previous_body: str = None, sender_name: str = ""
+) -> str:
     """
     Buduje pełny string promptu z danych prompt.json.
     Obsługuje zarówno stary format (instrukcje/zasady_tylera/manifesty)
@@ -247,7 +266,9 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
     # ── Poprzednia wiadomość (jeśli dostępna) ─────────────────────────────────
     if previous_body and previous_body.strip():
-        lines.append("### POPRZEDNIA WIADOMOŚĆ OD TEJ OSOBY (Tyler i Sokrates MUSZĄ do niej nawiązać):")
+        lines.append(
+            "### POPRZEDNIA WIADOMOŚĆ OD TEJ OSOBY (Tyler i Sokrates MUSZĄ do niej nawiązać):"
+        )
         lines.append(previous_body[:2000])
         lines.append("")
         # Instrukcja nawiązania z prompt.json
@@ -276,9 +297,9 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
     # ── Sokrates ──────────────────────────────────────────────────────────────
     sokrates = (
-            data.get("sokrates_instrukcja")
-            or data.get("instrukcje_person", {}).get("sokrates")
-            or data.get("instrukcje", {}).get("sokrates")
+        data.get("sokrates_instrukcja")
+        or data.get("instrukcje_person", {}).get("sokrates")
+        or data.get("instrukcje", {}).get("sokrates")
     )
     if sokrates:
         lines.append("### SOKRATES — INSTRUKCJA:")
@@ -286,10 +307,9 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
         lines.append("")
 
     # ── Tyler — odmowa rekrutacji ─────────────────────────────────────────────
-    odmowa = (
-            data.get("tyler_odmowa_rekrutacji")
-            or data.get("instrukcje_person", {}).get("tyler", {}).get("zasada_rekrutacji")
-    )
+    odmowa = data.get("tyler_odmowa_rekrutacji") or data.get(
+        "instrukcje_person", {}
+    ).get("tyler", {}).get("zasada_rekrutacji")
     if odmowa:
         lines.append("### TYLER — ODMOWA REKRUTACJI (OBOWIĄZKOWE):")
         lines.append(odmowa)
@@ -349,7 +369,9 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 
     # ── Końcowe przypomnienie ─────────────────────────────────────────────────
     lines.append("### PRZYPOMNIENIE PRZED GENEROWANIEM:")
-    lines.append("Każde zdanie Tylera MUSI nawiązywać do konkretnych słów z wiadomości nadawcy.")
+    lines.append(
+        "Każde zdanie Tylera MUSI nawiązywać do konkretnych słów z wiadomości nadawcy."
+    )
     lines.append("ZAKAZ ogólnych rad, coachingu, pozytywnego myślenia, pocieszania.")
     lines.append("ZASADA 1 I ZASADA 2 MUSZĄ BYĆ IDENTYCZNE SŁOWO W SŁOWO.")
     lines.append("ADRESAT: ZAKAZ 'Drogi/Droga' — tylko forma wołacza jak w instrukcji.")
@@ -363,7 +385,10 @@ def _render_prompt(data: dict, body: str, previous_body: str = None, sender_name
 # DeepSeek — główny model
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _call_ai_with_fallback(system: str, user: str, max_tokens: int = 6000) -> tuple[str | None, str]:
+
+def _call_ai_with_fallback(
+    system: str, user: str, max_tokens: int = 6000
+) -> tuple[str | None, str]:
     """
     DeepSeek jako główny model.
     Zwraca (tekst_odpowiedzi, nazwa_providera).
@@ -387,20 +412,31 @@ def _clean_manifest_labels(text: str) -> str:
     if not text:
         return text
     labels = [
-        "KONSUMPCJONIZM", "DNO", r"DNO \(Rock Bottom\)",
-        r"BÓG/RELIGIA", "BÓG", "RELIGIA",
-        "KLASA ROBOTNICZA", r"ŚMIERTELNOŚĆ",
-        r"ODPUSZCZENIE \(Let Go\)", "ODPUSZCZENIE",
-        "AUTENTYCZNOŚĆ", "ILUZJA BEZPIECZEŃSTWA",
-        "HISTORIA", "SAMODOSKONALENIE", "TOŻSAMOŚĆ",
-        "RYZYKO", "BUNT", "KONTROLA",
+        "KONSUMPCJONIZM",
+        "DNO",
+        r"DNO \(Rock Bottom\)",
+        r"BÓG/RELIGIA",
+        "BÓG",
+        "RELIGIA",
+        "KLASA ROBOTNICZA",
+        r"ŚMIERTELNOŚĆ",
+        r"ODPUSZCZENIE \(Let Go\)",
+        "ODPUSZCZENIE",
+        "AUTENTYCZNOŚĆ",
+        "ILUZJA BEZPIECZEŃSTWA",
+        "HISTORIA",
+        "SAMODOSKONALENIE",
+        "TOŻSAMOŚĆ",
+        "RYZYKO",
+        "BUNT",
+        "KONTROLA",
     ]
-    pattern = r'^(?:' + '|'.join(labels) + r')\s*:\s*'
-    lines = text.split('\n')
+    pattern = r"^(?:" + "|".join(labels) + r")\s*:\s*"
+    lines = text.split("\n")
     cleaned = []
     for line in lines:
-        cleaned.append(re.sub(pattern, '', line, flags=re.IGNORECASE))
-    return '\n'.join(cleaned)
+        cleaned.append(re.sub(pattern, "", line, flags=re.IGNORECASE))
+    return "\n".join(cleaned)
 
 
 def _parse_response(raw: str) -> tuple[str, str]:
@@ -429,7 +465,8 @@ def _parse_response(raw: str) -> tuple[str, str]:
         # Sprawdź czy odpowiedź zawiera sekcję Tylera — jeśli nie, JSON jest niekompletny
         if tekst and "### TYLER DURDEN" not in tekst:
             logger.warning(
-                "[zwykly] Brak sekcji TYLER DURDEN — odpowiedź niekompletna (%.80s)", tekst
+                "[zwykly] Brak sekcji TYLER DURDEN — odpowiedź niekompletna (%.80s)",
+                tekst,
             )
             tekst = ""  # wymusi fallback poniżej
 
@@ -447,6 +484,7 @@ def _parse_response(raw: str) -> tuple[str, str]:
 # ═══════════════════════════════════════════════════════════════════════════════
 # EMOTKA + PDF
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _get_emoticon_and_pdf(emotion_key: str) -> tuple:
     """Zwraca (png_b64, pdf_b64) dla danej emocji z fallbackiem na error."""
@@ -466,6 +504,7 @@ def _get_emoticon_and_pdf(emotion_key: str) -> tuple:
 # ═══════════════════════════════════════════════════════════════════════════════
 # ŁADOWANIE WYTYCZNYCH STYLU (zwykly_obrazek_tyler.js)
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _load_style_config() -> dict:
     """
@@ -495,18 +534,14 @@ def _load_style_config() -> dict:
 FIGHT_CLUB_CHARACTERS = [
     # Tyler Durden - Esencja chaosu
     "Brad Pitt as Tyler Durden — raw, feral intensity. Post-fight appearance: blood-caked knuckles, a chipped front tooth, and a deep gash over a swollen eye. Wearing a scuffed, dirty red leather jacket over a bare, sweat-glistening chest marked with chemical soap-burn scars. His hair is a greasy, matted mess. He’s holding a smoldering cigarette, standing amidst the wreckage of a burned-out house. Hyper-realistic, 35mm film grain, 1990s grime.",
-
     # Narrator (Norton) - Symbol totalnego rozkładu psychicznego
     "Edward Norton as the Narrator — the look of total insomnia. Sunken, charcoal-rimmed eyes, pale sickly skin with visible veins. Wearing a sweat-stained, tattered white dress shirt with the sleeves ripped off, covered in dried blood and office coffee stains. A massive purple hematoma on his cheekbone and a split lip. He looks completely dissociated and broken, staring into the camera with a 'thousand-yard stare'. Dark, moody lighting.",
-
     # Marla Singer - Zniszczona panna młoda (zgodnie z prośbą)
     "Helena Bonham Carter as Marla Singer — wearing a shredded, soot-covered vintage bridesmaid/wedding dress from a thrift store. Her hair is an unwashed, bird's-nest tangle. Smudged, heavy black 'raccoon' eye makeup running down her face. She’s leaning against a peeling wallpaper wall in a derelict hallway, a pink feather boa hanging like a dead animal around her neck. Nihilistic smirk, blood on her teeth, holding a cigarette with trembling, ash-covered fingers.",
-
     # Angel Face (Jared Leto) - Zniszczone piękno
     "Jared Leto as Angel Face — once-ethereal, angelic features now pulverized into a pulp of gore. Both eyes swollen shut, nose shattered and crooked, blood dripping from a ruined mouth. His platinum blonde hair is soaked in crimson. A haunting contrast between his delicate bone structure and the absolute brutality of the beating. Extreme close-up, harsh fluorescent lighting.",
-
     # Bob - Rozpacz i fizyczna masa
-    "Meat Loaf as Bob — a mountain of a man in a state of emotional collapse. Wearing a massive, sweat-drenched, grey XXXL sweatshirt. Tear-streaked face, puffy eyes, and the visible shape of gynecomastia. He looks like a tragic, broken giant. Surroundings: a dark, damp basement with cracked concrete and single bare lightbulb casting long, dramatic shadows."
+    "Meat Loaf as Bob — a mountain of a man in a state of emotional collapse. Wearing a massive, sweat-drenched, grey XXXL sweatshirt. Tear-streaked face, puffy eyes, and the visible shape of gynecomastia. He looks like a tragic, broken giant. Surroundings: a dark, damp basement with cracked concrete and single bare lightbulb casting long, dramatic shadows.",
 ]
 
 PANEL_STYLES = [
@@ -521,33 +556,24 @@ PANEL_STYLES = [
 PANEL_ACTIONS = [
     # Kultowa scena z samochodem
     "releasing steering wheel of a speeding car, hands off, smiling maniacally while oncoming headlights reflect in glazed eyes, 35mm motion blur, chaos",
-
     # Marla w sukni ślubnej (zgodnie z Twoją prośbą)
     "standing in a scorched, derelict ballroom, arms spread wide in a ruined wedding dress, face turned toward black soot and smoke, liberated and destroyed ",
-
     # Scena z Raymondem K. Hesselem (pistolet do głowy/konfrontacja)
     "crouching over a terrified clerk pinned against a dumpster in a rain-slicked alley, forcing them to confront their meaningless life, steam rising from grates, rats scurrying in shadows",
-
     # Nihilizm konsumpcyjny
     "laughing maniacally with blood-caked teeth, standing amidst a bonfire of burning IKEA furniture and designer catalogs, high contrast",
-
     # Rock Bottom (Narrator)
     "sitting at the bottom of a dark, wet rocky pit, staring up at a tiny square of grey sky with hollow eyes, personifying 'hitting rock bottom' [cite: 22]",
-
     # Portret wściekłości
     "screaming directly into the lens with veins bulging on the neck, face inches from camera, splattered with sweat and grime, raw rage and contempt ",
-
     # Pisanie krwią/mydłem
     "writing a nihilistic manifesto on a cracked wall with bloody knuckles, chemical smoke and lye dust in the background, industrial setting",
-
     # Zniszczenie życia nadawcy (Jadzi)
     "standing over a pile of burning truskawka-themed objects and 12-zloty notes, pointing a judgmental finger at the camera, cold lighting",
-
     # Wyjście z wypadku
     "walking away from a twisted, flaming car wreck in slow motion, face smeared with blood, looking dead ahead without blinking, fire illuminating the night ",
-
     # Scena w kościele (z logu debug)
-    "reading from a burning book in a dimly lit, empty church, surrounded by a congregation of rats, amidst 35mm film grain and heavy shadows "
+    "reading from a burning book in a dimly lit, empty church, surrounded by a congregation of rats, amidst 35mm film grain and heavy shadows ",
 ]
 
 
@@ -560,15 +586,65 @@ def _extract_nouns_from_body(body: str) -> list:
     """
     # Słowa które zawsze wyrzucamy (stopwords)
     stopwords = {
-        "się", "nie", "jak", "ale", "czy", "też", "już", "aby", "żeby",
-        "tego", "tej", "ten", "tak", "jest", "był", "być", "mam", "mieć",
-        "to", "i", "w", "z", "na", "do", "po", "za", "od", "przez",
-        "że", "co", "gdy", "więc", "bo", "dla", "przy", "nad", "pod",
-        "mój", "moja", "moje", "jego", "jej", "ich", "swój", "twój",
-        "wszystko", "tylko", "jeszcze", "bardzo", "bardziej", "może",
-        "chcę", "musi", "można", "który", "która", "które",
+        "się",
+        "nie",
+        "jak",
+        "ale",
+        "czy",
+        "też",
+        "już",
+        "aby",
+        "żeby",
+        "tego",
+        "tej",
+        "ten",
+        "tak",
+        "jest",
+        "był",
+        "być",
+        "mam",
+        "mieć",
+        "to",
+        "i",
+        "w",
+        "z",
+        "na",
+        "do",
+        "po",
+        "za",
+        "od",
+        "przez",
+        "że",
+        "co",
+        "gdy",
+        "więc",
+        "bo",
+        "dla",
+        "przy",
+        "nad",
+        "pod",
+        "mój",
+        "moja",
+        "moje",
+        "jego",
+        "jej",
+        "ich",
+        "swój",
+        "twój",
+        "wszystko",
+        "tylko",
+        "jeszcze",
+        "bardzo",
+        "bardziej",
+        "może",
+        "chcę",
+        "musi",
+        "można",
+        "który",
+        "która",
+        "które",
     }
-    words = re.findall(r'[A-Za-zżźćńółęąśŻŹĆŃÓŁĘĄŚ]{4,}', body)
+    words = re.findall(r"[A-Za-zżźćńółęąśŻŹĆŃÓŁĘĄŚ]{4,}", body)
     seen = set()
     nouns = []
     for w in words:
@@ -579,6 +655,7 @@ def _extract_nouns_from_body(body: str) -> list:
         if len(nouns) >= 6:
             break
     return nouns
+
 
 def _extract_nouns_deepseek(body: str) -> dict:
     """
@@ -611,7 +688,11 @@ def _extract_nouns_deepseek(body: str) -> dict:
         result = json.loads(clean)
         if not isinstance(result, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
-        nouns_dict = {k: v for k, v in result.items() if re.match(r'^rzecz\d+$', k) and isinstance(v, str)}
+        nouns_dict = {
+            k: v
+            for k, v in result.items()
+            if re.match(r"^rzecz\d+$", k) and isinstance(v, str)
+        }
         logger.info("[rzeczowniki] OK — %d rzeczowników", len(nouns_dict))
         return nouns_dict
     except Exception as e:
@@ -638,7 +719,9 @@ def _append_nouns_to_debug_txt(debug_txt_dict: dict, nouns_dict: dict) -> dict:
             lines.append(f"  {k} = {nouns_dict[k]}")
         lines.append("")
         appended = existing + "\n".join(lines)
-        debug_txt_dict["base64"] = base64.b64encode(appended.encode("utf-8")).decode("ascii")
+        debug_txt_dict["base64"] = base64.b64encode(appended.encode("utf-8")).decode(
+            "ascii"
+        )
         logger.info("[rzeczowniki] Dopisano %d rzeczowników do _.txt", len(nouns_dict))
     except Exception as e:
         logger.warning("[rzeczowniki] Błąd dopisywania do _.txt: %s", e)
@@ -655,19 +738,20 @@ def _detect_sender_name(body: str) -> str | None:
     # na końcu wiadomości
     lines = [l.strip() for l in body.strip().splitlines() if l.strip()]
     for line in reversed(lines[-5:]):
-        m = re.match(r'^([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{2,12})$', line)
+        m = re.match(r"^([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{2,12})$", line)
         if m:
             return m.group(1)
 
     # Szukaj "Pozdrawiam, Imię" lub "— Imię"
     m = re.search(
-        r'(?:pozdrawiam|pozdrowienia|z poważaniem|regards)[,\s]+([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{2,12})',
-        body, re.IGNORECASE
+        r"(?:pozdrawiam|pozdrowienia|z poważaniem|regards)[,\s]+([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{2,12})",
+        body,
+        re.IGNORECASE,
     )
     if m:
         return m.group(1)
 
-    m = re.search(r'(?:^|\n)[—–-]\s*([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{2,12})', body)
+    m = re.search(r"(?:^|\n)[—–-]\s*([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{2,12})", body)
     if m:
         return m.group(1)
 
@@ -690,40 +774,40 @@ def _detect_gender(body: str, sender_name: str = "") -> str:
 
     # ── 1. Regex na końcówkach gramatycznych ─────────────────────────────────
     zenskie = [
-        r'\bjeste[mś]\s+\w*a\b',
-        r'\bby[łl]am\b',
-        r'\bposz[łl]am\b',
-        r'\bpracowa[łl]am\b',
-        r'\bchcia[łl]am\b',
-        r'\bpisa[łl]am\b',
-        r'\bzrobi[łl]am\b',
-        r'\bprzysz[łl]am\b',
-        r'\bmia[łl]am\b',
-        r'\bdosta[łl]am\b',
-        r'\bwysz[łl]am\b',
-        r'\bzmęczona\b',
-        r'\bszczęśliwa\b',
-        r'\bzdenerwowana\b',
-        r'\bprzejęta\b',
-        r'\bpoczułam\b',
-        r'\bpani\b',
+        r"\bjeste[mś]\s+\w*a\b",
+        r"\bby[łl]am\b",
+        r"\bposz[łl]am\b",
+        r"\bpracowa[łl]am\b",
+        r"\bchcia[łl]am\b",
+        r"\bpisa[łl]am\b",
+        r"\bzrobi[łl]am\b",
+        r"\bprzysz[łl]am\b",
+        r"\bmia[łl]am\b",
+        r"\bdosta[łl]am\b",
+        r"\bwysz[łl]am\b",
+        r"\bzmęczona\b",
+        r"\bszczęśliwa\b",
+        r"\bzdenerwowana\b",
+        r"\bprzejęta\b",
+        r"\bpoczułam\b",
+        r"\bpani\b",
     ]
     meskie = [
-        r'\bby[łl]em\b',
-        r'\bposzed[łl]em\b',
-        r'\bpracowa[łl]em\b',
-        r'\bchcia[łl]em\b',
-        r'\bpisa[łl]em\b',
-        r'\bzrobi[łl]em\b',
-        r'\bprzysz[łl]em\b',
-        r'\bmia[łl]em\b',
-        r'\bdosta[łl]em\b',
-        r'\bwysz[łl]em\b',
-        r'\bzmęczony\b',
-        r'\bszczęśliwy\b',
-        r'\bzdenerwowany\b',
-        r'\bpoczułem\b',
-        r'\bpan\b',
+        r"\bby[łl]em\b",
+        r"\bposzed[łl]em\b",
+        r"\bpracowa[łl]em\b",
+        r"\bchcia[łl]em\b",
+        r"\bpisa[łl]em\b",
+        r"\bzrobi[łl]em\b",
+        r"\bprzysz[łl]em\b",
+        r"\bmia[łl]em\b",
+        r"\bdosta[łl]em\b",
+        r"\bwysz[łl]em\b",
+        r"\bzmęczony\b",
+        r"\bszczęśliwy\b",
+        r"\bzdenerwowany\b",
+        r"\bpoczułem\b",
+        r"\bpan\b",
     ]
 
     score_k = sum(1 for p in zenskie if re.search(p, text))
@@ -876,8 +960,8 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     # Panel 1 — pierwsza zasada w stylu Fight Club
     panel1 = None
     ordinal_re = re.compile(
-        r'^(pierwsza|druga|trzecia|czwarta|pi[aą]ta|sz[oó]sta|si[oó]dma|[oó]sma)\s+zasada',
-        re.IGNORECASE
+        r"^(pierwsza|druga|trzecia|czwarta|pi[aą]ta|sz[oó]sta|si[oó]dma|[oó]sma)\s+zasada",
+        re.IGNORECASE,
     )
     for line in lines:
         if ordinal_re.match(line):
@@ -885,15 +969,22 @@ def _extract_tyler_sentences(response_text: str) -> dict:
             break
     if not panel1:
         for line in lines:
-            if re.match(r'^[1-8][.)]', line):
-                panel1 = re.sub(r'^[1-8][.)]\s*', '', line)[:120]
+            if re.match(r"^[1-8][.)]", line):
+                panel1 = re.sub(r"^[1-8][.)]\s*", "", line)[:120]
                 break
     if not panel1:
         panel1 = "Pierwsza zasada: nie mówi się o tym."
 
     # Panel 2 — priorytet: DNO, BÓG, ŚMIERTELNOŚĆ, ODPUSZCZENIE (nihilistyczne)
     panel2 = None
-    nihilist_priority = ["DNO", "BÓG", "ŚMIERTELNOŚĆ", "ODPUSZCZENIE", "AUTENTYCZNOŚĆ", "ILUZJA"]
+    nihilist_priority = [
+        "DNO",
+        "BÓG",
+        "ŚMIERTELNOŚĆ",
+        "ODPUSZCZENIE",
+        "AUTENTYCZNOŚĆ",
+        "ILUZJA",
+    ]
     for priority_word in nihilist_priority:
         for line in lines:
             if line.upper().startswith(priority_word):
@@ -904,7 +995,7 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     # fallback: pierwsza linia z CAPS tematem manifestu
     if not panel2:
         for line in lines:
-            if re.match(r'^[A-ZŻŹĆĄŚĘÓŁŃ]{4,}[\s:]', line):
+            if re.match(r"^[A-ZŻŹĆĄŚĘÓŁŃ]{4,}[\s:]", line):
                 panel2 = line[:140]
                 break
     if not panel2:
@@ -919,11 +1010,18 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     panel3 = None
     for line in lines:
         if "okrzyk" in line.lower():
-            panel3 = re.sub(r'^okrzyk[^:]*:\s*', '', line, flags=re.IGNORECASE).strip()[:120]
+            panel3 = re.sub(r"^okrzyk[^:]*:\s*", "", line, flags=re.IGNORECASE).strip()[
+                :120
+            ]
             break
     if not panel3 and lines:
         for line in reversed(lines):
-            if line and not line.startswith("---") and not line.startswith("###") and len(line) > 15:
+            if (
+                line
+                and not line.startswith("---")
+                and not line.startswith("###")
+                and len(line) > 15
+            ):
                 panel3 = line[:120]
                 break
     if not panel3:
@@ -952,17 +1050,27 @@ def _extract_tyler_rules(response_text: str) -> list:
         tyler_section = response_text.split("### TYLER DURDEN", 1)[1]
 
     ordinal_map = {
-        "pierwsza": 1, "druga": 2, "trzecia": 3, "czwarta": 4,
-        "piąta": 5, "piata": 5, "szósta": 6, "szosta": 6,
-        "siódma": 7, "siodma": 7, "ósma": 8, "osma": 8,
+        "pierwsza": 1,
+        "druga": 2,
+        "trzecia": 3,
+        "czwarta": 4,
+        "piąta": 5,
+        "piata": 5,
+        "szósta": 6,
+        "szosta": 6,
+        "siódma": 7,
+        "siodma": 7,
+        "ósma": 8,
+        "osma": 8,
     }
 
     rules = {}
     lines = [l.strip() for l in tyler_section.splitlines() if l.strip()]
     for line in lines:
         m = re.match(
-            r'^(pierwsza|druga|trzecia|czwarta|pi[aą]ta|sz[oó]sta|si[oó]dma|[oó]sma)\s+zasada',
-            line, re.IGNORECASE
+            r"^(pierwsza|druga|trzecia|czwarta|pi[aą]ta|sz[oó]sta|si[oó]dma|[oó]sma)\s+zasada",
+            line,
+            re.IGNORECASE,
         )
         if m:
             ordinal = m.group(1).lower().replace("ó", "o").replace("ą", "a")
@@ -973,7 +1081,7 @@ def _extract_tyler_rules(response_text: str) -> list:
     # Fallback: szukaj linii z numerem 1. 2. itd.
     if len(rules) < 4:
         for line in lines:
-            m = re.match(r'^([1-8])[.)]\s*(.+)', line)
+            m = re.match(r"^([1-8])[.)]\s*(.+)", line)
             if m:
                 idx = int(m.group(1))
                 if idx not in rules:
@@ -997,7 +1105,8 @@ def _extract_tyler_rules(response_text: str) -> list:
 
     logger.info(
         "[tyler-rules] Wyciągnięto %d zasad z tekstu Tylera → %d paneli",
-        len(rules), len([r for r in panel_rules if r])
+        len(rules),
+        len([r for r in panel_rules if r]),
     )
     return panel_rules
 
@@ -1018,7 +1127,10 @@ def _load_panel_wytyczne() -> dict:
         logger.info("[panel-wytyczne] Wczytano zwykly_panel_wytyczne.json OK")
         return data
     except FileNotFoundError:
-        logger.error("[panel-wytyczne] Brak pliku %s — używam fallbacku", PANEL_WYTYCZNE_JSON_PATH)
+        logger.error(
+            "[panel-wytyczne] Brak pliku %s — używam fallbacku",
+            PANEL_WYTYCZNE_JSON_PATH,
+        )
     except json.JSONDecodeError as e:
         logger.error("[panel-wytyczne] Błąd JSON w zwykly_panel_wytyczne.json: %s", e)
     return {
@@ -1033,12 +1145,16 @@ def _load_panel_wytyczne() -> dict:
             "Objects from sender's email: [USER_OBJECTS]\n"
             "Generate a FLUX prompt showing the VIOLATION of this rule:"
         ),
-        "style_variants": ["35mm film grain, high contrast, Fight Club 1999, David Fincher"],
+        "style_variants": [
+            "35mm film grain, high contrast, Fight Club 1999, David Fincher"
+        ],
         "fallback_gdy_brak_zasady": (
             "Tyler Durden walking away from a burning wreck, 35mm film grain, "
             "Fight Club 1999 aesthetic, David Fincher, underexposed, gritty"
         ),
-        "styl_globalny": {"zakazy_negatywne": "clean, polished, beautiful, anime, text, watermark"},
+        "styl_globalny": {
+            "zakazy_negatywne": "clean, polished, beautiful, anime, text, watermark"
+        },
     }
 
 
@@ -1054,17 +1170,38 @@ def _detect_city(body: str) -> str:
     if not body:
         return ""
     known = [
-        "Warszawa", "Kraków", "Wrocław", "Poznań", "Gdańsk", "Łódź", "Szczecin",
-        "Bydgoszcz", "Lublin", "Katowice", "Białystok", "Gdynia", "Częstochowa",
-        "Radom", "Sosnowiec", "Toruń", "Kielce", "Rzeszów", "Gliwice", "Zabrze",
-        "Bogatynia", "Legnica", "Opole", "Zielona Góra", "Olsztyn", "Płock",
+        "Warszawa",
+        "Kraków",
+        "Wrocław",
+        "Poznań",
+        "Gdańsk",
+        "Łódź",
+        "Szczecin",
+        "Bydgoszcz",
+        "Lublin",
+        "Katowice",
+        "Białystok",
+        "Gdynia",
+        "Częstochowa",
+        "Radom",
+        "Sosnowiec",
+        "Toruń",
+        "Kielce",
+        "Rzeszów",
+        "Gliwice",
+        "Zabrze",
+        "Bogatynia",
+        "Legnica",
+        "Opole",
+        "Zielona Góra",
+        "Olsztyn",
+        "Płock",
     ]
     for city in known:
         if city.lower() in body.lower():
             return city
     m = re.search(
-        r'\b(?:w|z|do|ze|pod|nad|koło|przy)\s+([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{3,})',
-        body
+        r"\b(?:w|z|do|ze|pod|nad|koło|przy)\s+([A-ZŁŻŹĆŃÓĘĄŚ][a-złżźćńóęąś]{3,})", body
     )
     if m:
         return m.group(1)
@@ -1079,13 +1216,25 @@ def _detect_job(body: str) -> str:
     if not body:
         return ""
     patterns = [
-        r'\bpracuję\s+(?:jako|na\s+stanowisku)\s+([a-złżźćńóęąś\s]{3,60})',
-        r'\bjeste[mś]\s+([a-złżźćńóęąś]{4,20}(?:em|iem|ą)?)\b',
-        r'\bzawód[:\s]+([a-złżźćńóęąś\s]{3,25})',
-        r'\binspektor\b', r'\binżynier\b', r'\bnauczyciel\b', r'\blekarz\b',
-        r'\bkierowca\b', r'\bprogramista\b', r'\bksięgow\w+\b', r'\bsprzedaw\w+\b',
-        r'\bpielęgniark\w+\b', r'\bstrażak\b', r'\bpolicjant\b', r'\bgórnik\b',
-        r'\bdyrektor\b', r'\bprezes\b', r'\bmenedżer\b', r'\barchitekt\b',
+        r"\bpracuję\s+(?:jako|na\s+stanowisku)\s+([a-złżźćńóęąś\s]{3,60})",
+        r"\bjeste[mś]\s+([a-złżźćńóęąś]{4,20}(?:em|iem|ą)?)\b",
+        r"\bzawód[:\s]+([a-złżźćńóęąś\s]{3,25})",
+        r"\binspektor\b",
+        r"\binżynier\b",
+        r"\bnauczyciel\b",
+        r"\blekarz\b",
+        r"\bkierowca\b",
+        r"\bprogramista\b",
+        r"\bksięgow\w+\b",
+        r"\bsprzedaw\w+\b",
+        r"\bpielęgniark\w+\b",
+        r"\bstrażak\b",
+        r"\bpolicjant\b",
+        r"\bgórnik\b",
+        r"\bdyrektor\b",
+        r"\bprezes\b",
+        r"\bmenedżer\b",
+        r"\barchitekt\b",
     ]
     for p in patterns:
         m = re.search(p, body, re.IGNORECASE)
@@ -1106,12 +1255,12 @@ def _split_into_sentences(text: str) -> list:
         return []
     sentences = []
     # Podziel po . ! ? ale nie po skrótach
-    raw = re.split(r'(?<=[.!?])\s+', text)
+    raw = re.split(r"(?<=[.!?])\s+", text)
     for s in raw:
         s = s.strip()
         if not s:
             continue
-        if s.startswith('#') or s.startswith('—') or s.startswith('-'):
+        if s.startswith("#") or s.startswith("—") or s.startswith("-"):
             continue
         if len(s) < 20:
             continue
@@ -1120,15 +1269,15 @@ def _split_into_sentences(text: str) -> list:
 
 
 def _build_session_vars(
-        body: str,
-        sender_email: str,
-        sender_name: str,
-        previous_body: str,
-        res_text: str,
-        emotion_key: str,
-        provider: str,
-        panel_assignments: list = None,
-        nouns_dict: dict = None,
+    body: str,
+    sender_email: str,
+    sender_name: str,
+    previous_body: str,
+    res_text: str,
+    emotion_key: str,
+    provider: str,
+    panel_assignments: list = None,
+    nouns_dict: dict = None,
 ) -> dict:
     """
     Buduje słownik WSZYSTKICH zmiennych globalnych sesji.
@@ -1182,23 +1331,70 @@ def _build_session_vars(
         # Fallback na detekcję z body tylko gdy webhook nie przysłał sender_name
         vars_dict["USER_PERSON"] = _detect_sender_name(body) or ""
     # ── Zdrobnienie imienia — słownik (bez zewnętrznego AI) ─────────────────────────────
-    _user_person = vars_dict["USER_PERSON"].split()[0] if vars_dict["USER_PERSON"] else ""
+    _user_person = (
+        vars_dict["USER_PERSON"].split()[0] if vars_dict["USER_PERSON"] else ""
+    )
     _ZDROBNIENIA = {
-        "monika": "Moniczka", "anna": "Ania", "katarzyna": "Kasia", "małgorzata": "Gosia",
-        "agnieszka": "Aga", "barbara": "Basia", "krystyna": "Krysia", "magdalena": "Madzia",
-        "joanna": "Asia", "aleksandra": "Ola", "maria": "Marysia", "teresa": "Tereska",
-        "irena": "Irka", "elżbieta": "Ela", "halina": "Halinka", "zofia": "Zosia",
-        "danuta": "Danka", "beata": "Beatka", "ewa": "Ewka", "weronika": "Wera",
-        "patrycja": "Patka", "marta": "Martusia", "karolina": "Karolcia", "natalia": "Natka",
-        "sylwia": "Sylwka", "dorota": "Dorotka", "iwona": "Iwonka", "renata": "Renata",
-        "tomasz": "Tomek", "piotr": "Piotrek", "krzysztof": "Krzysiek", "andrzej": "Andrzej",
-        "jan": "Janek", "stanisław": "Stasiek", "michał": "Michał", "adam": "Adasiek",
-        "marek": "Marek", "robert": "Robert", "paweł": "Pawełek", "marcin": "Marcinek",
-        "jacek": "Jacek", "rafał": "Rafałek", "grzegorz": "Grzesiek", "dariusz": "Darek",
-        "łukasz": "Łukasz", "artur": "Artur", "kamil": "Kamil", "mateusz": "Mateusz",
-        "bartłomiej": "Bartek", "bartosz": "Bartek", "maciej": "Maciej", "wojciech": "Wojtek",
-        "sebastian": "Sebastian", "dawid": "Dawid", "filip": "Filip", "szymon": "Szymon",
-        "dominik": "Dominik", "patryk": "Patryk", "jakub": "Kuba", "daniel": "Daniel",
+        "monika": "Moniczka",
+        "anna": "Ania",
+        "katarzyna": "Kasia",
+        "małgorzata": "Gosia",
+        "agnieszka": "Aga",
+        "barbara": "Basia",
+        "krystyna": "Krysia",
+        "magdalena": "Madzia",
+        "joanna": "Asia",
+        "aleksandra": "Ola",
+        "maria": "Marysia",
+        "teresa": "Tereska",
+        "irena": "Irka",
+        "elżbieta": "Ela",
+        "halina": "Halinka",
+        "zofia": "Zosia",
+        "danuta": "Danka",
+        "beata": "Beatka",
+        "ewa": "Ewka",
+        "weronika": "Wera",
+        "patrycja": "Patka",
+        "marta": "Martusia",
+        "karolina": "Karolcia",
+        "natalia": "Natka",
+        "sylwia": "Sylwka",
+        "dorota": "Dorotka",
+        "iwona": "Iwonka",
+        "renata": "Renata",
+        "tomasz": "Tomek",
+        "piotr": "Piotrek",
+        "krzysztof": "Krzysiek",
+        "andrzej": "Andrzej",
+        "jan": "Janek",
+        "stanisław": "Stasiek",
+        "michał": "Michał",
+        "adam": "Adasiek",
+        "marek": "Marek",
+        "robert": "Robert",
+        "paweł": "Pawełek",
+        "marcin": "Marcinek",
+        "jacek": "Jacek",
+        "rafał": "Rafałek",
+        "grzegorz": "Grzesiek",
+        "dariusz": "Darek",
+        "łukasz": "Łukasz",
+        "artur": "Artur",
+        "kamil": "Kamil",
+        "mateusz": "Mateusz",
+        "bartłomiej": "Bartek",
+        "bartosz": "Bartek",
+        "maciej": "Maciej",
+        "wojciech": "Wojtek",
+        "sebastian": "Sebastian",
+        "dawid": "Dawid",
+        "filip": "Filip",
+        "szymon": "Szymon",
+        "dominik": "Dominik",
+        "patryk": "Patryk",
+        "jakub": "Kuba",
+        "daniel": "Daniel",
     }
     if _user_person:
         vars_dict["USER_NAME_ZDROBNIENIE"] = _ZDROBNIENIA.get(
@@ -1216,7 +1412,9 @@ def _build_session_vars(
     # Konwersja res_text na string je\u015bli jest dict (safety check)
     if isinstance(res_text, dict):
         res_text = json.dumps(res_text, ensure_ascii=False)
-        logger.warning("[session_vars] res_text by\u0142 dict — konwertowano na JSON string")
+        logger.warning(
+            "[session_vars] res_text by\u0142 dict — konwertowano na JSON string"
+        )
     elif not isinstance(res_text, str):
         res_text = str(res_text) if res_text else ""
 
@@ -1258,25 +1456,29 @@ def _render_template(text: str, vars_dict: dict) -> tuple:
     used = []
 
     # Znajdź wszystkie placeholdery w tekście
-    placeholders = re.findall(r'\[([A-Z_0-9]+)\]', text)
+    placeholders = re.findall(r"\[([A-Z_0-9]+)\]", text)
 
     # Zbierz dostępne TEXT_* i SOKRATES_* do losowania fallback
-    text_keys = sorted([k for k in vars_dict if re.match(r'^TEXT_\d+$', k)],
-                       key=lambda x: int(x.split('_')[1]))
-    sokrates_keys = sorted([k for k in vars_dict if re.match(r'^SOKRATES_\d+$', k)],
-                           key=lambda x: int(x.split('_')[1]))
+    text_keys = sorted(
+        [k for k in vars_dict if re.match(r"^TEXT_\d+$", k)],
+        key=lambda x: int(x.split("_")[1]),
+    )
+    sokrates_keys = sorted(
+        [k for k in vars_dict if re.match(r"^SOKRATES_\d+$", k)],
+        key=lambda x: int(x.split("_")[1]),
+    )
 
     result = text
     for ph in placeholders:
         if ph in vars_dict:
             result = result.replace(f"[{ph}]", vars_dict[ph], 1)
             used.append(ph)
-        elif re.match(r'^TEXT_\d+$', ph) and text_keys:
+        elif re.match(r"^TEXT_\d+$", ph) and text_keys:
             # fallback — losuj z dostępnych TEXT_*
             fallback_key = random.choice(text_keys)
             result = result.replace(f"[{ph}]", vars_dict[fallback_key], 1)
             used.append(f"{ph}→{fallback_key}(losowy)")
-        elif re.match(r'^SOKRATES_\d+$', ph) and sokrates_keys:
+        elif re.match(r"^SOKRATES_\d+$", ph) and sokrates_keys:
             fallback_key = random.choice(sokrates_keys)
             result = result.replace(f"[{ph}]", vars_dict[fallback_key], 1)
             used.append(f"{ph}→{fallback_key}(losowy)")
@@ -1316,7 +1518,10 @@ def _png_to_jpg(image_obj: dict, panel_index: int) -> dict:
 
         logger.info(
             "[tyler-jpg] Panel %d: %dKB PNG → %dKB JPG (jakość=%d%%)",
-            panel_index, size_png_kb, size_jpg_kb, TYLER_JPG_QUALITY
+            panel_index,
+            size_png_kb,
+            size_jpg_kb,
+            TYLER_JPG_QUALITY,
         )
 
         result = {
@@ -1348,21 +1553,23 @@ def _load_substitute_image() -> dict | None:
         with open(SUBSTITUTE_IMAGE_PATH, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("ascii")
         return {
-            "base64":       b64,
+            "base64": b64,
             "content_type": "image/jpeg",
-            "filename":     "zastepczy.jpg",
+            "filename": "zastepczy.jpg",
         }
     except Exception as e:
         logger.warning("[test-mode] Błąd odczytu zastepczy.jpg: %s", e)
         return None
 
 
-def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = False) -> dict | None:
+def _generate_flux_image(
+    prompt: str, panel_index: int = 0, test_mode: bool = False
+) -> dict | None:
     """
     Generuje jeden obrazek FLUX z losowym seed.
     Próbuje każdy token HF po kolei.
     Zwraca dict z base64 lub None.
-    
+
     Parametr test_mode:
     - Jeśli test_mode=True (przychodzi z KEYWORDS_TEST via disable_flux),
       to zwracamy zastępczy obrazek zamiast generować FLUX.
@@ -1390,34 +1597,39 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
             logger.error("[flux-tyler] Brak tokenów HF w zmiennych środowiskowych!")
         return None
 
-    seed = random.randint(0, 2 ** 32 - 1)
+    seed = random.randint(0, 2**32 - 1)
     payload = {
         "inputs": prompt,
         "parameters": {
             "num_inference_steps": HF_STEPS,
             "guidance_scale": HF_GUIDANCE,
             "seed": seed,
-        }
+        },
     }
 
-    logger.info("[flux-tyler] Panel %d — %d tokenów dostępnych, seed=%d",
-                            panel_index, len(tokens), seed)
+    logger.info(
+        "[flux-tyler] Panel %d — %d tokenów dostępnych, seed=%d",
+        panel_index,
+        len(tokens),
+        seed,
+    )
 
     for name, token in tokens:
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "image/png"
-        }
+        headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
         try:
             logger.info("[flux-tyler] Próbuję token: %s", name)
-            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
+            resp = requests.post(
+                HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT
+            )
 
             remaining = resp.headers.get("X-Remaining-Requests")
 
             if resp.status_code == 200:
                 logger.info(
                     "[flux-tyler] ✓ Token %s: sukces (PNG %d B, pozostało: %s)",
-                    name, len(resp.content), remaining or "?"
+                    name,
+                    len(resp.content),
+                    remaining or "?",
                 )
                 return {
                     "base64": base64.b64encode(resp.content).decode("ascii"),
@@ -1434,7 +1646,7 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
                 logger.warning(
                     "[flux-tyler] ✗ Token %s: wyczerpane kredyty (402) — "
                     "dodano do czarnej listy sesji",
-                    name
+                    name,
                 )
             elif resp.status_code in (401, 403):
                 # Nieważny token — też na czarną listę
@@ -1442,19 +1654,29 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
                 logger.warning(
                     "[flux-tyler] ✗ Token %s: nieważny (HTTP %d) — "
                     "dodano do czarnej listy sesji",
-                    name, resp.status_code
+                    name,
+                    resp.status_code,
                 )
             elif resp.status_code in (503, 529):
-                logger.warning("[flux-tyler] ⚠ Token %s: przeciążony (HTTP %d) — ponowna próba później",
-                                           name, resp.status_code)
+                logger.warning(
+                    "[flux-tyler] ⚠ Token %s: przeciążony (HTTP %d) — ponowna próba później",
+                    name,
+                    resp.status_code,
+                )
             else:
-                logger.warning("[flux-tyler] ✗ Token %s: HTTP %d: %s",
-                                           name, resp.status_code, resp.text[:100])
+                logger.warning(
+                    "[flux-tyler] ✗ Token %s: HTTP %d: %s",
+                    name,
+                    resp.status_code,
+                    resp.text[:100],
+                )
 
         except requests.exceptions.Timeout:
             logger.warning("[flux-tyler] ⏱ Token %s: timeout (%ds)", name, HF_TIMEOUT)
         except requests.exceptions.ConnectionError as e:
-            logger.warning("[flux-tyler] 🔌 Token %s: connection error: %s", name, str(e)[:80])
+            logger.warning(
+                "[flux-tyler] 🔌 Token %s: connection error: %s", name, str(e)[:80]
+            )
         except Exception as e:
             logger.warning("[flux-tyler] ❌ Token %s: wyjątek: %s", name, str(e)[:80])
 
@@ -1466,6 +1688,7 @@ def _generate_flux_image(prompt: str, panel_index: int = 0, test_mode: bool = Fa
 # GENEROWANIE TRYPTYKU
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _generate_raw_email_image(body: str, test_mode: bool = False) -> dict | None:
     """
     Generuje obrazek FLUX bezpośrednio z treści emaila — BEZ udziału AI.
@@ -1475,7 +1698,9 @@ def _generate_raw_email_image(body: str, test_mode: bool = False) -> dict | None
     # Surowy prompt — tylko treść emaila, żadnego AI
     raw_prompt = body.strip()[:400]
 
-    logger.info("[raw-img] Generuję obrazek z surowej treści emaila (%.80s...)", raw_prompt)
+    logger.info(
+        "[raw-img] Generuję obrazek z surowej treści emaila (%.80s...)", raw_prompt
+    )
 
     img = _generate_flux_image(raw_prompt, panel_index=97, test_mode=test_mode)
     if not img or not img.get("base64"):
@@ -1516,9 +1741,9 @@ def _generate_raw_email_image(body: str, test_mode: bool = False) -> dict | None
 
 
 def _generate_triptych_prompts_batch(
-        panel_rules: list,
-        session_vars: dict,
-        style_config: dict,
+    panel_rules: list,
+    session_vars: dict,
+    style_config: dict,
 ) -> list:
     """
     Generuje prompty FLUX dla wszystkich 7 paneli w JEDNYM wywołaniu DeepSeek.
@@ -1527,7 +1752,9 @@ def _generate_triptych_prompts_batch(
     """
     w = _load_panel_wytyczne()
     nouns_str = session_vars.get("USER_OBJECTS", "") or "debris, broken furniture, ash"
-    panel_style = random.choice(w.get("style_variants", ["35mm film grain, Fight Club 1999"]))
+    panel_style = random.choice(
+        w.get("style_variants", ["35mm film grain, Fight Club 1999"])
+    )
 
     # Buduj listę zasad do promptu zbiorczego
     zasady_lines = []
@@ -1543,7 +1770,7 @@ def _generate_triptych_prompts_batch(
         "Show the VIOLATION of each rule — characters actively doing what the rule forbids. "
         "Characters look damaged, unwashed, nihilistic. "
         f"Visual style: {panel_style}, 35mm film grain, gritty, underexposed. "
-        "RESPOND ONLY with valid JSON: {\"prompts\": [\"prompt1\", \"prompt2\", ..., \"prompt7\"]} "
+        'RESPOND ONLY with valid JSON: {"prompts": ["prompt1", "prompt2", ..., "prompt7"]} '
         "No other text, no markdown fences."
     )
     user_batch = (
@@ -1579,11 +1806,11 @@ def _generate_triptych_prompts_batch(
 
 
 def _generate_triptych(
-        response_text: str,
-        prompt_data: dict,
-        body: str,
-        session_vars: dict = None,
-        test_mode: bool = False,
+    response_text: str,
+    prompt_data: dict,
+    body: str,
+    session_vars: dict = None,
+    test_mode: bool = False,
 ) -> tuple:
     """
     Generuje 7 paneli — każdy odpowiada jednej zasadzie Tylera.
@@ -1595,7 +1822,7 @@ def _generate_triptych(
         session_vars = {}
 
     style_config = _load_style_config() or {}
-    panel_rules  = _extract_tyler_rules(response_text)
+    panel_rules = _extract_tyler_rules(response_text)
 
     # Fallback: brak zasad → 1 panel z wytycznych JSON
     if not any(panel_rules):
@@ -1603,13 +1830,14 @@ def _generate_triptych(
             "[zwykly-img] Brak zasad Tylera — fallback: 1 panel z wytycznych JSON"
         )
         w = _load_panel_wytyczne()
-        fallback_prompt = (
-            w.get("fallback_gdy_brak_zasady", "")
-            .replace("[USER_OBJECTS]", session_vars.get("USER_OBJECTS", "debris"))
+        fallback_prompt = w.get("fallback_gdy_brak_zasady", "").replace(
+            "[USER_OBJECTS]", session_vars.get("USER_OBJECTS", "debris")
         )
         if not fallback_prompt:
             return [], [], []
-        image = _generate_flux_image(fallback_prompt, panel_index=1, test_mode=test_mode)
+        image = _generate_flux_image(
+            fallback_prompt, panel_index=1, test_mode=test_mode
+        )
         if not image:
             return [], [], []
         image = _png_to_jpg(image, panel_index=1)
@@ -1617,8 +1845,14 @@ def _generate_triptych(
         return (
             [image],
             [fallback_prompt],
-            [{"panel": 1, "caption": "fallback", "used_vars": [],
-              "prompt_preview": fallback_prompt[:120]}],
+            [
+                {
+                    "panel": 1,
+                    "caption": "fallback",
+                    "used_vars": [],
+                    "prompt_preview": fallback_prompt[:120],
+                }
+            ],
         )
 
     while len(panel_rules) < 7:
@@ -1634,25 +1868,35 @@ def _generate_triptych(
                 img = dict(substitute)
                 img["filename"] = f"tyler_panel{idx}_zastepczy.jpg"
                 # Dodaj napis z zasady na obrazek w test_mode
-                rule_text = (panel_rules[idx - 1] or "")[:120] if panel_rules[idx - 1] else f"Zasada {idx}"
+                rule_text = (
+                    (panel_rules[idx - 1] or "")[:120]
+                    if panel_rules[idx - 1]
+                    else f"Zasada {idx}"
+                )
                 img = _add_text_below_image(img, rule_text, idx)
                 images.append(img)
                 panel_prompts.append("")
-                panel_assignments.append({
-                    "panel":         idx,
-                    "rule":          (panel_rules[idx - 1] or "")[:100],
-                    "caption":       rule_text,
-                    "used_vars":     [],
-                    "prompt_preview": "[test_mode substitute image z napisem zasady]",
-                })
-            logger.info("[zwykly-img] test_mode — używam zastępczego obrazu dla 7 paneli (+napisy)")
+                panel_assignments.append(
+                    {
+                        "panel": idx,
+                        "rule": (panel_rules[idx - 1] or "")[:100],
+                        "caption": rule_text,
+                        "used_vars": [],
+                        "prompt_preview": "[test_mode substitute image z napisem zasady]",
+                    }
+                )
+            logger.info(
+                "[zwykly-img] test_mode — używam zastępczego obrazu dla 7 paneli (+napisy)"
+            )
             return images, panel_prompts, panel_assignments
         logger.info("[zwykly-img] test_mode — brak zastepczy.jpg, pomijam FLUX")
         return [], [], []
 
     # ── 1 CALL: Generuj wszystkie 7 promptów naraz ───────────────────────────
     logger.info("[zwykly-img] Generuję 7 promptów FLUX w 1 callu DeepSeek")
-    flux_prompts = _generate_triptych_prompts_batch(panel_rules, session_vars, style_config)
+    flux_prompts = _generate_triptych_prompts_batch(
+        panel_rules, session_vars, style_config
+    )
 
     # ── Generuj obrazki równolegle (bez dodatkowych calli DeepSeek) ──────────
     def _gen_panel(panel_idx):
@@ -1668,7 +1912,13 @@ def _generate_triptych(
             )
 
         caption = rule_text[:120] if rule_text else f"Zasada {panel_idx}"
-        image = _generate_flux_image(flux_prompt, panel_index=panel_idx, test_mode=test_mode) if flux_prompt else None
+        image = (
+            _generate_flux_image(
+                flux_prompt, panel_index=panel_idx, test_mode=test_mode
+            )
+            if flux_prompt
+            else None
+        )
         if image:
             image = _png_to_jpg(image, panel_index=panel_idx)
             image = _add_text_below_image(image, caption, panel_idx)
@@ -1684,7 +1934,10 @@ def _generate_triptych(
             if img:
                 logger.info("[zwykly-img] Panel %d/7 OK", idx)
             else:
-                logger.warning("[zwykly-img] Panel %d/7 brak obrazka (HF limit lub brak zasady)", idx)
+                logger.warning(
+                    "[zwykly-img] Panel %d/7 brak obrazka (HF limit lub brak zasady)",
+                    idx,
+                )
         except Exception as e:
             logger.error("[zwykly-img] Panel %d/7 błąd: %s", i, e)
             results[i] = (None, "", [], f"Zasada {i}")
@@ -1695,13 +1948,15 @@ def _generate_triptych(
         img, prompt, uvars, caption = results.get(idx, (None, "", [], f"Zasada {idx}"))
         if prompt:
             panel_prompts.append(prompt)
-        panel_assignments.append({
-            "panel":         idx,
-            "rule":          (panel_rules[idx - 1] or "")[:100],
-            "caption":       caption,
-            "used_vars":     uvars or [],
-            "prompt_preview": (prompt or "")[:120],
-        })
+        panel_assignments.append(
+            {
+                "panel": idx,
+                "rule": (panel_rules[idx - 1] or "")[:100],
+                "caption": caption,
+                "used_vars": uvars or [],
+                "prompt_preview": (prompt or "")[:120],
+            }
+        )
         if img:
             images.append(img)
 
@@ -1713,18 +1968,19 @@ def _generate_triptych(
 # GŁÓWNA FUNKCJA
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _build_debug_txt(
-        body: str,
-        provider: str,
-        emotion_key: str,
-        res_raw: str,
-        res_text: str,
-        triptych_images: list,
-        panel_prompts: list,
-        system_msg: str = "",
-        user_msg: str = "",
-        session_vars: dict = None,
-        panel_assignments: list = None,
+    body: str,
+    provider: str,
+    emotion_key: str,
+    res_raw: str,
+    res_text: str,
+    triptych_images: list,
+    panel_prompts: list,
+    system_msg: str = "",
+    user_msg: str = "",
+    session_vars: dict = None,
+    panel_assignments: list = None,
 ) -> dict:
     """
     Buduje pełny log debug TXT do zapisu na Google Drive.
@@ -1757,7 +2013,9 @@ def _build_debug_txt(
     if res_text:
         otrzyma.append("  v reply_html — odpowiedz Tylera i Sokratesa (HTML)")
     if triptych_images:
-        otrzyma.append(f"  v triptych — {len(triptych_images)} obrazek(ow) JPG Fight Club")
+        otrzyma.append(
+            f"  v triptych — {len(triptych_images)} obrazek(ow) JPG Fight Club"
+        )
     otrzyma.append("  v emoticon — emotka PNG (FLUX)")
     otrzyma.append("  v cv_pdf — CV w stylu Tylera (PDF)")
     otrzyma.append("  v horoskop_pdf — Horoskop nihilistyczny (PDF)")
@@ -1838,36 +2096,48 @@ def _build_debug_txt(
 
     # Grupuj: najpierw webhook/wykryte, potem TEXT_*, potem SOKRATES_*
     webhook_keys = ["SENDER", "SENDER_NAME", "BODY", "PREVIOUS_BODY"]
-    detected_keys = ["USER_PERSON", "USER_NAME_ZDROBNIENIE", "USER_OBJECTS", "USER_GENDER", "USER_CITY",
-                     "USER_JOB", "USER_EMOTION", "USER_PROVIDER"]
-    text_keys = sorted([k for k in session_vars if re.match(r'^TEXT_\d+$', k)],
-                       key=lambda x: int(x.split('_')[1]))
-    sokr_keys = sorted([k for k in session_vars if re.match(r'^SOKRATES_\d+$', k)],
-                       key=lambda x: int(x.split('_')[1]))
+    detected_keys = [
+        "USER_PERSON",
+        "USER_NAME_ZDROBNIENIE",
+        "USER_OBJECTS",
+        "USER_GENDER",
+        "USER_CITY",
+        "USER_JOB",
+        "USER_EMOTION",
+        "USER_PROVIDER",
+    ]
+    text_keys = sorted(
+        [k for k in session_vars if re.match(r"^TEXT_\d+$", k)],
+        key=lambda x: int(x.split("_")[1]),
+    )
+    sokr_keys = sorted(
+        [k for k in session_vars if re.match(r"^SOKRATES_\d+$", k)],
+        key=lambda x: int(x.split("_")[1]),
+    )
 
     lines.append("-- Z Google Apps Script / webhook:")
     for k in webhook_keys:
         v = session_vars.get(k, "")
         preview = str(v)[:120].replace("\n", " ")
-        lines.append(f"  [{k}] = \"{preview}\"")
+        lines.append(f'  [{k}] = "{preview}"')
 
     lines.append("")
     lines.append("-- Wykryte z emaila:")
     for k in detected_keys:
         v = session_vars.get(k, "")
-        lines.append(f"  [{k}] = \"{v}\"")
+        lines.append(f'  [{k}] = "{v}"')
 
     lines.append("")
     lines.append(f"-- Zdania Tylera ({len(text_keys)} zdań):")
     for k in text_keys:
         v = session_vars.get(k, "")
-        lines.append(f"  [{k}] = \"{v}\"")
+        lines.append(f'  [{k}] = "{v}"')
 
     lines.append("")
     lines.append(f"-- Zdania Sokratesa ({len(sokr_keys)} zdań):")
     for k in sokr_keys:
         v = session_vars.get(k, "")
-        lines.append(f"  [{k}] = \"{v}\"")
+        lines.append(f'  [{k}] = "{v}"')
 
     # ── PRZYPORZĄDKOWANIA PANELI ──────────────────────────────────────────────
     lines += [
@@ -1938,7 +2208,9 @@ def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
     return None
 
 
-def _generate_cv_content(body: str, previous_body: str | None, sender_email: str) -> dict | None:
+def _generate_cv_content(
+    body: str, previous_body: str | None, sender_email: str
+) -> dict | None:
     """
     Generuje treść CV w stylu Tylera przez DeepSeek AI.
     Zwraca dict z polami CV lub None przy błędzie.
@@ -1950,18 +2222,26 @@ def _generate_cv_content(body: str, previous_body: str | None, sender_email: str
         logger.warning("[cv] Brak zwykly_cv_content.json: %s", e)
         cv_cfg = {}
 
-    system_msg = cv_cfg.get("system", "Generuj prześmiewcze CV w stylu Tylera Durdena. Zwróć TYLKO JSON.")
+    system_msg = cv_cfg.get(
+        "system", "Generuj prześmiewcze CV w stylu Tylera Durdena. Zwróć TYLKO JSON."
+    )
     schema = cv_cfg.get("output_schema", {})
     instrukcje = cv_cfg.get("instrukcje_dodatkowe", [])
 
     context_parts = [f"EMAIL:\n{body[:MAX_DLUGOSC_EMAIL]}"]
     if previous_body and previous_body.strip():
-        context_parts.append(f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:MAX_DLUGOSC_EMAIL]}")
+        context_parts.append(
+            f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:MAX_DLUGOSC_EMAIL]}"
+        )
     if sender_email:
         context_parts.append(f"\nEMAIL NADAWCY: {sender_email}")
-    context_parts.append(f"\nSCHEMAT JSON DO WYPEŁNIENIA:\n{json.dumps(schema, ensure_ascii=False, indent=2)}")
+    context_parts.append(
+        f"\nSCHEMAT JSON DO WYPEŁNIENIA:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+    )
     if instrukcje:
-        context_parts.append(f"\nINSTRUKCJE:\n" + "\n".join(f"- {i}" for i in instrukcje))
+        context_parts.append(
+            f"\nINSTRUKCJE:\n" + "\n".join(f"- {i}" for i in instrukcje)
+        )
     context_parts.append("\nZwróć TYLKO czysty JSON bez żadnego tekstu poza klamrami.")
 
     user_msg = "\n".join(context_parts)
@@ -1997,9 +2277,13 @@ def _generate_cv_photo(body: str, cv_data: dict, test_mode: bool = False) -> str
         logger.warning("[cv-photo] Brak zwykly_cv_photo_flux.json: %s", e)
         photo_cfg = {}
 
-    style_base = photo_cfg.get("style_base", "professional CV headshot portrait, sharp focus")
+    style_base = photo_cfg.get(
+        "style_base", "professional CV headshot portrait, sharp focus"
+    )
 
-    imie = cv_data.get("imie_nazwisko", "unknown person") if cv_data else "unknown person"
+    imie = (
+        cv_data.get("imie_nazwisko", "unknown person") if cv_data else "unknown person"
+    )
     tytul = cv_data.get("tytul_zawodowy", "") if cv_data else ""
     plec = _detect_gender(body, imie)
     plec_en = {"kobieta": "woman", "mezczyzna": "man"}.get(plec, "person")
@@ -2016,6 +2300,7 @@ def _generate_cv_photo(body: str, cv_data: dict, test_mode: bool = False) -> str
     if img and img.get("base64"):
         try:
             from PIL import Image as PILImage
+
             raw = base64.b64decode(img["base64"])
             pil = PILImage.open(io.BytesIO(raw)).convert("RGB")
             w, h = pil.size
@@ -2138,7 +2423,11 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     right_margin = W - 15 * mm
     # Jeśli jest zdjęcie, tekst nie może wchodzić pod zdjęcie w nagłówku
     # Zdjęcie zajmuje 38mm + 10mm margines = 48mm od prawej krawędzi
-    photo_col_width = (W - (38 * mm + 10 * mm + 15 * mm)) - left_margin if photo_b64 else (right_margin - left_margin)
+    photo_col_width = (
+        (W - (38 * mm + 10 * mm + 15 * mm)) - left_margin
+        if photo_b64
+        else (right_margin - left_margin)
+    )
     col_width = right_margin - left_margin  # pełna szerokość dla sekcji pod nagłówkiem
 
     def section_header(title, ypos):
@@ -2400,7 +2689,7 @@ def _build_explanation_txt(res_text: str, body: str) -> dict | None:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 
-    # ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
@@ -2440,7 +2729,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         except json.JSONDecodeError:
             last_bracket = clean.rfind('"}')
             if last_bracket > 0:
-                clean = clean[:last_bracket + 2] + ']}'  # zamknij pytania i root
+                clean = clean[: last_bracket + 2] + "]}"  # zamknij pytania i root
                 logger.warning("[ankieta] JSON ucięty — próba naprawy")
                 data = json.loads(clean)
             else:
@@ -2493,7 +2782,9 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         if isinstance(odp, list):
             # model zwrócił listę [{"klucz":"a","tresc":"..."}] zamiast {"a":"..."}
             odp = {
-                str(item.get("klucz", item.get("key", chr(97 + i)))): str(item.get("tresc", item.get("text", "")))
+                str(item.get("klucz", item.get("key", chr(97 + i)))): str(
+                    item.get("tresc", item.get("text", ""))
+                )
                 for i, item in enumerate(odp)
             }
         elif not isinstance(odp, dict):
@@ -2610,7 +2901,9 @@ function sprawdz() {{
             odp = p.get("odpowiedzi", {})
             if isinstance(odp, list):
                 odp = {
-                    str(item.get("klucz", item.get("key", chr(97 + i)))): str(item.get("tresc", item.get("text", "")))
+                    str(item.get("klucz", item.get("key", chr(97 + i)))): str(
+                        item.get("tresc", item.get("text", ""))
+                    )
                     for i, item in enumerate(odp)
                 }
             elif not isinstance(odp, dict):
@@ -2630,7 +2923,9 @@ function sprawdz() {{
 
             # Cytat
             if cytat:
-                used = wrap_draw_a(f'"{cytat}"', lm + 3 * mm, y, FN, 8, cw - 6 * mm, (0.4, 0.4, 0.4))
+                used = wrap_draw_a(
+                    f'"{cytat}"', lm + 3 * mm, y, FN, 8, cw - 6 * mm, (0.4, 0.4, 0.4)
+                )
                 y -= used + 2 * mm
 
             # Odpowiedzi z checkboxami AcroForm
@@ -2642,6 +2937,7 @@ function sprawdz() {{
 
                 field_name = f"q{nr}_{key}"
                 from reportlab.lib.colors import Color as RLColor
+
                 form.checkbox(
                     name=field_name,
                     tooltip=f"Pytanie {nr}, odpowiedz {key}",
@@ -2655,7 +2951,15 @@ function sprawdz() {{
                     size=10,
                 )
 
-                used = wrap_draw_a(f"{key}) {val}", lm + 7 * mm, y, FN, 9, cw - 7 * mm, (0.15, 0.15, 0.15))
+                used = wrap_draw_a(
+                    f"{key}) {val}",
+                    lm + 7 * mm,
+                    y,
+                    FN,
+                    9,
+                    cw - 7 * mm,
+                    (0.15, 0.15, 0.15),
+                )
                 y -= max(used, 6 * mm) + 1 * mm
 
             y -= 4 * mm
@@ -2669,6 +2973,7 @@ function sprawdz() {{
         y -= 5 * mm
 
         from reportlab.lib.colors import Color as RLColor
+
         form.textfield(
             name="wynik",
             tooltip="Wynik",
@@ -2684,22 +2989,25 @@ function sprawdz() {{
             fieldFlags="readOnly",
         )
 
-        correct_js = ", ".join(f'"{nr}": "{ans}"' for nr, ans in correct_answers.items())
+        correct_js = ", ".join(
+            f'"{nr}": "{ans}"' for nr, ans in correct_answers.items()
+        )
         total_pytań = len(pytania[:5])
         js_code = (
             f"var poprawne = {{{correct_js}}};\n"
             f"var wynik = 0;\n"
             f"var total = {total_pytań};\n"
             "for (var nr in poprawne) {\n"
-            "    var checked_field = this.getField(\"q\" + nr + \"_\" + poprawne[nr]);\n"
-            "    if (checked_field && checked_field.value === \"Yes\") { wynik++; }\n"
+            '    var checked_field = this.getField("q" + nr + "_" + poprawne[nr]);\n'
+            '    if (checked_field && checked_field.value === "Yes") { wynik++; }\n'
             "}\n"
-            "var komentarz = wynik >= total * 0.8 ? \"Jestes gotowy.\" : wynik >= total * 0.5 ? \"Prawie.\" : \"Rozczarowujace.\";\n"
-            "this.getField(\"wynik\").value = \"Wynik: \" + wynik + \" / \" + total + \" — \" + komentarz;"
+            'var komentarz = wynik >= total * 0.8 ? "Jestes gotowy." : wynik >= total * 0.5 ? "Prawie." : "Rozczarowujace.";\n'
+            'this.getField("wynik").value = "Wynik: " + wynik + " / " + total + " — " + komentarz;'
         )
 
         # ── Przycisk PODLICZ — rysowany manualnie (reportlab nie ma form.button) ──
         from reportlab.lib.colors import Color as RLColor
+
         btn_x = lm + 85 * mm
         btn_y = y - 8 * mm
         btn_w = 40 * mm
@@ -2715,7 +3023,12 @@ function sprawdz() {{
         # Link JS (działa w Acrobat) — użyj anotacji URI jako fallback
         # Prawdziwy JS trigger — dodajemy przez AcroForm pushbutton bez form.button
         try:
-            from reportlab.pdfbase.pdfdoc import PDFArray, PDFDictionary, PDFName, PDFString
+            from reportlab.pdfbase.pdfdoc import (
+                PDFArray,
+                PDFDictionary,
+                PDFName,
+                PDFString,
+            )
         except ImportError:
             pass  # nie dodajemy JS — przycisk jest dekoracyjny, wynik liczy HTML
 
@@ -2743,6 +3056,7 @@ function sprawdz() {{
 # HOROSKOP PDF — styl gazety lat 60
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _build_horoskop(body: str, res_text: str) -> dict | None:
     """Generuje horoskop nihilistyczny na 7 dni w stylu gazety lat 60."""
     try:
@@ -2754,8 +3068,12 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
 
     # Oblicz daty
     today = datetime.now()
-    daty = [(today.replace(day=today.day) + __import__("datetime").timedelta(days=i)).strftime("%d.%m.%Y") for i in
-            range(7)]
+    daty = [
+        (
+            today.replace(day=today.day) + __import__("datetime").timedelta(days=i)
+        ).strftime("%d.%m.%Y")
+        for i in range(7)
+    ]
 
     system_msg = cfg.get("system", "")
     schema = cfg.get("output_schema", {})
@@ -2778,10 +3096,16 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         clean = _strip_json_markdown(raw)
         data = json.loads(clean)
         if not isinstance(data, dict):
-            raise ValueError(f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}")
+            raise ValueError(
+                f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}"
+            )
         KEY_MAP_HOROSKOP = {
-            "horoskop": "dni", "days": "dni", "forecast": "dni",
-            "prognozy": "dni", "przepowiednie": "dni", "lista": "dni",
+            "horoskop": "dni",
+            "days": "dni",
+            "forecast": "dni",
+            "prognozy": "dni",
+            "przepowiednie": "dni",
+            "lista": "dni",
         }
         for wrong, right in KEY_MAP_HOROSKOP.items():
             if wrong in data and right not in data:
@@ -2844,8 +3168,11 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
 
         c.setFont(FN, 8)
         c.setFillColorRGB(0.7, 0.7, 0.7)
-        c.drawCentredString(W / 2, H - 21 * mm,
-                            f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia")
+        c.drawCentredString(
+            W / 2,
+            H - 21 * mm,
+            f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia",
+        )
 
         # Linia dekoracyjna
         c.setStrokeColorRGB(0.7, 0.1, 0.1)
@@ -2927,7 +3254,11 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         logger.info("[horoskop] OK")
-        return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"horoskop_{ts}.pdf"}
+        return {
+            "base64": pdf_b64,
+            "content_type": "application/pdf",
+            "filename": f"horoskop_{ts}.pdf",
+        }
 
     except Exception as e:
         logger.error("[horoskop] Błąd PDF: %s", e)
@@ -2937,6 +3268,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
 # ═══════════════════════════════════════════════════════════════════════════════
 # KARTA RPG PDF
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     """Generuje kartę postaci RPG."""
@@ -2967,17 +3299,30 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         clean = _strip_json_markdown(raw)
         data = json.loads(clean)
         if not isinstance(data, dict):
-            raise ValueError(f"[karta-rpg] Oczekiwano dict, dostałem {type(data).__name__}")
+            raise ValueError(
+                f"[karta-rpg] Oczekiwano dict, dostałem {type(data).__name__}"
+            )
         KEY_MAP_RPG = {
-            "name": "nazwa_postaci", "character_name": "nazwa_postaci", "imie": "nazwa_postaci",
-            "class": "klasa_postaci", "klasa": "klasa_postaci", "character_class": "klasa_postaci",
+            "name": "nazwa_postaci",
+            "character_name": "nazwa_postaci",
+            "imie": "nazwa_postaci",
+            "class": "klasa_postaci",
+            "klasa": "klasa_postaci",
+            "character_class": "klasa_postaci",
             "level": "poziom",
-            "stats": "statystyki", "statistics": "statystyki", "attributes": "statystyki",
-            "skills": "umiejetnosci_specjalne", "abilities": "umiejetnosci_specjalne",
-            "equipment": "ekwipunek", "items": "ekwipunek",
-            "weakness": "slabosci", "weaknesses": "slabosci",
-            "quest": "quest_glowny", "main_quest": "quest_glowny",
-            "quote": "cytat_postaci", "character_quote": "cytat_postaci",
+            "stats": "statystyki",
+            "statistics": "statystyki",
+            "attributes": "statystyki",
+            "skills": "umiejetnosci_specjalne",
+            "abilities": "umiejetnosci_specjalne",
+            "equipment": "ekwipunek",
+            "items": "ekwipunek",
+            "weakness": "slabosci",
+            "weaknesses": "slabosci",
+            "quest": "quest_glowny",
+            "main_quest": "quest_glowny",
+            "quote": "cytat_postaci",
+            "character_quote": "cytat_postaci",
         }
         for wrong, right in KEY_MAP_RPG.items():
             if wrong in data and right not in data:
@@ -3023,7 +3368,9 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         c.drawCentredString(W / 2, H - 18 * mm, "KARTA POSTACI — PROJEKT TYLER DURDEN")
         c.setFont(FB, 18)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W / 2, H - 28 * mm, data.get("nazwa_postaci", "ANONIM")[:30])
+        c.drawCentredString(
+            W / 2, H - 28 * mm, data.get("nazwa_postaci", "ANONIM")[:30]
+        )
         c.setFont(FN, 10)
         c.setFillColorRGB(0.7, 0.5, 0.5)
         c.drawCentredString(W / 2, H - 35 * mm, data.get("klasa_postaci", "")[:50])
@@ -3059,7 +3406,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
 
         def draw_stat_col(items, x_base):
             sy = y_stat
-            for (sk, sv) in items:
+            for sk, sv in items:
                 label = sk.replace("_", " ").upper()
                 c.setFont(FB, 7)
                 c.setFillColorRGB(*DARK)
@@ -3150,14 +3497,20 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         logger.info("[karta-rpg] OK")
-        return {"base64": pdf_b64, "content_type": "application/pdf", "filename": f"karta_rpg_{ts}.pdf"}
+        return {
+            "base64": pdf_b64,
+            "content_type": "application/pdf",
+            "filename": f"karta_rpg_{ts}.pdf",
+        }
 
     except Exception as e:
         logger.error("[karta-rpg] Błąd PDF: %s", e)
         return None
 
 
-def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = "") -> str | None:
+def _generate_psychiatric_photo(
+    body: str, nouns_dict: dict, sender_name: str = ""
+) -> str | None:
     """
     Generuje zdjęcie pacjenta psychiatrycznego w kaftanie bezpieczeństwa przez FLUX.
     Używa promptu z zwykly_psychiatryczny_obrazek.json.
@@ -3172,7 +3525,9 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
         return None
 
     prompt_template = cfg.get("prompt_template", "")
-    fallback_objects = cfg.get("fallback_objects", "everyday objects, papers, worn shoes")
+    fallback_objects = cfg.get(
+        "fallback_objects", "everyday objects, papers, worn shoes"
+    )
     hf_params = cfg.get("hf_parameters", {})
 
     # ── Buduj listę obiektów z rzeczowników ──────────────────────────────────
@@ -3182,7 +3537,9 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
     else:
         # fallback: wyciągnij z body regexem
         nouns_fallback = _extract_nouns_from_body(body)
-        objects_str = ", ".join(nouns_fallback[:6]) if nouns_fallback else fallback_objects
+        objects_str = (
+            ", ".join(nouns_fallback[:6]) if nouns_fallback else fallback_objects
+        )
 
     # ── Płeć — do opisu pacjenta ─────────────────────────────────────────────
     gender = _detect_gender(body, sender_name)
@@ -3197,12 +3554,8 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
     prompt = prompt.replace("{{GENDER}}", gender_desc)
     prompt = prompt.replace("{{NAME}}", sender_name or "unknown")
 
-    logger.info(
-        "[psych-photo] Prompt (pierwsze 200 znaków): %.200s", prompt
-    )
-    logger.info(
-        "[psych-photo] Obiekty: %s | Płeć: %s", objects_str, gender
-    )
+    logger.info("[psych-photo] Prompt (pierwsze 200 znaków): %.200s", prompt)
+    logger.info("[psych-photo] Obiekty: %s | Płeć: %s", objects_str, gender)
 
     # ── Wywołaj FLUX z parametrami z JSON ────────────────────────────────────
     tokens = get_active_tokens()
@@ -3210,7 +3563,7 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
         logger.error("[psych-photo] Brak tokenów HF")
         return None
 
-    seed = random.randint(0, 2 ** 32 - 1)
+    seed = random.randint(0, 2**32 - 1)
     payload = {
         "inputs": prompt,
         "parameters": {
@@ -3219,27 +3572,33 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
             "width": hf_params.get("width", 768),
             "height": hf_params.get("height", 1024),
             "seed": seed,
-        }
+        },
     }
 
     raw_img = None
     for name, token in tokens:
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "image/png"
-        }
+        headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
         try:
-            resp = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
+            resp = requests.post(
+                HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT
+            )
             if resp.status_code == 200:
                 raw_img = resp.content
                 logger.info("[psych-photo] FLUX OK token=%s (%d B)", name, len(raw_img))
                 break
             elif resp.status_code == 402:
                 mark_dead(name)
-                logger.warning("[psych-photo] 402 token=%s — wyczerpane kredyty, dodano do czarnej listy", name)
+                logger.warning(
+                    "[psych-photo] 402 token=%s — wyczerpane kredyty, dodano do czarnej listy",
+                    name,
+                )
             elif resp.status_code in (401, 403):
                 mark_dead(name)
-                logger.warning("[psych-photo] HTTP %d token=%s — nieważny, dodano do czarnej listy", resp.status_code, name)
+                logger.warning(
+                    "[psych-photo] HTTP %d token=%s — nieważny, dodano do czarnej listy",
+                    resp.status_code,
+                    name,
+                )
             elif resp.status_code == 429:
                 logger.warning("[psych-photo] 429 token=%s → następny", name)
             else:
@@ -3254,11 +3613,14 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
     # ── Konwertuj PNG → JPG, zachowaj proporcje polaroid ─────────────────────
     try:
         from PIL import Image as PILImage
+
         pil = PILImage.open(io.BytesIO(raw_img)).convert("RGB")
         buf = io.BytesIO()
         pil.save(buf, format="JPEG", quality=92, optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        logger.info("[psych-photo] Konwersja JPG OK (%dKB)", len(buf.getvalue()) // 1024)
+        logger.info(
+            "[psych-photo] Konwersja JPG OK (%dKB)", len(buf.getvalue()) // 1024
+        )
         return b64
     except Exception as e:
         logger.warning("[psych-photo] Błąd konwersji: %s — zwracam PNG b64", e)
@@ -3269,12 +3631,13 @@ def _generate_psychiatric_photo(body: str, nouns_dict: dict, sender_name: str = 
 # RAPORT PSYCHIATRYCZNY DOCX (zastępuje PDF)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _build_raport_psychiatryczny(
-        body: str,
-        previous_body: str | None,
-        res_text: str,
-        nouns_dict: dict = None,
-        sender_name: str = "",
+    body: str,
+    previous_body: str | None,
+    res_text: str,
+    nouns_dict: dict = None,
+    sender_name: str = "",
 ) -> dict | None:
     """
     Generuje raport psychiatryczny jako DOCX (python-docx).
@@ -3320,18 +3683,29 @@ def _build_raport_psychiatryczny(
         clean = _strip_json_markdown(raw)
         data = json.loads(clean)
         if not isinstance(data, dict):
-            raise ValueError(f"[raport] Oczekiwano dict, dostałem {type(data).__name__}")
+            raise ValueError(
+                f"[raport] Oczekiwano dict, dostałem {type(data).__name__}"
+            )
         KEY_MAP_RAPORT = {
-            "pacjent": "dane_pacjenta", "patient": "dane_pacjenta",
-            "patient_data": "dane_pacjenta", "dane": "dane_pacjenta",
-            "diagnoza": "diagnoza_wstepna", "diagnosis": "diagnoza_wstepna",
-            "primary_diagnosis": "diagnoza_wstepna", "rozpoznanie": "diagnoza_wstepna",
-            "historia_choroby": "wywiad", "history": "wywiad",
-            "powod": "powod_przyjecia", "reason": "powod_przyjecia",
-            "symptoms": "objawy", "symptomy": "objawy",
-            "recommendations": "zalecenia", "treatment": "zalecenia",
+            "pacjent": "dane_pacjenta",
+            "patient": "dane_pacjenta",
+            "patient_data": "dane_pacjenta",
+            "dane": "dane_pacjenta",
+            "diagnoza": "diagnoza_wstepna",
+            "diagnosis": "diagnoza_wstepna",
+            "primary_diagnosis": "diagnoza_wstepna",
+            "rozpoznanie": "diagnoza_wstepna",
+            "historia_choroby": "wywiad",
+            "history": "wywiad",
+            "powod": "powod_przyjecia",
+            "reason": "powod_przyjecia",
+            "symptoms": "objawy",
+            "symptomy": "objawy",
+            "recommendations": "zalecenia",
+            "treatment": "zalecenia",
             "prognosis": "rokowanie",
-            "notatka": "notatka_oddzialu", "note": "notatka_oddzialu",
+            "notatka": "notatka_oddzialu",
+            "note": "notatka_oddzialu",
         }
         for wrong, right in KEY_MAP_RAPORT.items():
             if wrong in data and right not in data:
@@ -3365,7 +3739,8 @@ def _build_raport_psychiatryczny(
 
         # ── Nagłówek szpitala ─────────────────────────────────────────────────
         h = doc.add_heading(
-            szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"), level=1
+            szpital_cfg.get("nazwa", "Szpital Psychiatryczny im. Tylera Durdena"),
+            level=1,
         )
         h.alignment = WD_ALIGN_PARAGRAPH.CENTER
         for run in h.runs:
@@ -3426,7 +3801,7 @@ def _build_raport_psychiatryczny(
             p.paragraph_format.space_after = Pt(4)
 
         def lista_punktow(items):
-            for item in (items or []):
+            for item in items or []:
                 p = doc.add_paragraph(style="List Bullet")
                 run = p.add_run(str(item))
                 run.font.size = Pt(10)
@@ -3558,6 +3933,7 @@ def _build_raport_psychiatryczny(
 # PLAKAT SVG
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     """Generuje plakat motywacyjny SVG."""
     try:
@@ -3586,19 +3962,29 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         clean = _strip_json_markdown(raw)
         data = json.loads(clean)
         if not isinstance(data, dict):
-            raise ValueError(f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}")
+            raise ValueError(
+                f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}"
+            )
         if not data.get("glowne_zdanie") and isinstance(data.get("plakat"), dict):
             data.update(data.pop("plakat"))
             logger.info("[plakat] wyciągnięto dane z zagnieżdżonego 'plakat'")
         KEY_MAP_PLAKAT = {
-            "zdanie": "glowne_zdanie", "main_sentence": "glowne_zdanie",
-            "sentence": "glowne_zdanie", "tekst": "glowne_zdanie", "text": "glowne_zdanie",
-            "cytat": "glowne_zdanie", "quote": "glowne_zdanie",
+            "zdanie": "glowne_zdanie",
+            "main_sentence": "glowne_zdanie",
+            "sentence": "glowne_zdanie",
+            "tekst": "glowne_zdanie",
+            "text": "glowne_zdanie",
+            "cytat": "glowne_zdanie",
+            "quote": "glowne_zdanie",
             "tresc": "glowne_zdanie",
-            "subtitle": "podtytul", "podtytuł": "podtytul",
-            "background": "tlo_opis", "tlo": "tlo_opis",
-            "color": "kolor_dominujacy", "kolor": "kolor_dominujacy",
-            "keyword": "slowo_klucz", "slowo": "slowo_klucz",
+            "subtitle": "podtytul",
+            "podtytuł": "podtytul",
+            "background": "tlo_opis",
+            "tlo": "tlo_opis",
+            "color": "kolor_dominujacy",
+            "kolor": "kolor_dominujacy",
+            "keyword": "slowo_klucz",
+            "slowo": "slowo_klucz",
         }
         for wrong, right in KEY_MAP_PLAKAT.items():
             if wrong in data and right not in data:
@@ -3721,30 +4107,37 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     logger.info("[plakat] OK")
-    return {"base64": svg_b64, "content_type": "image/svg+xml", "filename": f"plakat_{ts}.svg"}
+    return {
+        "base64": svg_b64,
+        "content_type": "image/svg+xml",
+        "filename": f"plakat_{ts}.svg",
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DIAGRAM PRZEPŁYWU SVG
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def _build_flow_diagram_svg(exec_logger) -> dict | None:
     """Generuje diagram przepływu pokazujący INPUT → API CALLS → SECTIONS."""
     try:
         # Pobierz dane z exec_logger metadata (ExecutionLogger, nie logging.Logger)
-        metadata = getattr(exec_logger, 'metadata', {}) or {}
-        api_calls = metadata.get('api_calls', [])
-        sections_completed = metadata.get('sections_completed', [])
-        in_history = metadata.get('in_history', 'nieznany')
-        in_requiem = metadata.get('in_requiem', 'nieznany')
+        metadata = getattr(exec_logger, "metadata", {}) or {}
+        api_calls = metadata.get("api_calls", [])
+        sections_completed = metadata.get("sections_completed", [])
+        in_history = metadata.get("in_history", "nieznany")
+        in_requiem = metadata.get("in_requiem", "nieznany")
 
         # Przygotuj dane do wizualizacji
-        deepseek_count = sum(1 for call in api_calls if call.get('provider') == 'deepseek')
-        total_tokens = sum(call.get('tokens', 0) for call in api_calls)
+        deepseek_count = sum(
+            1 for call in api_calls if call.get("provider") == "deepseek"
+        )
+        total_tokens = sum(call.get("tokens", 0) for call in api_calls)
 
-        sections_list = ', '.join(sections_completed) if sections_completed else 'brak'
+        sections_list = ", ".join(sections_completed) if sections_completed else "brak"
 
-        svg = f'''<?xml version="1.0" encoding="UTF-8"?>
+        svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
   <!-- Tło -->
   <rect width="800" height="600" fill="#1a1a1a"/>
@@ -3825,12 +4218,16 @@ def _build_flow_diagram_svg(exec_logger) -> dict | None:
   <!-- Stopka -->
   <text x="400" y="580" font-family="Arial, sans-serif" font-size="10"
         fill="#666666" text-anchor="middle">Wygenerowano: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</text>
-</svg>'''
+</svg>"""
 
         svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         logger.info("[flow_diagram] OK")
-        return {"base64": svg_b64, "content_type": "image/svg+xml", "filename": f"flow_diagram_{ts}.svg"}
+        return {
+            "base64": svg_b64,
+            "content_type": "image/svg+xml",
+            "filename": f"flow_diagram_{ts}.svg",
+        }
 
     except Exception as e:
         logger.warning("[flow_diagram] Błąd: %s", e)
@@ -3840,6 +4237,7 @@ def _build_flow_diagram_svg(exec_logger) -> dict | None:
 # ═══════════════════════════════════════════════════════════════════════════════
 # GRA HTML
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _build_gra_html(body: str, res_text: str) -> dict | None:
     """Generuje grę interaktywną HTML z wyborami Tylera."""
@@ -3905,7 +4303,9 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
         odp = p.get("odpowiedzi", {})
         if isinstance(odp, list):
             odp = {
-                str(item.get("klucz", item.get("key", chr(97 + i)))): str(item.get("tresc", item.get("text", "")))
+                str(item.get("klucz", item.get("key", chr(97 + i)))): str(
+                    item.get("tresc", item.get("text", ""))
+                )
                 for i, item in enumerate(odp)
             }
         elif not isinstance(odp, dict):
@@ -4034,12 +4434,25 @@ function pokazWynik() {{
     html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     logger.info("[gra] OK: %d pytań", len(pytania))
-    return {"base64": html_b64, "content_type": "text/html", "filename": f"gra_{ts}.html"}
+    return {
+        "base64": html_b64,
+        "content_type": "text/html",
+        "filename": f"gra_{ts}.html",
+    }
 
-def build_zwykly_section(body: str, previous_body: str = None, sender_email: str = "", sender_name: str = "", test_mode: bool = False, attachments: list = None, skip_dociekliwy: bool = False) -> dict:
+
+def build_zwykly_section(
+    body: str,
+    previous_body: str = None,
+    sender_email: str = "",
+    sender_name: str = "",
+    test_mode: bool = False,
+    attachments: list = None,
+    skip_dociekliwy: bool = False,
+) -> dict:
     """
     Zwykły responder - generuje odpowiedź tekstową i obrazki FLUX.
-    
+
     Parametr test_mode:
     - Jeśli test_mode=True (pochodzi z KEYWORDS_TEST via app.py disable_flux),
       to zwracamy zastępczy obrazek zamiast generować FLUX.
@@ -4057,7 +4470,9 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     nouns_dict = {}
     png_b64 = cv_pdf_b64 = raport_pdf = psych_photo_1 = psych_photo_2 = log_psych = None
     triptych_images = []
-    ankieta_html = ankieta_pdf = horoskop_pdf = karta_rpg_pdf = plakat_svg = gra_html = None
+    ankieta_html = ankieta_pdf = horoskop_pdf = karta_rpg_pdf = plakat_svg = (
+        gra_html
+    ) = None
     explanation_txt = debug_txt = ""
 
     # ── KROK 1: Tekst AI + Rzeczowniki równolegle (2 calle DeepSeek) ────────
@@ -4065,7 +4480,9 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         with app_obj.app_context():
             p_data = _load_prompt_json()
             p_str = _render_prompt(p_data, body, previous_body, sender_name=sender_name)
-            raw, prov = _call_ai_with_fallback(p_data.get("system", ""), p_str, max_tokens=6000)
+            raw, prov = _call_ai_with_fallback(
+                p_data.get("system", ""), p_str, max_tokens=6000
+            )
             txt, emo = _parse_response(raw)
             return txt, emo, prov, p_data, p_str
 
@@ -4075,15 +4492,31 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     if not res_text:
         res_text = "### TYLER DURDEN\n\nSystem zawiódł..."
 
-    session_vars = _build_session_vars(body, sender_email, sender_name, previous_body or "", res_text, emotion_key, provider, nouns_dict)
-    for k, v in nouns_dict.items(): session_vars[k.upper()] = v
+    session_vars = _build_session_vars(
+        body,
+        sender_email,
+        sender_name,
+        previous_body or "",
+        res_text,
+        emotion_key,
+        provider,
+        nouns_dict,
+    )
+    for k, v in nouns_dict.items():
+        session_vars[k.upper()] = v
 
     # ── KROK 2: Zadania bez AI lub z 1 callem DeepSeek każde ───────────────
     # Sekwencyjnie, żeby każdy call DeepSeek był wykonywany pojedynczo.
     def task_tryptyk():
         with app_obj.app_context():
             # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje AI
-            imgs, _, _ = _generate_triptych(res_text, prompt_data, body, session_vars=session_vars, test_mode=test_mode)
+            imgs, _, _ = _generate_triptych(
+                res_text,
+                prompt_data,
+                body,
+                session_vars=session_vars,
+                test_mode=test_mode,
+            )
             return imgs
 
     try:
@@ -4098,6 +4531,7 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     # Render ma limit ~10 min. Każdy poniższy task to osobny call DeepSeek.
     # Jeśli mamy mało czasu (>300s od startu) pomijamy kolejne taski.
     import time as _time
+
     _start_ts = _time.monotonic()
     _TASK_BUDGET_S = 240  # Max łączny czas na taski poboczne (4 min)
 
@@ -4136,7 +4570,6 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     except Exception:
         pass
 
-
     # Usunięto generowanie plakatu SVG - zgodnie z życzeniem użytkownika
     plakat_svg = None
 
@@ -4158,9 +4591,11 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
             "Obrazek gry wygenerowany na podstawie pliku <strong>eryk_diagram_interaktywny.html</strong>.</p>"
             f'<img src="data:image/jpeg;base64,{image_b64}" alt="Mapa gry Edka" '
             'style="max-width:100%;height:auto;border-radius:14px;border:1px solid #ddd;" />'
-            '</div>'
+            "</div>"
         )
-        return html.replace('<div class="footer">', image_block + '<div class="footer">', 1)
+        return html.replace(
+            '<div class="footer">', image_block + '<div class="footer">', 1
+        )
 
     reply_html = build_html_reply(res_text)
     analiza_docx_list = []
@@ -4168,9 +4603,24 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     # Dociekliwy działa na podstawie body + opcjonalnych zalacznikow.
     # NIE wymaga zalacznikow — analizuje tresc emaila nadawcy.
     # Pomijamy tylko gdy app.py zaplanowal osobne wywolanie (skip_dociekliwy=True).
+    logger.info(
+        "[zwykly_dociekliwy_check] skip_dociekliwy=%s | Czy wykonać do_dociekliwy()?",
+        skip_dociekliwy,
+    )
+
     if not skip_dociekliwy:
+        logger.info(
+            "[zwykly_dociekliwy_EXECUTING] ✓ Uruchamiam build_dociekliwy_section()..."
+        )
         try:
-            analiza_res = build_dociekliwy_section(body, attachments or [], sender=sender_email, sender_name=sender_name)
+            analiza_res = build_dociekliwy_section(
+                body, attachments or [], sender=sender_email, sender_name=sender_name
+            )
+            logger.info(
+                "[zwykly_dociekliwy_SUCCESS] ✓ Dociekliwy zwrócił wynik: keys=%s",
+                list(analiza_res.keys()) if isinstance(analiza_res, dict) else "?",
+            )
+
             if isinstance(analiza_res, dict):
                 diagram_jpg_b64 = None
                 interactive_html_b64 = None
@@ -4181,66 +4631,95 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
                     content_type = doc.get("content_type", "text/html")
                     if content_type == "image/jpeg" and not diagram_jpg_b64:
                         diagram_jpg_b64 = doc["base64"]
+                        logger.info(
+                            "[zwykly_dociekliwy_PROCESSED] ✓ Przetworzony JPG diagram: %d bytes (base64)",
+                            len(diagram_jpg_b64),
+                        )
                     elif content_type == "text/html" and not interactive_html_b64:
                         interactive_html_b64 = doc["base64"]
+                        logger.info(
+                            "[zwykly_dociekliwy_PROCESSED] ✓ Przetworzony SVG HTML: %d bytes (base64)",
+                            len(interactive_html_b64),
+                        )
 
                 # Dolacz HTML z dociekliwego jako zalacznik
                 if interactive_html_b64:
-                    analiza_docx_list.append({
-                        "base64":       interactive_html_b64,
-                        "content_type": "text/html",
-                        "filename":     "eryk_diagram_interaktywny.html"
-                    })
+                    analiza_docx_list.append(
+                        {
+                            "base64": interactive_html_b64,
+                            "content_type": "text/html",
+                            "filename": "eryk_diagram_interaktywny.html",
+                        }
+                    )
+                    logger.info(
+                        "[zwykly_dociekliwy_ATTACHED] ✓ Dodano SVG diagram jako załącznik"
+                    )
 
                 # Wstaw obrazek JPG (diagram) inline do tresci maila
                 if diagram_jpg_b64:
                     reply_html = _build_html_reply_with_image(res_text, diagram_jpg_b64)
+                    logger.info(
+                        "[zwykly_dociekliwy_INLINE] ✓ Wstawiono JPG diagram inline do HTML"
+                    )
 
                 # Dolacz pierwsza odpowiedz tekstowa dociekliwego na koncu tresci maila
                 dociekliwy_reply = analiza_res.get("reply_html", "")
                 if dociekliwy_reply and dociekliwy_reply.strip():
+                    logger.info(
+                        "[zwykly_dociekliwy_REPLY] ✓ reply_html z dociekliwego: %d bytes",
+                        len(dociekliwy_reply),
+                    )
                     separator = (
                         '<hr style="border:none;border-top:2px solid #ccc;margin:32px 0;" />'
                         '<div style="background:#f5f5f5;border-left:4px solid #888;'
                         'padding:16px 20px;margin:0;font-size:14px;color:#333;">'
                         '<strong style="display:block;margin-bottom:8px;color:#555;">'
-                        u'\U0001f50d Dociekliwy:</strong>'
-                        + dociekliwy_reply +
-                        '</div>'
+                        "\U0001f50d Dociekliwy:</strong>" + dociekliwy_reply + "</div>"
                     )
                     if '<div class="footer">' in reply_html:
                         reply_html = reply_html.replace(
                             '<div class="footer">',
                             separator + '<div class="footer">',
-                            1
+                            1,
                         )
                     else:
                         reply_html = reply_html + separator
 
         except Exception as e:
+            logger.error(
+                "[zwykly_dociekliwy_ERROR] ❌ Błąd w build_dociekliwy_section(): %s",
+                str(e),
+                exc_info=True,
+            )
             logger.warning("[zwykly] dociekliwy failed: %s", e)
     else:
-        logger.info("[zwykly] Pomijam dociekliwy — app.py wywola go osobno")
+        logger.info(
+            "[zwykly_dociekliwy_SKIPPED] ⏭️  Pomijam dociekliwy — skip_dociekliwy=True (app.py oddzielnie go wywoła) | Brak sekcji 'analiza' w pipeline"
+        )
 
     # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
     # Uruchamiamy po KROK 2, żeby nie rywalizować z tryptyk/ankieta/horo/rpg/gra
     try:
         with app_obj.app_context():
             r_res = build_raport(
-                body, previous_body or "", res_text, nouns_dict,
-                sender_name, session_vars.get("USER_GENDER", "patient"),
-                test_mode=test_mode
+                body,
+                previous_body or "",
+                res_text,
+                nouns_dict,
+                sender_name,
+                session_vars.get("USER_GENDER", "patient"),
+                test_mode=test_mode,
             )
-        raport_pdf    = r_res.get("raport_pdf")
+        raport_pdf = r_res.get("raport_pdf")
         psych_photo_1 = r_res.get("psych_photo_1")
         psych_photo_2 = r_res.get("psych_photo_2")
-        log_psych     = r_res.get("log_psych")
+        log_psych = r_res.get("log_psych")
     except Exception as e:
         logger.error("[zwykly] Raport błąd: %s", e)
         log_psych = {"error": str(e)}
 
     # ── FINALIZACJA ───────────────────────────────────────────────────────────
-    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '_', sender_name)[:30] or "Pacjent"
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", sender_name)[:30] or "Pacjent"
 
     # Raport psychiatryczny (DOCX) dodaj do docx_list zeby smtp_wysylka go wyslal jako zalacznik
     if raport_pdf and isinstance(raport_pdf, dict) and raport_pdf.get("base64"):
@@ -4250,16 +4729,21 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
     flow_diagram_svg = None
     try:
         from core.logging_reporter import get_logger as _get_exec_logger
+
         _exec_log = _get_exec_logger()
         # Uzupełnij metadata loggera danymi z tej sesji
-        _exec_log.set_metadata("api_calls", [
-            e for e in _exec_log.entries if e.get("type") == "API_CALL"
-        ])
-        _exec_log.set_metadata("sections_completed", [
-            e["data"].get("section", "")
-            for e in _exec_log.entries
-            if e.get("type") == "SECTION_RESULT" and e.get("data", {}).get("success")
-        ])
+        _exec_log.set_metadata(
+            "api_calls", [e for e in _exec_log.entries if e.get("type") == "API_CALL"]
+        )
+        _exec_log.set_metadata(
+            "sections_completed",
+            [
+                e["data"].get("section", "")
+                for e in _exec_log.entries
+                if e.get("type") == "SECTION_RESULT"
+                and e.get("data", {}).get("success")
+            ],
+        )
         flow_diagram_svg = _build_flow_diagram_svg(_exec_log)
     except Exception as _svg_err:
         logger.warning("[zwykly] flow_diagram_svg błąd: %s", _svg_err)
@@ -4282,4 +4766,3 @@ def build_zwykly_section(body: str, previous_body: str = None, sender_email: str
         "provider": provider,
         "nouns_dict": nouns_dict,
     }
-
