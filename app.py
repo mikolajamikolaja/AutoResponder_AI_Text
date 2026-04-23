@@ -34,7 +34,14 @@ import threading
 import urllib.parse
 from datetime import datetime
 
-from flask import Flask, request, jsonify, current_app, send_from_directory
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    current_app,
+    send_from_directory,
+    make_response,
+)
 import requests as http_requests
 
 from drive_utils import (
@@ -71,6 +78,14 @@ def update_stats():
     """Aktualizuje globalne statystyki."""
     global total_emails_processed
     total_emails_processed += 1
+
+
+def no_cache_response(response):
+    """Ustawia nagłówki, aby przeglądarka i proxy nie cachowały strony statusu."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 def log_error(error_msg):
@@ -145,7 +160,8 @@ def health_check():
 
         # Jeśli klient żąda JSON (np. GAS), zwróć JSON
         if request.headers.get("Accept", "").find("application/json") != -1:
-            return jsonify(status_data), 200
+            response = make_response(jsonify(status_data), 200)
+            return no_cache_response(response)
 
         # W przeciwnym razie zwróć HTML z meta refresh
         html_response = f"""
@@ -233,7 +249,7 @@ def health_check():
                 <div class="config-section">
                     <h3>⚙️ Konfiguracja Systemu</h3>
                     <p><strong>Próg Pamięci:</strong> {status_data['config']['memory_threshold_mb']} MB</p>
-                    <p><strong>Aktywne Respondery:</strong></p>
+                    <p><strong>Włączone respondery:</strong></p>
                     <div class="config-list">
                         {"".join(f'<span class="config-tag">{responder}</span>' for responder in status_data["config"]["enabled_responders"])}
                     </div>
@@ -248,7 +264,9 @@ def health_check():
         </body>
         </html>
         """
-        return html_response, 200
+        response = make_response(html_response, 200)
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+        return no_cache_response(response)
 
     except Exception as e:
         log_error(str(e))
@@ -296,9 +314,11 @@ def system_status():
                 ],
             },
         }
-        return jsonify(status), 200
+        response = make_response(jsonify(status), 200)
+        return no_cache_response(response)
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+        response = make_response(jsonify({"status": "error", "message": str(e)}), 500)
+        return no_cache_response(response)
 
 
 # ── Favicon ──────────────────────────────────────────────────────────────────
@@ -306,7 +326,8 @@ def system_status():
 def favicon():
     """Zwraca favicon.ico z katalogu images."""
     try:
-        return send_from_directory("images", "favicon.ico", mimetype="image/x-icon")
+        image_dir = os.path.join(app.root_path, "images")
+        return send_from_directory(image_dir, "favicon.ico", mimetype="image/x-icon")
     except Exception as e:
         app.logger.warning(f"Favicon error: {e}")
         return "", 404
