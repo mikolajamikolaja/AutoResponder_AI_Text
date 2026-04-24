@@ -123,28 +123,39 @@ def health_check():
         uptime_str = f"{uptime_seconds // 3600}h {(uptime_seconds % 3600) // 60}m {uptime_seconds % 60}s"
 
         # Szczegółowe dane pamięci z psutil
+        # UWAGA: psutil.virtual_memory() widzi RAM hosta (np. 31 GB), nie limit kontenera Render.
+        # Używamy RENDER_MEMORY_LIMIT_MB (domyślnie 512) jako rzeczywisty limit kontenera.
         mem_extra = {}
         try:
             import psutil
 
             proc = psutil.Process()
             proc_mem = proc.memory_info()
-            sys_mem = psutil.virtual_memory()
+            rss_mb = round(proc_mem.rss / 1024 / 1024, 2)
+            vms_mb = round(proc_mem.vms / 1024 / 1024, 2)
+            num_threads = proc.num_threads()
+
+            # Limit kontenera — ustaw RENDER_MEMORY_LIMIT_MB w env jeśli masz inny plan
+            container_limit_mb = int(os.getenv("RENDER_MEMORY_LIMIT_MB", "512"))
+            sys_used_mb = rss_mb
+            sys_available_mb = round(max(container_limit_mb - rss_mb, 0), 2)
+            sys_percent = round(min(rss_mb / container_limit_mb * 100, 100), 1)
+
             mem_extra = {
-                "rss_mb": round(proc_mem.rss / 1024 / 1024, 2),
-                "vms_mb": round(proc_mem.vms / 1024 / 1024, 2),
-                "sys_total_mb": round(sys_mem.total / 1024 / 1024, 2),
-                "sys_available_mb": round(sys_mem.available / 1024 / 1024, 2),
-                "sys_used_mb": round(sys_mem.used / 1024 / 1024, 2),
-                "sys_percent": round(sys_mem.percent, 1),
-                "proc_percent": round(proc.memory_percent(), 2),
-                "num_threads": proc.num_threads(),
+                "rss_mb": rss_mb,
+                "vms_mb": vms_mb,
+                "sys_total_mb": container_limit_mb,
+                "sys_available_mb": sys_available_mb,
+                "sys_used_mb": sys_used_mb,
+                "sys_percent": sys_percent,
+                "proc_percent": sys_percent,  # to samo — RSS vs limit kontenera
+                "num_threads": num_threads,
             }
         except Exception:
             mem_extra = {
                 "rss_mb": round(mem_info.get("rss_mb", 0), 2),
                 "vms_mb": 0,
-                "sys_total_mb": 0,
+                "sys_total_mb": 512,
                 "sys_available_mb": 0,
                 "sys_used_mb": 0,
                 "sys_percent": round(mem_info.get("percent", 0), 1),
@@ -198,10 +209,11 @@ def health_check():
             response = make_response(jsonify(status_data), 200)
             return no_cache_response(response)
 
+        # Kolor paska — na bazie RSS vs limit kontenera (nie hosta)
         mem_color = "#28a745"
         if mem_extra["sys_percent"] > 80:
             mem_color = "#dc3545"
-        elif mem_extra["sys_percent"] > 60:
+        elif mem_extra["sys_percent"] > 50:
             mem_color = "#ffc107"
 
         def responder_rows(names, icon):
@@ -311,7 +323,7 @@ h1{{font-size:1.3em;margin-bottom:4px}}
 {error_html}
 
 <div class="footer">
-Ostatnia aktualizacja: {now_str} &nbsp;|&nbsp; <a href="/status">JSON API</a> &nbsp;|&nbsp; Auto-refresh co 30s
+Ostatnia aktualizacja: {now_str} &nbsp;|&nbsp; <a href="/debug">🔍 Debug pipeline</a> &nbsp;|&nbsp; <a href="/status">JSON API</a> &nbsp;|&nbsp; Auto-refresh co 30s
 </div>
 </div>
 </body>
@@ -391,6 +403,24 @@ import threading as _threading
 _pipeline_lock = _threading.Lock()
 _active_pipelines = 0
 
+# ── Stan ostatniego pipeline — do wyświetlenia na stronie statusu ──────────────
+_pipeline_state: dict = {
+    "message_id": None,
+    "sender": None,
+    "sender_name": None,
+    "subject": None,
+    "body": None,
+    "started_at": None,
+    "finished_at": None,
+    "status": "idle",          # idle | running | done | error
+    "sections_requested": [],
+    "sections": {},            # {section_key: {status, started, duration_sec, reply_html, error}}
+    "combined_reply_html": None,
+    "emails_sent": 0,
+    "history": [],             # ostatnie 10 pipeline'ów (skrócone)
+}
+_pipeline_state_lock = _threading.Lock()
+
 
 def _pipeline_start():
     global _active_pipelines
@@ -404,6 +434,91 @@ def _pipeline_done():
     with _pipeline_lock:
         _active_pipelines = max(0, _active_pipelines - 1)
     resource_manager.pipeline_end()
+
+
+def _state_pipeline_start(message_id, sender, sender_name, subject, body, sections):
+    """Inicjuje stan pipeline przed startem."""
+    with _pipeline_state_lock:
+        # Zapisz poprzedni pipeline do historii (max 10)
+        if _pipeline_state.get("status") in ("done", "error") and _pipeline_state.get("started_at"):
+            _pipeline_state["history"].insert(0, {
+                "started_at": _pipeline_state["started_at"],
+                "finished_at": _pipeline_state.get("finished_at"),
+                "sender": _pipeline_state.get("sender"),
+                "subject": _pipeline_state.get("subject"),
+                "sections": list(_pipeline_state.get("sections", {}).keys()),
+                "status": _pipeline_state.get("status"),
+                "emails_sent": _pipeline_state.get("emails_sent", 0),
+            })
+            _pipeline_state["history"] = _pipeline_state["history"][:10]
+
+        _pipeline_state.update({
+            "message_id": message_id,
+            "sender": sender,
+            "sender_name": sender_name,
+            "subject": subject,
+            "body": body,
+            "started_at": datetime.now().isoformat(),
+            "finished_at": None,
+            "status": "running",
+            "sections_requested": list(sections),
+            "sections": {},
+            "combined_reply_html": None,
+            "emails_sent": 0,
+        })
+
+
+def _state_section_start(section_key):
+    with _pipeline_state_lock:
+        _pipeline_state["sections"][section_key] = {
+            "status": "running",
+            "started": datetime.now().isoformat(),
+            "duration_sec": None,
+            "reply_html": None,
+            "reply_preview": None,
+            "error": None,
+            "attachments": [],
+        }
+
+
+def _state_section_done(section_key, result, duration_sec):
+    with _pipeline_state_lock:
+        s = _pipeline_state["sections"].setdefault(section_key, {})
+        s["status"] = "done"
+        s["duration_sec"] = round(duration_sec, 2)
+        if isinstance(result, dict):
+            html = result.get("reply_html", "") or ""
+            s["reply_html"] = html
+            s["reply_preview"] = html[:300] + ("..." if len(html) > 300 else "")
+            att_fields = ["pdf", "image", "image2", "emoticon", "cv_pdf", "raport_pdf",
+                          "gra_html", "plakat_svg", "horoskop_pdf", "karta_rpg_pdf",
+                          "ankieta_pdf", "ankieta_html", "debug_txt"]
+            s["attachments"] = [f for f in att_fields if result.get(f)]
+            lists = ["triptych", "images", "videos", "docs", "docx_list"]
+            for lf in lists:
+                if result.get(lf):
+                    s["attachments"].append(f"{lf}({len(result[lf])})")
+
+
+def _state_section_error(section_key, error_msg):
+    with _pipeline_state_lock:
+        s = _pipeline_state["sections"].setdefault(section_key, {})
+        s["status"] = "error"
+        s["error"] = str(error_msg)[:500]
+
+
+def _state_section_empty(section_key):
+    with _pipeline_state_lock:
+        s = _pipeline_state["sections"].setdefault(section_key, {})
+        s["status"] = "empty"
+
+
+def _state_pipeline_done(combined_html, emails_sent):
+    with _pipeline_state_lock:
+        _pipeline_state["finished_at"] = datetime.now().isoformat()
+        _pipeline_state["status"] = "done"
+        _pipeline_state["combined_reply_html"] = combined_html
+        _pipeline_state["emails_sent"] = emails_sent
 
 
 # OPTYMALIZACJA: warmup HF usunięty ze startu serwera.
@@ -1609,6 +1724,7 @@ def webhook():
 
     # ── Odpal pipeline w tle — GAS dostaje 200 w < 1s ────────────────────────
     _pipeline_start()
+    _state_pipeline_start(message_id, sender, sender_name, subject, body, build_section_order(requested_sections))
 
     def _pipeline_wrapper():
         try:
@@ -1629,6 +1745,11 @@ def webhook():
                 wyslij_odpowiedz,
                 zbierz_zalaczniki_z_response,
                 _get_valid_access_token,
+                on_section_start=_state_section_start,
+                on_section_done=_state_section_done,
+                on_section_error=_state_section_error,
+                on_section_empty=_state_section_empty,
+                on_pipeline_done=_state_pipeline_done,
             )
         finally:
             _pipeline_done()
@@ -1654,6 +1775,204 @@ def webhook():
         ),
         200,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEBUG — szczegółowy raport ostatniego pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.route("/debug", methods=["GET"])
+def debug_view():
+    """Szczegółowy raport ostatniego pipeline — treści, sekcje, odpowiedzi AI."""
+    import html as html_lib
+
+    def esc(s):
+        return html_lib.escape(str(s or ""))
+
+    with _pipeline_state_lock:
+        ps = dict(_pipeline_state)
+        sections = dict(ps.get("sections", {}))
+        history = list(ps.get("history", []))
+
+    status_color = {"idle": "#888", "running": "#007bff", "done": "#28a745", "error": "#dc3545"}.get(ps["status"], "#888")
+    status_icon = {"idle": "💤", "running": "⚙️", "done": "✅", "error": "❌"}.get(ps["status"], "?")
+
+    # ── sekcje HTML ────────────────────────────────────────────────────────────
+    def section_card(key, s):
+        st = s.get("status", "?")
+        col = {"running": "#007bff", "done": "#28a745", "error": "#dc3545", "empty": "#888"}.get(st, "#888")
+        icon = {"running": "⏳", "done": "✅", "error": "❌", "empty": "⬜"}.get(st, "?")
+        dur = f"{s['duration_sec']}s" if s.get("duration_sec") is not None else "—"
+        att = ", ".join(s.get("attachments", [])) or "brak"
+
+        reply_section = ""
+        if s.get("reply_html"):
+            uid = f"reply_{key}"
+            reply_section = f"""
+<div style="margin-top:10px">
+  <button onclick="toggleDiv('{uid}')" style="background:#f0f0f0;border:1px solid #ddd;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px">
+    📄 Pokaż reply_html ({len(s['reply_html'])} znaków)
+  </button>
+  <div id="{uid}" style="display:none;margin-top:8px">
+    <div style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:4px;padding:10px;font-size:12px;font-family:monospace;white-space:pre-wrap;max-height:400px;overflow-y:auto">{esc(s['reply_html'])}</div>
+    <div style="margin-top:8px;border:1px solid #dee2e6;border-radius:4px;padding:10px;background:white">
+      <strong style="font-size:11px;color:#888">PODGLĄD RENDEROWANEGO HTML:</strong><br>
+      <iframe srcdoc="{html_lib.escape(s['reply_html'])}" style="width:100%;height:300px;border:none;margin-top:6px"></iframe>
+    </div>
+  </div>
+</div>"""
+
+        err_section = ""
+        if s.get("error"):
+            err_section = f'<div style="margin-top:8px;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:8px;font-size:12px;font-family:monospace">{esc(s["error"])}</div>'
+
+        return f"""
+<div style="background:white;border-radius:8px;padding:14px 18px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,0.07);border-left:4px solid {col}">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <span style="font-weight:700;font-size:15px">{icon} {key}</span>
+    <span style="font-family:monospace;font-size:12px;color:{col};font-weight:600">{st.upper()} &nbsp;·&nbsp; {dur}</span>
+  </div>
+  <div style="font-size:12px;color:#666;margin-top:4px">Załączniki: <code>{att}</code></div>
+  {reply_section}{err_section}
+</div>"""
+
+    sections_html = "".join(section_card(k, v) for k, v in sections.items()) or '<div style="color:#999;font-style:italic">Brak danych sekcji</div>'
+
+    # ── treść emaila wejściowego ───────────────────────────────────────────────
+    body_raw = ps.get("body") or ""
+    body_section = ""
+    if body_raw:
+        body_section = f"""
+<div style="background:white;border-radius:8px;padding:14px 18px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.07)">
+  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:8px;font-weight:700">📨 Treść wejściowego emaila</div>
+  <div style="font-family:monospace;font-size:12px;background:#f8f9fa;border-radius:4px;padding:10px;white-space:pre-wrap;max-height:300px;overflow-y:auto">{esc(body_raw)}</div>
+</div>"""
+
+    # ── połączona odpowiedź ───────────────────────────────────────────────────
+    combined_html_section = ""
+    combined = ps.get("combined_reply_html") or ""
+    if combined:
+        combined_html_section = f"""
+<div style="background:white;border-radius:8px;padding:14px 18px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.07)">
+  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:8px;font-weight:700">📤 Wysłana odpowiedź (combined reply_html)</div>
+  <button onclick="toggleDiv('combined_raw')" style="background:#f0f0f0;border:1px solid #ddd;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px;margin-bottom:8px">
+    📄 Surowy HTML ({len(combined)} znaków)
+  </button>
+  <div id="combined_raw" style="display:none;font-family:monospace;font-size:12px;background:#f8f9fa;border-radius:4px;padding:10px;white-space:pre-wrap;max-height:300px;overflow-y:auto;margin-bottom:8px">{esc(combined)}</div>
+  <div style="font-size:11px;color:#888;margin-bottom:4px">PODGLĄD:</div>
+  <iframe srcdoc="{html_lib.escape(combined)}" style="width:100%;height:400px;border:1px solid #dee2e6;border-radius:4px"></iframe>
+</div>"""
+
+    # ── historia ──────────────────────────────────────────────────────────────
+    history_rows = ""
+    for h in history:
+        hcol = {"done": "#28a745", "error": "#dc3545"}.get(h.get("status"), "#888")
+        history_rows += f"""<tr>
+  <td style="padding:6px 8px;font-size:12px;font-family:monospace">{esc(h.get('started_at','')[:19])}</td>
+  <td style="padding:6px 8px;font-size:12px">{esc(h.get('sender',''))}</td>
+  <td style="padding:6px 8px;font-size:12px">{esc(h.get('subject',''))}</td>
+  <td style="padding:6px 8px;font-size:12px">{esc(', '.join(h.get('sections',[])))}</td>
+  <td style="padding:6px 8px;font-size:12px;color:{hcol};font-weight:600">{esc(h.get('status',''))}</td>
+  <td style="padding:6px 8px;font-size:12px">{h.get('emails_sent',0)}</td>
+</tr>"""
+
+    history_section = ""
+    if history_rows:
+        history_section = f"""
+<div style="background:white;border-radius:8px;padding:14px 18px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.07)">
+  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px;font-weight:700">🕓 Historia ostatnich pipeline'ów</div>
+  <div style="overflow-x:auto">
+  <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="background:#f8f9fa">
+      <th style="padding:6px 8px;text-align:left;font-weight:600">Start</th>
+      <th style="padding:6px 8px;text-align:left;font-weight:600">Nadawca</th>
+      <th style="padding:6px 8px;text-align:left;font-weight:600">Temat</th>
+      <th style="padding:6px 8px;text-align:left;font-weight:600">Sekcje</th>
+      <th style="padding:6px 8px;text-align:left;font-weight:600">Status</th>
+      <th style="padding:6px 8px;text-align:left;font-weight:600">Emaile</th>
+    </tr></thead>
+    <tbody>{history_rows}</tbody>
+  </table>
+  </div>
+</div>"""
+
+    # ── timing ────────────────────────────────────────────────────────────────
+    timing_info = ""
+    if ps.get("started_at"):
+        fin = ps.get("finished_at") or datetime.now().isoformat()
+        try:
+            from datetime import timezone
+            t_start = datetime.fromisoformat(ps["started_at"])
+            t_fin = datetime.fromisoformat(fin)
+            elapsed = (t_fin - t_start).total_seconds()
+            timing_info = f'&nbsp;·&nbsp; Czas: <strong>{elapsed:.1f}s</strong>'
+        except Exception:
+            pass
+
+    page = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta http-equiv="refresh" content="5">
+<title>Tyler v6 — Debug</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:'Segoe UI',sans-serif;background:#f0f2f5;padding:16px;color:#222}}
+.wrap{{max-width:900px;margin:0 auto}}
+h1{{font-size:1.2em;margin-bottom:4px}}
+.badge{{display:inline-block;border-radius:10px;padding:2px 12px;font-size:13px;font-weight:bold;margin-bottom:14px;background:{status_color};color:white}}
+</style>
+<script>
+function toggleDiv(id){{var d=document.getElementById(id);d.style.display=d.style.display==='none'?'block':'none';}}
+</script>
+</head>
+<body>
+<div class="wrap">
+<div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+  <div>
+    <h1>🔍 Tyler v6 — Debug Pipeline</h1>
+    <span class="badge">{status_icon} {ps['status'].upper()}</span>
+    {timing_info}
+  </div>
+  <div style="font-size:12px;color:#999">Auto-refresh co 5s &nbsp;|&nbsp; <a href="/">← Status</a></div>
+</div>
+
+<div style="background:white;border-radius:8px;padding:14px 18px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.07)">
+  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px;font-weight:700">📋 Aktualny pipeline</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:13px">
+    <div><span style="color:#555">message_id:</span> <code>{esc(ps.get('message_id') or '—')}</code></div>
+    <div><span style="color:#555">Emaile wysłane:</span> <strong>{ps.get('emails_sent', 0)}</strong></div>
+    <div><span style="color:#555">Nadawca:</span> <strong>{esc(ps.get('sender') or '—')}</strong></div>
+    <div><span style="color:#555">Imię:</span> {esc(ps.get('sender_name') or '—')}</div>
+    <div style="grid-column:1/-1"><span style="color:#555">Temat:</span> <strong>{esc(ps.get('subject') or '—')}</strong></div>
+    <div><span style="color:#555">Start:</span> <code>{esc((ps.get('started_at') or '—')[:19])}</code></div>
+    <div><span style="color:#555">Koniec:</span> <code>{esc((ps.get('finished_at') or '—')[:19])}</code></div>
+    <div style="grid-column:1/-1"><span style="color:#555">Sekcje zlecone:</span> <code>{esc(', '.join(ps.get('sections_requested', [])) or '—')}</code></div>
+  </div>
+</div>
+
+{body_section}
+
+<div style="background:white;border-radius:8px;padding:14px 18px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.07)">
+  <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px;font-weight:700">⚙️ Sekcje pipeline</div>
+  {sections_html}
+</div>
+
+{combined_html_section}
+{history_section}
+
+<div style="text-align:center;font-size:12px;color:#bbb;margin-top:14px">
+  Tyler v6 Debug &nbsp;|&nbsp; <a href="/" style="color:#999">Status</a> &nbsp;|&nbsp; <a href="/status" style="color:#999">JSON</a> &nbsp;|&nbsp; Auto-refresh co 5s
+</div>
+</div>
+</body>
+</html>"""
+
+    response = make_response(page, 200)
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return no_cache_response(response)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -136,6 +136,11 @@ def run_pipeline_async(
     wyslij_fn,
     zbierz_zalaczniki_fn,
     get_token_fn,
+    on_section_start=None,
+    on_section_done=None,
+    on_section_error=None,
+    on_section_empty=None,
+    on_pipeline_done=None,
 ):
     """
     Wykonuje sekcje sekwencyjnie w tle (daemon thread).
@@ -159,14 +164,25 @@ def run_pipeline_async(
             result = None
             try:
                 flask_app.logger.info("[async] START: %s", section_key)
+                if on_section_start:
+                    on_section_start(section_key)
+                import time as _time
+                _t0 = _time.time()
                 result = fn()
+                _duration = _time.time() - _t0
                 flask_app.logger.info("[async] OK:    %s", section_key)
                 logger.log_section_result(section_key, success=True)
+                if on_section_done and result:
+                    on_section_done(section_key, result, _duration)
+                elif on_section_empty:
+                    on_section_empty(section_key)
             except Exception as e:
                 flask_app.logger.error(
                     "[async] BŁĄD '%s': %s\n%s", section_key, e, traceback.format_exc()
                 )
                 logger.log_section_result(section_key, success=False)
+                if on_section_error:
+                    on_section_error(section_key, e)
                 if history_sheet_id and message_id:
                     try:
                         log_wyslano(
@@ -245,10 +261,11 @@ def run_pipeline_async(
                     flask_app.logger.error("[async] Błąd smierc sheet: %s", e)
 
         # ── Wyślij JEDEN połączony email ze wszystkimi sekcjami ───────────────
+        emails_sent = 0
         if combined_results:
             try:
                 _token_refresh(get_token_fn, flask_app, "combined")
-                _send_combined_email(
+                success = _send_combined_email(
                     combined_results,
                     sender,
                     sender_name,
@@ -258,8 +275,13 @@ def run_pipeline_async(
                     flask_app,
                     logger,
                 )
+                if success:
+                    emails_sent = 1
             except Exception as e:
                 flask_app.logger.error("[async] Błąd wysyłki połączonej: %s", e)
+
+        if on_pipeline_done:
+            on_pipeline_done(combined_results.get("reply_html", ""), emails_sent)
 
             # ── Zwolnij pamięć natychmiast ──────────────────────────────────────
             if result is not None:
