@@ -891,24 +891,167 @@ def webhook():
 
 @app.route("/debug", methods=["GET"])
 def debug_pipeline():
-    """Zwraca szczegółowy stan ostatniego pipeline."""
+    """Zwraca szczegółowy stan ostatniego pipeline jako czytelny HTML."""
+    # Jeśli klient chce JSON (np. curl z Accept: application/json) — zwróć JSON z ensure_ascii=False
+    if "application/json" in request.headers.get("Accept", ""):
+        with _pipeline_state_lock:
+            state = dict(_pipeline_state)
+        resp_body = json.dumps(state, ensure_ascii=False, indent=2, default=str)
+        return app.response_class(resp_body, mimetype="application/json; charset=utf-8"), 200
+
     with _pipeline_state_lock:
         state = dict(_pipeline_state)
-        # Usuń duże pola HTML z odpowiedzi JSON
-        if "combined_reply_html" in state and state["combined_reply_html"]:
-            state["combined_reply_html"] = (
-                state["combined_reply_html"][:500] + "..."
-                if len(state["combined_reply_html"]) > 500
-                else state["combined_reply_html"]
+
+    def _esc(v):
+        if v is None:
+            return '<span style="color:#aaa">—</span>'
+        return html.escape(str(v))
+
+    def _status_badge(s):
+        colors = {
+            "done": "#28a745", "running": "#007bff",
+            "error": "#dc3545", "idle": "#6c757d", "empty": "#ffc107",
+        }
+        c = colors.get(str(s), "#999")
+        return f'<span style="background:{c};color:#fff;border-radius:6px;padding:2px 10px;font-size:12px;font-weight:bold">{html.escape(str(s))}</span>'
+
+    def _row(label, value_html):
+        return (
+            f'<div style="display:flex;justify-content:space-between;padding:6px 0;'
+            f'border-bottom:1px solid #f0f0f0;font-size:14px;">'
+            f'<span style="color:#555">{label}</span>'
+            f'<span style="font-weight:600;font-family:monospace;max-width:65%;word-break:break-all;text-align:right">{value_html}</span>'
+            f'</div>'
+        )
+
+    def _card(title, content_html, icon=""):
+        return (
+            f'<div style="background:#fff;border-radius:10px;padding:16px 20px;'
+            f'margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.08);">'
+            f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;'
+            f'color:#888;margin-bottom:10px;font-weight:700">{icon} {title}</div>'
+            f'{content_html}</div>'
+        )
+
+    def _preblock(text, max_chars=600):
+        if not text:
+            return '<span style="color:#aaa">—</span>'
+        s = str(text)
+        truncated = ""
+        if len(s) > max_chars:
+            s = s[:max_chars]
+            truncated = f'<div style="color:#aaa;font-size:11px;margin-top:4px">… (skrócono do {max_chars} znaków)</div>'
+        # Strip HTML tags for body preview
+        clean = re.sub(r'<[^>]+>', ' ', s)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        return (
+            f'<pre style="background:#f8f8f8;border-radius:6px;padding:10px;'
+            f'font-size:12px;white-space:pre-wrap;word-break:break-word;'
+            f'max-height:200px;overflow-y:auto;margin:6px 0 0 0">{html.escape(clean)}</pre>'
+            + truncated
+        )
+
+    # ── Główna karta: status pipeline ────────────────────────────────────────
+    status_val = state.get("status", "idle")
+    main_rows = (
+        _row("Status", _status_badge(status_val))
+        + _row("Message ID", _esc(state.get("message_id")))
+        + _row("Nadawca", _esc(state.get("sender")))
+        + _row("Imię nadawcy", _esc(state.get("sender_name")))
+        + _row("Temat", _esc(state.get("subject")))
+        + _row("Sekcje", _esc(", ".join(state.get("sections_requested", [])) or "—"))
+        + _row("Emaile wysłane", _esc(state.get("emails_sent")))
+        + _row("Start", _esc(state.get("started_at")))
+        + _row("Koniec", _esc(state.get("finished_at")))
+    )
+    main_card = _card("Stan pipeline", main_rows, "📋")
+
+    # ── Treść wiadomości wejściowej ───────────────────────────────────────────
+    body_card = _card("Treść wiadomości (body)", _preblock(state.get("body"), 800), "📨")
+
+    # ── Sekcje ────────────────────────────────────────────────────────────────
+    sections_html = ""
+    for sec_name, sv in state.get("sections", {}).items():
+        if not isinstance(sv, dict):
+            continue
+        sec_rows = (
+            _row("Status", _status_badge(sv.get("status", "?")))
+            + _row("Czas", f'{sv.get("duration_sec", "?")} s' if sv.get("duration_sec") is not None else "—")
+            + _row("Start", _esc(sv.get("started")))
+            + _row("Błąd", _esc(sv.get("error")) if sv.get("error") else '<span style="color:#28a745">brak</span>')
+        )
+        atts = sv.get("attachments", [])
+        if atts:
+            sec_rows += _row("Załączniki", _esc(", ".join(str(a) for a in atts)))
+
+        reply = sv.get("reply_html") or sv.get("reply_preview") or ""
+        if reply:
+            sec_rows += (
+                '<div style="margin-top:8px;font-size:12px;color:#888;font-weight:700">Podgląd odpowiedzi:</div>'
+                + _preblock(reply, 600)
             )
-        for sk, sv in state.get("sections", {}).items():
-            if "reply_html" in sv and sv["reply_html"]:
-                sv["reply_html"] = (
-                    sv["reply_html"][:300] + "..."
-                    if len(sv["reply_html"]) > 300
-                    else sv["reply_html"]
-                )
-        return jsonify(state), 200
+
+        sections_html += _card(f"Sekcja: {sec_name}", sec_rows, "🔧")
+
+    # ── Podgląd combined_reply_html ───────────────────────────────────────────
+    combined = state.get("combined_reply_html") or ""
+    combined_card = _card("Połączona odpowiedź (combined_reply_html)", _preblock(combined, 800), "📤")
+
+    # ── Historia ──────────────────────────────────────────────────────────────
+    history_rows = ""
+    for h in state.get("history", [])[:10]:
+        history_rows += (
+            f'<div style="padding:6px 0;border-bottom:1px solid #f4f4f4;font-size:13px;">'
+            f'<strong>{html.escape(str(h.get("sender","??")))}</strong> — '
+            f'{html.escape(str(h.get("subject","")))} '
+            f'[{_status_badge(h.get("status","?"))}] '
+            f'<span style="color:#aaa;font-size:11px">{html.escape(str(h.get("started_at",""))[:19])}</span>'
+            f'</div>'
+        )
+    if not history_rows:
+        history_rows = '<div style="color:#aaa;font-style:italic;padding:6px 0">Brak historii</div>'
+    history_card = _card("Historia (ostatnie pipeline'y)", history_rows, "🕓")
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    full_html = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="15">
+<title>Debug Pipeline — Tyler v6</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:'Segoe UI',sans-serif;background:#f0f2f5;padding:16px;color:#222}}
+.wrap{{max-width:760px;margin:0 auto}}
+h1{{font-size:1.25em;margin-bottom:4px}}
+.footer{{text-align:center;font-size:12px;color:#bbb;margin-top:14px}}
+.footer a{{color:#999}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div style="margin-bottom:14px">
+  <h1>🔍 Debug Pipeline — Tyler v6</h1>
+  <div style="font-size:12px;color:#888">Auto-refresh co 15s &nbsp;|&nbsp; {now_str}</div>
+</div>
+{main_card}
+{body_card}
+{sections_html}
+{combined_card}
+{history_card}
+<div class="footer">
+  <a href="/">← Wróć do statusu</a> &nbsp;|&nbsp;
+  <a href="/debug?json=1" onclick="window.location='/debug';this.setAttribute('href','/debug');return false;">HTML view</a> &nbsp;|&nbsp;
+  <a href="/status">JSON API</a>
+</div>
+</div>
+</body>
+</html>"""
+
+    resp = make_response(full_html, 200)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    return no_cache_response(resp)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
