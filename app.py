@@ -709,23 +709,28 @@ def webhook():
         # ── Budowanie planu zadań (Pipeline) ──────────────────────────────────
         # build_sections() przyjmuje słownik flag — mapujemy pola z webhooka
         pipeline_data = {
+            # ── Keywords (camelCase z GAS + snake_case fallback) ──────────────
             "contains_keyword":               data.get("containsKeyword",  False) or data.get("contains_keyword",  False),
             "contains_keyword1":              data.get("containsKeyword1", False) or data.get("contains_keyword1", False),
             "contains_keyword2":              data.get("containsKeyword2", False) or data.get("contains_keyword2", False),
             "contains_keyword3":              data.get("containsKeyword3", False) or data.get("contains_keyword3", False),
             "contains_keyword4":              data.get("containsKeyword4", False) or data.get("contains_keyword4", False),
             "contains_keyword_joker":         data.get("containsJoker",    False) or data.get("contains_keyword_joker", False),
-            "contains_keyword_smierc":        data.get("contains_keyword_smierc", False),
-            "contains_keyword_generator_pdf": data.get("contains_keyword_generator_pdf", False),
+            "contains_keyword_smierc":        data.get("containsKeywordSmierc", False) or data.get("contains_keyword_smierc", False),
+            "contains_keyword_generator_pdf": data.get("containsKeywordGeneratorPdf", False) or data.get("contains_keyword_generator_pdf", False),
+            "contains_flaga_test":            data.get("containsFlagaTest", False) or data.get("contains_flaga_test", False),
+            # ── Respondery (jawne flagi wants_*) ─────────────────────────────
+            "wants_zwykly":                   data.get("zwykly",           False) or data.get("wants_zwykly", False),
             "wants_smierc":                   data.get("isSmierc",         False) or data.get("wants_smierc", False),
             "wants_scrabble":                 data.get("wants_scrabble",   False),
             "wants_analiza":                  data.get("wants_analiza",    False),
             "wants_emocje":                   data.get("wants_emocje",     False),
-            "wants_generator_pdf":            data.get("wants_generator_pdf", False) or data.get("contains_keyword_generator_pdf", False),
+            "wants_generator_pdf":            data.get("wants_generator_pdf", False) or data.get("containsKeywordGeneratorPdf", False) or data.get("contains_keyword_generator_pdf", False),
             "wants_biznes":                   data.get("isBiz",            False) or data.get("wants_biznes", False),
+            # ── Kontekst historii ─────────────────────────────────────────────
             "previous_body":                  data.get("previous_body",    ""),
             "in_history_status":              "tak" if (data.get("isAllowed") or data.get("isKnownSender")) else "",
-            "in_requiem_status":              "tak" if data.get("isSmierc") else "",
+            "in_requiem_status":              "tak" if (data.get("isSmierc") or data.get("wants_smierc")) else "",
         }
         section_names = pipeline_builder.build_sections(pipeline_data)
 
