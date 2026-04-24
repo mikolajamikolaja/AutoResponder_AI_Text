@@ -170,14 +170,16 @@ class PipelineBuilder:
             requested.add("nawiazanie")
 
         # Warunki specjalne
-        if data.get("in_history_status") == "tak" and not requested:
-            # Znany użytkownik bez keywords - zwykly
+        # Priorytet: jawna flaga wants_zwykly z GAS (np. zwykly=true w payloadzie)
+        if data.get("wants_zwykly") and self.manager.is_responder_enabled("zwykly"):
+            requested.add("zwykly")
+        elif data.get("in_history_status") == "tak" and not requested:
+            # Fallback: znany użytkownik bez żadnych innych sekcji i bez jawnej flagi
             if self.manager.is_responder_enabled("zwykly"):
                 requested.add("zwykly")
 
         if data.get("in_requiem_status") == "tak":
-            # Na liście śmierci - smierc zamiast zwykly
-            requested.discard("zwykly")
+            # Na liście śmierci - smierc DODATKOWO (nie usuwa zwykly - GAS decyduje flagami)
             if self.manager.is_responder_enabled("smierc"):
                 requested.add("smierc")
 
