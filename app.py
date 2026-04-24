@@ -707,35 +707,27 @@ def webhook():
             return jsonify({"accepted": False, "error": "Resource limit"}), 503
 
         # ── Budowanie planu zadań (Pipeline) ──────────────────────────────────
-        tasks = pipeline_builder.build_pipeline(
-            sender=sender,
-            sender_name=sender_name,
-            subject=subject,
-            body=body,
-            previous_body=data.get("previous_body", ""),
-            previous_subject=data.get("previous_subject", ""),
-            isBiz=data.get("isBiz", False),
-            isAllowed=data.get("isAllowed", False),
-            isKnownSender=data.get("isKnownSender", False),
-            containsKeyword=data.get("containsKeyword", False),
-            containsKeyword1=data.get("containsKeyword1", False),
-            containsKeyword2=data.get("containsKeyword2", False),
-            containsKeyword3=data.get("containsKeyword3", False),
-            containsKeyword4=data.get("containsKeyword4", False),
-            containsFlagaTest=data.get("contains_flaga_test", False),
-            containsKeywordGeneratorPdf=data.get(
-                "contains_keyword_generator_pdf", False
-            ),
-            containsKeywordSmierc=data.get("contains_keyword_smierc", False),
-            containsJoker=data.get("contains_keyword_joker", False),
-            isSmierc=data.get("isSmierc", False),
-            disableFlux=data.get("disable_flux", False),
-            smircData=data.get("smircData", None),
-            attachments=data.get("attachments", []),
-            thread_id=data.get("thread_id", None),
-            retry_responders=data.get("retry_responders", []),
-            attempt_count=data.get("attempt_count", 1),
-        )
+        # build_sections() przyjmuje słownik flag — mapujemy pola z webhooka
+        pipeline_data = {
+            "contains_keyword":               data.get("containsKeyword",  False) or data.get("contains_keyword",  False),
+            "contains_keyword1":              data.get("containsKeyword1", False) or data.get("contains_keyword1", False),
+            "contains_keyword2":              data.get("containsKeyword2", False) or data.get("contains_keyword2", False),
+            "contains_keyword3":              data.get("containsKeyword3", False) or data.get("contains_keyword3", False),
+            "contains_keyword4":              data.get("containsKeyword4", False) or data.get("contains_keyword4", False),
+            "contains_keyword_joker":         data.get("containsJoker",    False) or data.get("contains_keyword_joker", False),
+            "contains_keyword_smierc":        data.get("contains_keyword_smierc", False),
+            "contains_keyword_generator_pdf": data.get("contains_keyword_generator_pdf", False),
+            "wants_smierc":                   data.get("isSmierc",         False) or data.get("wants_smierc", False),
+            "wants_scrabble":                 data.get("wants_scrabble",   False),
+            "wants_analiza":                  data.get("wants_analiza",    False),
+            "wants_emocje":                   data.get("wants_emocje",     False),
+            "wants_generator_pdf":            data.get("wants_generator_pdf", False) or data.get("contains_keyword_generator_pdf", False),
+            "wants_biznes":                   data.get("isBiz",            False) or data.get("wants_biznes", False),
+            "previous_body":                  data.get("previous_body",    ""),
+            "in_history_status":              "tak" if (data.get("isAllowed") or data.get("isKnownSender")) else "",
+            "in_requiem_status":              "tak" if data.get("isSmierc") else "",
+        }
+        tasks = pipeline_builder.build_sections(pipeline_data)
 
         if not tasks:
             app.logger.info("[webhook] Brak zadań do wykonania dla tego emaila.")

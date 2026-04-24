@@ -1213,7 +1213,20 @@ function __AAA_processEmails() {
     var nameMatch  = fromRaw.match(/^"?([^"<]+)"?\s*</);
     if (nameMatch) senderName = nameMatch[1].trim();
     var subject    = msg.getSubject();
-    var plainBody  = _stripQuotedText(msg.getPlainBody());
+
+    // [FIX v13] Pobieranie treści — priorytet Plain Text, fallback do HTML
+    // Rozwiązuje błąd "Pusty body emaila" dla maili HTML-only (np. z Gmaila mobilnego)
+    var rawPlain = msg.getPlainBody() || "";
+    if (!rawPlain.trim()) {
+      // Plain Text pusty — próbujemy wyciągnąć tekst z HTML body
+      var rawHtml = msg.getBody() || "";
+      rawPlain = extractPlainTextFromHtml(rawHtml);
+    }
+    if (!rawPlain.trim()) {
+      // Ostateczny bezpiecznik — mail zawiera wyłącznie grafikę lub załączniki
+      rawPlain = "(Wiadomość zawiera tylko grafikę lub załączniki)";
+    }
+    var plainBody  = _stripQuotedText(rawPlain);
     var searchText = plainBody + " " + subject;
 
     if (_isAlreadyProcessed(msgId)) {
@@ -1788,6 +1801,31 @@ function _checkUnprocessedMessages(webhookUrl) {
       continue;
     }
 
+    // [FIX v13] Próba odtworzenia body z Gmaila przed retrym.
+    // Jeśli body jest puste — email był pusty i słusznie odrzucony przez backend.
+    // Nie ponawiamy — oznaczamy jako GAS_FALLBACK i odblokowujemy kolejkę.
+    var retryBody = "";
+    try {
+      var retryMsg = GmailApp.getMessageById(item.message_id);
+      if (retryMsg) {
+        var retryRawPlain = retryMsg.getPlainBody() || "";
+        if (!retryRawPlain.trim()) {
+          var retryRawHtml = retryMsg.getBody() || "";
+          retryRawPlain = extractPlainTextFromHtml(retryRawHtml);
+        }
+        retryBody = retryRawPlain.trim();
+      }
+    } catch(gmailErr) {
+      console.warn("[check] Nie można pobrać wiadomości z Gmaila: " + gmailErr.message);
+    }
+
+    if (!retryBody) {
+      console.warn("[check] " + item.message_id + " — body puste, email słusznie odrzucony przez backend. Oznaczam jako GAS_FALLBACK bez retryu.");
+      _markHandledInSheet(sheetId, item.message_id);
+      try { props.deleteProperty(retryCountKey); } catch(e2) {}
+      continue;
+    }
+
     console.log("[check] Retry dla: " + item.sender + " msg_id=" + item.message_id +
                 " temat=\"" + item.subject + "\"" +
                 " (próba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG + ")");
@@ -1798,7 +1836,7 @@ function _checkUnprocessedMessages(webhookUrl) {
         message_id:       item.message_id,
         sender:           item.sender,
         subject:          item.subject || "",
-        body:             "",
+        body:             retryBody,
         is_retry:         true,
         retry_responders: [],
         attempt_count:    1
