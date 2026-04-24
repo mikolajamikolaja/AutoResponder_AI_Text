@@ -788,7 +788,7 @@ def webhook():
             elif name == "nawiazanie":
                 def fn():
                     from responders.nawiazanie import build_nawiazanie_section
-                    return build_nawiazanie_section(body=_body, previous_body=_prev_body, sender_email=_sender, data=_data)
+                    return build_nawiazanie_section(body=_body, previous_body=_prev_body, previous_subject=_data.get("previous_subject"), sender=_sender, sender_name=_data.get("sender_name", ""))
                 return fn
             elif name == "analiza":
                 def fn():
