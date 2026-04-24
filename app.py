@@ -828,32 +828,43 @@ def webhook():
         )
         _pipeline_start()
 
+        _pipeline_kwargs = {
+            "flask_app": app,
+            "data": data,
+            "message_id": message_id,
+            "tasks": tasks,
+            "sender": sender,
+            "sender_name": sender_name,
+            "previous_subject": data.get("previous_subject", ""),
+            "drive_folder_id": drive_folder_id,
+            "history_sheet_id": history_sheet_id,
+            "smierc_sheet_id": smierc_sheet_id,
+            "save_to_drive": save_to_drive,
+            "skip_save_to_history": skip_save_to_history,
+            "logger": logger,
+            "wyslij_fn": wyslij_odpowiedz,
+            "zbierz_zalaczniki_fn": zbierz_zalaczniki_z_response,
+            "get_token_fn": _get_valid_access_token,
+            "on_section_start": _state_section_start,
+            "on_section_done": _state_section_done,
+            "on_section_error": _state_section_error,
+            "on_section_empty": _state_section_empty,
+            "on_pipeline_done": _state_pipeline_done,
+        }
+
+        def _pipeline_wrapper(**kwargs):
+            try:
+                _pipeline_done_fn = _pipeline_done
+                run_pipeline_async(**kwargs)
+            except Exception as _ex:
+                import traceback as _tb
+                app.logger.error("[thread] NIEOCZEKIWANY BŁĄD W WĄTKU: %s\n%s", _ex, _tb.format_exc())
+            finally:
+                _pipeline_done()
+
         thread = threading.Thread(
-            target=run_pipeline_async,
-            kwargs={
-                "flask_app": app,
-                "data": data,
-                "message_id": message_id,
-                "tasks": tasks,
-                "sender": sender,
-                "sender_name": sender_name,
-                "previous_subject": data.get("previous_subject", ""),
-                "drive_folder_id": drive_folder_id,
-                "history_sheet_id": history_sheet_id,
-                "smierc_sheet_id": smierc_sheet_id,
-                "save_to_drive": save_to_drive,
-                "skip_save_to_history": skip_save_to_history,
-                "logger": logger,
-                "wyslij_fn": wyslij_odpowiedz,
-                "zbierz_zalaczniki_fn": zbierz_zalaczniki_z_response,
-                "get_token_fn": _get_valid_access_token,
-                "on_section_start": _state_section_start,
-                "on_section_done": _state_section_done,
-                "on_section_error": _state_section_error,
-                "on_section_empty": _state_section_empty,
-                "on_pipeline_done": _state_pipeline_done,
-                "on_cleanup": _pipeline_done,
-            },
+            target=_pipeline_wrapper,
+            kwargs=_pipeline_kwargs,
             daemon=True,
         )
         thread.start()
