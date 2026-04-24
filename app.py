@@ -16,7 +16,7 @@ import json
 import re
 import threading
 import urllib.parse
-import traceback  # [FIX] Dodano import dla poprawnego logowania błędów
+import traceback  # [POPRAWKA] Przeniesiono z dołu na górę, aby działał wewnątrz funkcji webhook
 from datetime import datetime
 
 from flask import (
@@ -112,6 +112,7 @@ def health_check():
             vms_mb = round(proc_mem.vms / 1024 / 1024, 2)
             num_threads = proc.num_threads()
 
+            # Szacowanie limitu RAM kontenera (Render domyślnie 512MB dla Free)
             container_limit_mb = int(os.getenv("RENDER_MEMORY_LIMIT_MB", "512"))
             sys_used_mb = rss_mb
             sys_available_mb = round(max(container_limit_mb - rss_mb, 0), 2)
@@ -181,10 +182,12 @@ def health_check():
             },
         }
 
+        # Jeśli request chce JSON
         if request.headers.get("Accept", "").find("application/json") != -1:
             response = make_response(jsonify(status_data), 200)
             return no_cache_response(response)
 
+        # Generowanie HTML dla przeglądarki
         mem_color = "#28a745"
         if mem_extra["sys_percent"] > 80:
             mem_color = "#dc3545"
@@ -372,6 +375,10 @@ def favicon():
         return "", 404
 
 
+# ── Zarządzanie stanem pipeline ──────────────────────────────────────────────
+# Te zmienne i locki służą do śledzenia co robi aktualnie uruchomiony pipeline
+# widoczne przez /debug
+
 import threading as _threading
 
 _pipeline_lock = _threading.Lock()
@@ -385,12 +392,12 @@ _pipeline_state: dict = {
     "body": None,
     "started_at": None,
     "finished_at": None,
-    "status": "idle",
+    "status": "idle",  # idle, running, done, error
     "sections_requested": [],
     "sections": {},
     "combined_reply_html": None,
     "emails_sent": 0,
-    "history": [],
+    "history": [],  # lista 10 ostatnich pipelineów
 }
 _pipeline_state_lock = _threading.Lock()
 
@@ -412,6 +419,7 @@ def _pipeline_done():
 def _state_pipeline_start(message_id, sender, sender_name, subject, body, sections):
     """Inicjuje stan pipeline przed startem."""
     with _pipeline_state_lock:
+        # Archiwizuj obecny stan do historii jeśli istnieje
         if _pipeline_state.get("status") in ("done", "error") and _pipeline_state.get(
             "started_at"
         ):
@@ -466,13 +474,26 @@ def _state_section_done(section_key, result, duration_sec):
         s["status"] = "done"
         s["duration_sec"] = round(duration_sec, 2)
         if isinstance(result, dict):
-            html = result.get("reply_html", "") or ""
-            s["reply_html"] = html
-            s["reply_preview"] = html[:300] + ("..." if len(html) > 300 else "")
+            html_content = result.get("reply_html", "") or ""
+            s["reply_html"] = html_content
+            s["reply_preview"] = (
+                html_content[:300] + "..." if len(html_content) > 300 else html_content
+            )
+            # Lista załączników z rezultatu
             att_fields = [
-                "pdf", "image", "image2", "emoticon", "cv_pdf", "raport_pdf",
-                "gra_html", "plakat_svg", "horoskop_pdf", "karta_rpg_pdf",
-                "ankieta_pdf", "ankieta_html", "debug_txt",
+                "pdf",
+                "image",
+                "image2",
+                "emoticon",
+                "cv_pdf",
+                "raport_pdf",
+                "gra_html",
+                "plakat_svg",
+                "horoskop_pdf",
+                "karta_rpg_pdf",
+                "ankieta_pdf",
+                "ankieta_html",
+                "debug_txt",
             ]
             s["attachments"] = [f for f in att_fields if result.get(f)]
             lists = ["triptych", "images", "videos", "docs", "docx_list"]
@@ -514,6 +535,7 @@ REQUIRED_OAUTH_SCOPES = [
 
 
 def _get_valid_access_token() -> str:
+    """Sprawdza/odświeża token OAuth z env."""
     access_token = os.getenv("GMAIL_ACCESS_TOKEN", "").strip()
     refresh_token = os.getenv("GMAIL_REFRESH_TOKEN", "").strip()
     client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
@@ -521,6 +543,7 @@ def _get_valid_access_token() -> str:
 
     if access_token:
         try:
+            # Szybka weryfikacja ważności
             r = http_requests.get(
                 "https://oauth2.googleapis.com/tokeninfo",
                 params={"access_token": access_token},
@@ -529,18 +552,23 @@ def _get_valid_access_token() -> str:
             info = r.json()
             expires_in = int(info.get("expires_in", 0))
             if "error" not in info and expires_in > 30:
-                granted = info.get("scope", "")
-                if "gmail.send" not in granted:
-                    app.logger.error("[oauth] ⚠ brak scope gmail.send")
+                # Token jest OK, ale sprawdźmy scope
+                granted_scope = info.get("scope", "")
+                if "gmail.send" not in granted_scope:
+                    app.logger.error("[oauth] ⚠ Token nie posiada uprawnień gmail.send")
                     raise RuntimeError("Brak uprawnień gmail.send")
                 return access_token
         except Exception as e:
-            app.logger.warning("[oauth] Błąd weryfikacji tokenu: %s", e)
+            app.logger.warning("[oauth] Błąd weryfikacji access_token: %s", e)
 
+    # Odświeżanie
     if not refresh_token or not client_id or not client_secret:
-        raise RuntimeError("Brak danych OAuth (refresh_token/client_id/secret)")
+        raise RuntimeError(
+            "Brak danych OAuth do odświeżenia tokenu (refresh_token/client_id/secret)"
+        )
 
     try:
+        app.logger.info("[oauth] Odświeżanie access_token za pomocą refresh_token...")
         r2 = http_requests.post(
             "https://oauth2.googleapis.com/token",
             data={
@@ -551,16 +579,22 @@ def _get_valid_access_token() -> str:
             },
             timeout=15,
         )
-        data = r2.json()
-        new_token = data["access_token"]
-        os.environ["GMAIL_ACCESS_TOKEN"] = new_token
-        return new_token
+        token_data = r2.json()
+        if "access_token" in token_data:
+            new_token = token_data["access_token"]
+            # Zapisujemy do os.environ aby proces pamiętał w tej sesji
+            os.environ["GMAIL_ACCESS_TOKEN"] = new_token
+            app.logger.info("[oauth] ✅ Token odświeżony pomyślnie.")
+            return new_token
+        else:
+            raise RuntimeError(f"Błąd odświeżania: {token_data.get('error_description', token_data.get('error'))}")
     except Exception as e:
-        raise RuntimeError(f"Błąd odświeżania tokenu: {e}")
+        raise RuntimeError(f"Krytyczny błąd OAuth: {e}")
 
 
 @app.route("/oauth/init", methods=["GET"])
 def oauth_init():
+    """Generuje link do autoryzacji Google (do ręcznego wywołania raz)."""
     client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     redirect_uri = request.url_root.rstrip("/") + "/oauth/callback"
     params = {
@@ -571,30 +605,53 @@ def oauth_init():
         "access_type": "offline",
         "prompt": "consent",
     }
-    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
-    return f'<html><body><a href="{auth_url}">➜ Zaloguj przez Google</a></body></html>'
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(
+        params
+    )
+    return (
+        f'<html><body><p>Kliknij poniżej, aby połączyć Tyler v6 z Google:</p><a href="{auth_url}">➜ ZALOGUJ PRZEZ GOOGLE</a>'
+        + f"<br><br><small>Redirect URI: {redirect_uri}</small></body></html>"
+    )
 
 
 @app.route("/oauth/callback", methods=["GET"])
 def oauth_callback():
+    """Odbiera kod od Google i wymienia na tokeny."""
     code = request.args.get("code")
+    if not code:
+        return "Błąd: Brak kodu autoryzacji.", 400
+
     client_id = os.getenv("GMAIL_CLIENT_ID", "").strip()
     client_secret = os.getenv("GMAIL_CLIENT_SECRET", "").strip()
     redirect_uri = request.url_root.rstrip("/") + "/oauth/callback"
-    
-    resp = http_requests.post(
-        "https://oauth2.googleapis.com/token",
-        data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "code": code,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-        },
-        timeout=15,
-    )
-    tokens = resp.json()
-    return f"ACCESS_TOKEN: {tokens.get('access_token')}<br>REFRESH_TOKEN: {tokens.get('refresh_token')}"
+
+    try:
+        resp = http_requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": redirect_uri,
+            },
+            timeout=15,
+        )
+        tokens = resp.json()
+        if "error" in tokens:
+            return f"Błąd wymiany kodu: {tokens}"
+
+        res = f"""
+        <h3>✅ Autoryzacja zakończona!</h3>
+        <p>Skopiuj poniższe tokeny do zmiennych środowiskowych Render:</p>
+        <pre style="background:#eee;padding:10px;">
+GMAIL_ACCESS_TOKEN: {tokens.get('access_token')}
+GMAIL_REFRESH_TOKEN: {tokens.get('refresh_token')}
+        </pre>
+        """
+        return res
+    except Exception as e:
+        return f"Błąd: {e}", 500
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -604,39 +661,52 @@ def oauth_callback():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    """
+    Odbiera email od GAS, natychmiast wraca 200, a potem w tle puszcza pipeline.
+    """
     from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
     try:
+        # Wymuszenie JSONa niezależnie od Content-Type (GAS czasem nie wysyła nagłówka)
         data = request.get_json(force=True, silent=True)
         if not data:
-            app.logger.warning("[webhook] Brak danych JSON")
+            app.logger.warning("[webhook] Brak poprawnych danych JSON w żądaniu")
             return jsonify({"accepted": False, "error": "Brak danych JSON"}), 400
 
+        # Wyciąganie pól
         message_id = data.get("message_id", "")
         sender = data.get("sender", "")
         sender_name = data.get("sender_name", "")
         subject = data.get("subject", "")
         body = data.get("body", "")
+
+        # Kontekst z Google Sheets (opcjonalny)
         drive_folder_id = data.get("drive_folder_id", "")
         history_sheet_id = data.get("history_sheet_id", "")
         smierc_sheet_id = data.get("smierc_sheet_id", "")
+
+        # Flagi sterujące
         save_to_drive = data.get("save_to_drive", True)
         skip_save_to_history = data.get("skip_save_to_history", False)
 
         if not sender:
-            app.logger.warning("[webhook] Brak nadawcy")
+            app.logger.warning("[webhook] Brak nadawcy (sender)")
             return jsonify({"accepted": False, "error": "Brak nadawcy"}), 400
 
-        # [FIX] Walidacja teraz zwraca (bool, str) - kolejność argumentów: sender, subject, body
+        # [POPRAWKA] Walidacja (teraz zwraca 2 wartości, więc rozpakowanie działa)
         is_valid, validation_error = validator.validate_email(sender, subject, body)
         if not is_valid:
             app.logger.warning("[webhook] Walidacja odrzuciła: %s", validation_error)
             return jsonify({"accepted": False, "error": validation_error}), 400
 
+        # Sprawdzenie zasobów
         if not resource_manager.can_start_pipeline():
-            app.logger.warning("[webhook] Limit zasobów")
+            app.logger.warning(
+                "[webhook] Odrzucono request: przekroczono limit zasobów lub wątków"
+            )
             return jsonify({"accepted": False, "error": "Resource limit"}), 503
 
+        # ── Budowanie planu zadań (Pipeline) ──────────────────────────────────
         tasks = pipeline_builder.build_pipeline(
             sender=sender,
             sender_name=sender_name,
@@ -653,7 +723,9 @@ def webhook():
             containsKeyword3=data.get("containsKeyword3", False),
             containsKeyword4=data.get("containsKeyword4", False),
             containsFlagaTest=data.get("contains_flaga_test", False),
-            containsKeywordGeneratorPdf=data.get("contains_keyword_generator_pdf", False),
+            containsKeywordGeneratorPdf=data.get(
+                "contains_keyword_generator_pdf", False
+            ),
             containsKeywordSmierc=data.get("contains_keyword_smierc", False),
             containsJoker=data.get("contains_keyword_joker", False),
             isSmierc=data.get("isSmierc", False),
@@ -666,16 +738,28 @@ def webhook():
         )
 
         if not tasks:
-            app.logger.info("[webhook] Brak zadań")
+            app.logger.info("[webhook] Brak zadań do wykonania dla tego emaila.")
             return jsonify({"accepted": False, "error": "Brak zadań"}), 200
 
-        logger = init_logger(message_id=message_id, sender=sender, subject=subject, sections=list(tasks.keys()))
+        # Inicjalizacja loggera sekcji
+        logger = init_logger(
+            message_id=message_id,
+            sender=sender,
+            subject=subject,
+            sections=list(tasks.keys()),
+        )
 
+        # Logowanie "ODEBRANO" do arkusza (opcjonalne)
         if history_sheet_id:
-            try: log_odebrano(history_sheet_id, message_id, sender, subject, body)
-            except Exception as e: app.logger.warning("Błąd log_odebrano: %s", e)
+            try:
+                log_odebrano(history_sheet_id, message_id, sender, subject, body)
+            except Exception as e:
+                app.logger.warning("Błąd podczas log_odebrano: %s", e)
 
-        _state_pipeline_start(message_id, sender, sender_name, subject, body, list(tasks.keys()))
+        # ── Uruchomienie Pipeline w tle ──────────────────────────────────────
+        _state_pipeline_start(
+            message_id, sender, sender_name, subject, body, list(tasks.keys())
+        )
         _pipeline_start()
 
         thread = threading.Thread(
@@ -702,6 +786,7 @@ def webhook():
                 "on_section_error": _state_section_error,
                 "on_section_empty": _state_section_empty,
                 "on_pipeline_done": _state_pipeline_done,
+                "on_cleanup": _pipeline_done,
             },
             daemon=True,
         )
@@ -711,20 +796,45 @@ def webhook():
         return jsonify({"accepted": True, "message_id": message_id}), 200
 
     except Exception as e:
-        # [FIX] traceback zadziała poprawnie dzięki importowi na górze pliku
+        # [POPRAWKA] traceback.format_exc() zadziała poprawnie
         app.logger.error("[webhook] Błąd krytyczny: %s\n%s", e, traceback.format_exc())
         log_error(str(e))
         return jsonify({"accepted": False, "error": str(e)}), 500
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEBUG — stan ostatniego pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
 @app.route("/debug", methods=["GET"])
 def debug_pipeline():
+    """Zwraca szczegółowy stan ostatniego pipeline."""
     with _pipeline_state_lock:
         state = dict(_pipeline_state)
+        # Usuń duże pola HTML z odpowiedzi JSON
+        if "combined_reply_html" in state and state["combined_reply_html"]:
+            state["combined_reply_html"] = (
+                state["combined_reply_html"][:500] + "..."
+                if len(state["combined_reply_html"]) > 500
+                else state["combined_reply_html"]
+            )
+        for sk, sv in state.get("sections", {}).items():
+            if "reply_html" in sv and sv["reply_html"]:
+                sv["reply_html"] = (
+                    sv["reply_html"][:300] + "..."
+                    if len(sv["reply_html"]) > 300
+                    else sv["reply_html"]
+                )
         return jsonify(state), 200
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Uruchomienie
+# ═══════════════════════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
+    # Import traceback na dole jest już niepotrzebny, bo jest na górze pliku
     port = int(os.getenv("PORT", 5000))
     debug_mode = os.getenv("FLASK_DEBUG", "0") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug_mode)
