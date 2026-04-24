@@ -262,7 +262,8 @@ def run_pipeline_async(
                 flask_app.logger.error("[async] Błąd wysyłki połączonej: %s", e)
 
             # ── Zwolnij pamięć natychmiast ──────────────────────────────────────
-            del result
+            if result is not None:
+                del result
             gc.collect()
 
         # ── Historia nadawcy (raz na końcu) ─────────────────────────────────────
@@ -282,72 +283,17 @@ def run_pipeline_async(
             except Exception as e:
                 flask_app.logger.error("[async] Błąd zapisu historii: %s", e)
 
-        # ── log.txt — generuj NA KOŃCU, zapisz na Drive, bez wysyłania emaila ─
-        _save_log_to_drive(
-            flask_app,
-            logger,
-            data,
-            sender,
-            sender_name,
-            save_to_drive,
-            drive_folder_id,
-            wyslij_odpowiedz,
-            upload_file_to_drive,
-        )
+        # ── log.txt — generuj NA KOŃCU i wyślij na Drive przez logger.finalize() ─
+        try:
+            logger.finalize()
+        except Exception as e:
+            flask_app.logger.error("[async] Błąd finalize loggera: %s", e)
 
         flask_app.logger.info(
             "[async] Pipeline zakończony dla %s | sekcje: %s",
             sender,
             ", ".join(sections_done) if sections_done else "brak",
         )
-
-
-def _save_log_to_drive(
-    flask_app,
-    logger,
-    data,
-    sender,
-    sender_name,
-    save_to_drive,
-    drive_folder_id,
-    wyslij_odpowiedz_fn,
-    upload_fn,
-):
-    """
-    Generuje i zapisuje log.txt na Google Drive.
-    NIE wysyła emaila do admina, aby uniknąć pętli.
-    Po zapisaniu czyści logger.entries żeby zwolnić RAM.
-    """
-    try:
-        from app import _build_log_txt_content
-        import base64
-        import os
-
-        if not save_to_drive or not drive_folder_id:
-            flask_app.logger.info(
-                "[async] save_to_drive=False lub brak drive_folder_id — pomijam zapis log.txt"
-            )
-            return
-
-        log_content = _build_log_txt_content(logger, {})
-        # Koduj i od razu usuń string źródłowy
-        log_b64 = base64.b64encode(log_content.encode("utf-8")).decode("ascii")
-        log_len = len(log_content)
-        del log_content  # zwolnij RAM
-
-        filename = f"log_{logger.session_id}.txt"
-
-        upload_fn(log_b64, filename, "text/plain", drive_folder_id)
-        flask_app.logger.info("[async] log.txt zapisany na Drive (%d znaków)", log_len)
-
-        # Zwolnij base64 i wyczyść entries loggera
-        del log_b64, log_txt
-        if hasattr(logger, "entries"):
-            logger.entries.clear()
-        gc.collect()
-
-    except Exception as e:
-        flask_app.logger.error("[async] Błąd generowania/wysyłki log.txt: %s", e)
 
 
 def _token_refresh(get_token_fn, flask_app, section_key):
