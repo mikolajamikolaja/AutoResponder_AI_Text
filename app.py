@@ -853,12 +853,17 @@ def webhook():
         }
 
         def _pipeline_wrapper(**kwargs):
+            import logging as _logging
+            import traceback as _tb
+            _tlog = _logging.getLogger("pipeline_thread")
             try:
-                _pipeline_done_fn = _pipeline_done
+                _tlog.error("[thread] START WĄTKU — tasks: %s", list(kwargs.get("tasks", {}).keys()))
                 run_pipeline_async(**kwargs)
+                _tlog.error("[thread] KONIEC WĄTKU OK")
             except Exception as _ex:
-                import traceback as _tb
-                app.logger.error("[thread] NIEOCZEKIWANY BŁĄD W WĄTKU: %s\n%s", _ex, _tb.format_exc())
+                _tlog.error("[thread] BŁĄD W WĄTKU: %s\n%s", _ex, _tb.format_exc())
+                with kwargs["flask_app"].app_context():
+                    kwargs["flask_app"].logger.error("[thread] BŁĄD: %s\n%s", _ex, _tb.format_exc())
             finally:
                 _pipeline_done()
 
