@@ -1802,9 +1802,21 @@ function _checkUnprocessedMessages(webhookUrl) {
     }
 
     // [FIX v13] Próba odtworzenia body z Gmaila przed retrym.
-    // Jeśli body jest puste — email był pusty i słusznie odrzucony przez backend.
-    // Nie ponawiamy — oznaczamy jako GAS_FALLBACK i odblokowujemy kolejkę.
+    // [FIX v14] Sprawdzenie banned sender + zapis do arkusza decyzji
     var retryBody = "";
+    var retryFromEmail = (item.sender || "").toLowerCase().trim();
+    var retryEmailMatch = retryFromEmail.match(/<([^>]+)>/);
+    if (retryEmailMatch) retryFromEmail = retryEmailMatch[1].toLowerCase().trim();
+
+    // Blokada banned senderów — stare ODEBRANO w Sheets mogły powstać zanim GAS je zablokował
+    var BANNED_EMAILS_RETRY = _getListFromProps("BANNED_EMAILS");
+    if (_isBannedSender(retryFromEmail, BANNED_EMAILS_RETRY)) {
+      console.warn("[check] " + item.message_id + " — banned sender (" + retryFromEmail + "). Oznaczam jako GAS_FALLBACK bez retryu.");
+      _markHandledInSheet(sheetId, item.message_id);
+      try { props.deleteProperty(retryCountKey); } catch(e2) {}
+      continue;
+    }
+
     try {
       var retryMsg = GmailApp.getMessageById(item.message_id);
       if (retryMsg) {
@@ -1825,6 +1837,31 @@ function _checkUnprocessedMessages(webhookUrl) {
       try { props.deleteProperty(retryCountKey); } catch(e2) {}
       continue;
     }
+
+    // Oblicz flagi keywordów i zapisz do arkusza decyzji (zielone "tak")
+    var retrySearchText = retryBody + " " + (item.subject || "");
+    var RETRY_BIZ_LIST  = _getListFromProps("BIZ_LIST");
+    var RETRY_ALLOWED   = _getListFromProps("ALLOWED_LIST");
+    _appendPrzeplywSheetRow({
+      ts:        new Date().toISOString(),
+      fromEmail: retryFromEmail,
+      subject:   item.subject || "",
+      isNewMsg:  true,
+      KEYWORDS:              _containsAny(retrySearchText, _getListFromProps("KEYWORDS")),
+      KEYWORDS1:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS1")),
+      KEYWORDS2:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS2")),
+      KEYWORDS3:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS3")),
+      KEYWORDS4:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS4")),
+      KEYWORDS_GENERATOR_PDF:_containsAny(retrySearchText, _getListFromProps("KEYWORDS_GENERATOR_PDF")),
+      KEYWORDS_SMIERC:       _containsAny(retrySearchText, _getListFromProps("KEYWORDS_SMIERC")),
+      JOKER:                 _containsAny(retrySearchText, _getListFromProps("KEYWORDS_JOKER")),
+      lista_smiert:          false,
+      lista_historia:        RETRY_ALLOWED.indexOf(retryFromEmail) !== -1 || RETRY_BIZ_LIST.indexOf(retryFromEmail) !== -1,
+      flaga_test:            _containsAny(retrySearchText, _getListFromProps("FLAGA_TEST")),
+      wysylka:  true,
+      action:   "RETRY",
+      notes:    "próba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG
+    });
 
     console.log("[check] Retry dla: " + item.sender + " msg_id=" + item.message_id +
                 " temat=\"" + item.subject + "\"" +

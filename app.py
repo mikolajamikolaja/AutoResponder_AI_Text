@@ -810,12 +810,10 @@ def webhook():
             return jsonify({"accepted": False, "error": "Brak zadań"}), 200
 
         # Inicjalizacja loggera sekcji
-        logger = init_logger(
-            message_id=message_id,
-            sender=sender,
-            subject=subject,
-            sections=list(tasks.keys()),
-        )
+        # session_id = skrót message_id + sender żeby log był identyfikowalny
+        _session_id = (message_id or "")[:16] + "_" + (sender or "").split("@")[0][:12]
+        logger = init_logger(session_id=_session_id)
+        logger.log_input(sender=sender, subject=subject, body=body, sender_name=sender_name)
 
         # Logowanie "ODEBRANO" do arkusza (opcjonalne)
         if history_sheet_id:
