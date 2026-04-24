@@ -768,22 +768,22 @@ def webhook():
             elif name == "biznes":
                 def fn():
                     from responders.biznes import build_biznes_section
-                    return build_biznes_section(body=_body, sender_email=_sender, sender_name=_sender_name, data=_data)
+                    return build_biznes_section(body=_body, sender_name=_sender_name)
                 return fn
             elif name == "scrabble":
                 def fn():
                     from responders.scrabble import build_scrabble_section
-                    return build_scrabble_section(body=_body, sender_email=_sender, data=_data)
+                    return build_scrabble_section(body=_body)
                 return fn
             elif name == "emocje":
                 def fn():
                     from responders.emocje import build_emocje_section
-                    return build_emocje_section(body=_body, sender_email=_sender, data=_data)
+                    return build_emocje_section(body=_body, sender_name=_sender_name, attachments=_attachments)
                 return fn
             elif name == "generator_pdf":
                 def fn():
                     from responders.generator_pdf import build_generator_pdf_section
-                    return build_generator_pdf_section(body=_body, sender_email=_sender, data=_data)
+                    return build_generator_pdf_section(body=_body, sender_name=_sender_name)
                 return fn
             elif name == "nawiazanie":
                 def fn():
