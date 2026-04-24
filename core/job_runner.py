@@ -144,7 +144,8 @@ def run_pipeline_async(
 ):
     """
     Wykonuje sekcje sekwencyjnie w tle (daemon thread).
-    Po każdej sekcji: wyślij mail → zapisz Drive → zapisz Sheets → del → gc.
+    Po każdej sekcji: zapisz Drive → zapisz Sheets → del → gc.
+    Na końcu: wyślij JEDEN zbiorczy email.
 
     WAŻNE: log_wyslano zapisywany po każdej próbie wysyłki (sukces lub porażka).
     """
@@ -262,27 +263,27 @@ def run_pipeline_async(
                 except Exception as e:
                     flask_app.logger.error("[async] Błąd smierc sheet: %s", e)
 
-            # ── Wyślij osobny email dla tej sekcji ──────────────────────────────
-            try:
-                _token_refresh(get_token_fn, flask_app, section_key)
-                success = _send_section_email(
-                    section_key,
-                    result,
-                    sender,
-                    sender_name,
-                    previous_subject,
-                    wyslij_odpowiedz,
-                    zbierz_zalaczniki_z_response,
-                    flask_app,
-                    logger,
-                )
-                if success:
-                    emails_sent += 1
-            except Exception as e:
-                flask_app.logger.error("[async] Błąd wysyłki '%s': %s", section_key, e)
+            # ── Zbieramy wyniki — nie wysyłamy osobnych maili per sekcja ────────
+            # Wszystkie sekcje zostaną połączone w jeden email na końcu.
+            pass
 
-        # ── Usuń wysyłkę połączonego emaila ────────────────────────────────────
-        # (Teraz wysyłamy osobne emaile dla każdej sekcji)
+        # ── Wyślij JEDEN zbiorczy email na końcu pipeline ──────────────────────
+        try:
+            _token_refresh(get_token_fn, flask_app, "combined")
+            success = _send_combined_email(
+                combined_results,
+                sender,
+                sender_name,
+                previous_subject,
+                wyslij_odpowiedz,
+                zbierz_zalaczniki_z_response,
+                flask_app,
+                logger,
+            )
+            if success:
+                emails_sent += 1
+        except Exception as e:
+            flask_app.logger.error("[async] Błąd wysyłki combined email: %s", e)
 
         if on_pipeline_done:
             on_pipeline_done(combined_results.get("reply_html", ""), emails_sent)
@@ -500,7 +501,10 @@ def _update_smierc_sheet(smierc_sheet_id, sender, data, smierc_result):
     def strip_html(h):
         if not h:
             return ""
-        text = re.sub(r"(?i)<br\s*/?>", "\n", h)
+        # Najpierw usuń <style>...</style> i <script>...</script>
+        text = re.sub(r"<style[\s\S]*?</style>", "", h, flags=re.IGNORECASE)
+        text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"(?i)<br\s*/?>", "\n", text)
         text = re.sub(r"<[^>]+>", "", text)
         return html_lib.unescape(text).strip()
 
@@ -515,7 +519,10 @@ def _update_smierc_sheet(smierc_sheet_id, sender, data, smierc_result):
             smierc_result["nowy_etap"],
             "",
             data.get("body", "")[:2000],
-            strip_html(smierc_result.get("reply_html", ""))[:2000],
+            (
+                smierc_result.get("reply_text")
+                or strip_html(smierc_result.get("reply_html", ""))
+            )[:2000],
             "",
         ]
     ]

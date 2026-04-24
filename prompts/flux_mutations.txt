@@ -1,0 +1,22 @@
+# Suffiksy do mutacji - dodawane do słów niedozwolonych aby obejść FLUX restrictions
+# Przykład: "blood" -> "blood-crimson"
+crimson
+scarlet
+deep
+dark
+shadow
+spirit
+mystical
+ethereal
+vintage
+ancient
+haunting
+ethereal
+divine
+infernal
+spectral
+phantasmal
+cosmic
+celestial
+abyssal
+eldritch

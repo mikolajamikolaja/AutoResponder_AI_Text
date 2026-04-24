@@ -1,0 +1,19 @@
+# Słowa niedozwolone w promptach FLUX - jeśli się pojawią, zostaną zmutowane
+# (FLUX ma ograniczenia na pewne słowa - gdy je wykryje, dodajemy sufiks aby obejść)
+blood
+death
+corpse
+skull
+knife
+gun
+weapon
+violence
+gore
+explicit
+nude
+sex
+drug
+bomb
+attack
+kill
+murder

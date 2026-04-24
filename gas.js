@@ -93,8 +93,9 @@ function extractPlainTextFromHtml(htmlText) {
   if (!htmlText) return "";
   return htmlText
     .replace(/<!DOCTYPE[^>]*>/gi, "")
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, "")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, "")
+    .replace(/<head\b[\s\S]*?<\/head>/gi, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
@@ -1364,6 +1365,20 @@ function __AAA_processEmails() {
     // ── SMIERC kontynuacja ────────────────────────────────────────────────────
     if (shouldSendSmierc) {
       console.log("SMIERC kontynuacja: " + fromEmail + " etap=" + smircData.etap);
+
+      // Zapisz do arkusza decyzji
+      _appendPrzeplywSheetRow({
+        fromEmail: fromEmail, subject: subject, isNewMsg: isNewMsg,
+        KEYWORDS: false, KEYWORDS1: false, KEYWORDS2: false, KEYWORDS3: false,
+        KEYWORDS4: false, KEYWORDS_GENERATOR_PDF: false, KEYWORDS_SMIERC: false,
+        JOKER: false,
+        lista_smiert: true, lista_historia: shouldSendZwykly,
+        flaga_test: containsFlagaTest,
+        wysylka: true,
+        action: "SMIERC_KONTYNUACJA",
+        notes: "etap=" + (smircData ? smircData.etap : "?")
+      });
+
       _markAsProcessed(thread);
 
       var previousData2 = findLastMessageBySender(fromEmail);
