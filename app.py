@@ -727,7 +727,83 @@ def webhook():
             "in_history_status":              "tak" if (data.get("isAllowed") or data.get("isKnownSender")) else "",
             "in_requiem_status":              "tak" if data.get("isSmierc") else "",
         }
-        tasks = pipeline_builder.build_sections(pipeline_data)
+        section_names = pipeline_builder.build_sections(pipeline_data)
+
+        # Mapowanie nazw sekcji na callable — każdy responder importowany lazy
+        # żeby nie ładować wszystkich modułów przy starcie serwera
+        def _make_task(name):
+            _sender        = sender
+            _sender_name   = sender_name
+            _body          = body
+            _data          = data
+            _prev_body     = data.get("previous_body", "")
+            _attachments   = data.get("attachments", [])
+            _smierc_data   = data.get("smircData") or {}
+            _disable_flux  = data.get("disable_flux", False) or data.get("contains_flaga_test", False)
+
+            if name == "zwykly":
+                def fn():
+                    from responders.zwykly import build_zwykly_section
+                    return build_zwykly_section(
+                        body=_body,
+                        previous_body=_prev_body,
+                        sender_email=_sender,
+                        sender_name=_sender_name,
+                        test_mode=_disable_flux,
+                        attachments=_attachments,
+                    )
+                return fn
+            elif name == "smierc":
+                def fn():
+                    from responders.smierc import build_smierc_section
+                    return build_smierc_section(
+                        sender_email=_sender,
+                        body=_body,
+                        etap=_smierc_data.get("etap", 1),
+                        data_smierci_str=_smierc_data.get("data_smierci", "nieznanego dnia"),
+                        historia=_smierc_data.get("historia", []),
+                        data=_data,
+                    )
+                return fn
+            elif name == "biznes":
+                def fn():
+                    from responders.biznes import build_biznes_section
+                    return build_biznes_section(body=_body, sender_email=_sender, sender_name=_sender_name, data=_data)
+                return fn
+            elif name == "scrabble":
+                def fn():
+                    from responders.scrabble import build_scrabble_section
+                    return build_scrabble_section(body=_body, sender_email=_sender, data=_data)
+                return fn
+            elif name == "emocje":
+                def fn():
+                    from responders.emocje import build_emocje_section
+                    return build_emocje_section(body=_body, sender_email=_sender, data=_data)
+                return fn
+            elif name == "generator_pdf":
+                def fn():
+                    from responders.generator_pdf import build_generator_pdf_section
+                    return build_generator_pdf_section(body=_body, sender_email=_sender, data=_data)
+                return fn
+            elif name == "nawiazanie":
+                def fn():
+                    from responders.nawiazanie import build_nawiazanie_section
+                    return build_nawiazanie_section(body=_body, previous_body=_prev_body, sender_email=_sender, data=_data)
+                return fn
+            elif name == "analiza":
+                def fn():
+                    from responders.analiza import build_analiza_section
+                    return build_analiza_section(body=_body, sender_email=_sender, attachments=_attachments, data=_data)
+                return fn
+            else:
+                app.logger.warning("[webhook] Nieznana sekcja: %s — pomijam", name)
+                return None
+
+        tasks = {}
+        for _name in section_names:
+            _fn = _make_task(_name)
+            if _fn:
+                tasks[_name] = _fn
 
         if not tasks:
             app.logger.info("[webhook] Brak zadań do wykonania dla tego emaila.")
