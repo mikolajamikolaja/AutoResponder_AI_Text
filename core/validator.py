@@ -5,7 +5,7 @@ Walidacja wejścia (emaile, załączniki, prompty).
 """
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from core.logging_reporter import get_logger
 
@@ -17,21 +17,28 @@ class Validator:
         self.config = config
         self.logger = get_logger()
 
-    def validate_email(self, body: str, subject: str, sender: str) -> bool:
-        """Waliduje email."""
-        if not body or not body.strip():
-            self.logger.warning("Pusty body emaila")
-            return False
-
-        if len(body) > self.config.get("max_email_length", 10000):
-            self.logger.warning(f"Email zbyt długi: {len(body)} znaków")
-            return False
-
+    def validate_email(self, sender: str, subject: str, body: str) -> Tuple[bool, str]:
+        """
+        Waliduje email.
+        Zwraca: (is_valid, error_message)
+        """
         if not sender or "@" not in sender:
-            self.logger.warning(f"Nieprawidłowy sender: {sender}")
-            return False
+            msg = f"Nieprawidłowy sender: {sender}"
+            self.logger.warning(msg)
+            return False, msg
 
-        return True
+        if not body or not body.strip():
+            msg = "Pusty body emaila"
+            self.logger.warning(msg)
+            return False, msg
+
+        max_len = self.config.get("max_email_length", 10000)
+        if len(body) > max_len:
+            msg = f"Email zbyt długi: {len(body)} znaków (limit: {max_len})"
+            self.logger.warning(msg)
+            return False, msg
+
+        return True, ""
 
     def validate_attachments(
         self, attachments: List[Dict[str, Any]]
