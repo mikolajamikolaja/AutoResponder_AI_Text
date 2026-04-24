@@ -181,6 +181,7 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
             section,
             e,
         )
+        json_error = str(e)
 
     extracted, extracted_text = _extract_best_json(clean)
     if extracted is not None:
@@ -199,7 +200,7 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
             section,
         )
         return _wrap_section_list(section, result)
-    except Exception:
+    except Exception as repair_e:
         extracted, extracted_text = _extract_best_json(repaired)
         if extracted is not None:
             current_app.logger.warning(
@@ -213,7 +214,7 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     current_app.logger.warning(
         "[psych-raport] JSON naprawa nieudana sekcja=%s: %s | raw_len=%d",
         section,
-        e,
+        json_error,
         raw_len,
     )
     chunk_size = 800
@@ -542,7 +543,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
     )
     raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "wypis")
-    if not result:
+    if not result or not isinstance(result, dict):
         return {
             "wypis": {
                 "dzien_wypisu": f"Dzień 15, {data_wypisu}",
@@ -661,7 +662,11 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Zwróć TYLKO czysty JSON."
     )
     raw_7a = call_deepseek(system_7, user_7a, MODEL_TYLER, max_tokens=1500)
-    result_7a = _parse_json_safe(raw_7a, "zalecenia_7a") or {}
+    result_7a = _parse_json_safe(raw_7a, "zalecenia_7a")
+    if not isinstance(result_7a, dict):
+        result_7a = {}
+
+    # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
 
     # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
     schema_7b = json.dumps(
@@ -686,7 +691,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Zwróć TYLKO czysty JSON."
     )
     raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER, max_tokens=1500)
-    result_7b = _parse_json_safe(raw_7b, "zalecenia_7b") or {}
+    result_7b = _parse_json_safe(raw_7b, "zalecenia_7b")
+    if not isinstance(result_7b, dict):
+        result_7b = {}
 
     # ── deepseek_7c — NOTATKI SPRZĄTACZKI + INCYDENTY ────────────────────────────
     schema_7c = json.dumps(
@@ -715,7 +722,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Zwróć TYLKO czysty JSON."
     )
     raw_7c = call_deepseek(system_7, user_7c, MODEL_TYLER, max_tokens=1500)
-    result_7c = _parse_json_safe(raw_7c, "zalecenia_7c") or {}
+    result_7c = _parse_json_safe(raw_7c, "zalecenia_7c")
+    if not isinstance(result_7c, dict):
+        result_7c = {}
 
     # ── Scal wyniki trzech wywołań ────────────────────────────────────────────
     result = {}

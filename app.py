@@ -412,12 +412,12 @@ _pipeline_state: dict = {
     "body": None,
     "started_at": None,
     "finished_at": None,
-    "status": "idle",          # idle | running | done | error
+    "status": "idle",  # idle | running | done | error
     "sections_requested": [],
-    "sections": {},            # {section_key: {status, started, duration_sec, reply_html, error}}
+    "sections": {},  # {section_key: {status, started, duration_sec, reply_html, error}}
     "combined_reply_html": None,
     "emails_sent": 0,
-    "history": [],             # ostatnie 10 pipeline'ów (skrócone)
+    "history": [],  # ostatnie 10 pipeline'ów (skrócone)
 }
 _pipeline_state_lock = _threading.Lock()
 
@@ -440,32 +440,39 @@ def _state_pipeline_start(message_id, sender, sender_name, subject, body, sectio
     """Inicjuje stan pipeline przed startem."""
     with _pipeline_state_lock:
         # Zapisz poprzedni pipeline do historii (max 10)
-        if _pipeline_state.get("status") in ("done", "error") and _pipeline_state.get("started_at"):
-            _pipeline_state["history"].insert(0, {
-                "started_at": _pipeline_state["started_at"],
-                "finished_at": _pipeline_state.get("finished_at"),
-                "sender": _pipeline_state.get("sender"),
-                "subject": _pipeline_state.get("subject"),
-                "sections": list(_pipeline_state.get("sections", {}).keys()),
-                "status": _pipeline_state.get("status"),
-                "emails_sent": _pipeline_state.get("emails_sent", 0),
-            })
+        if _pipeline_state.get("status") in ("done", "error") and _pipeline_state.get(
+            "started_at"
+        ):
+            _pipeline_state["history"].insert(
+                0,
+                {
+                    "started_at": _pipeline_state["started_at"],
+                    "finished_at": _pipeline_state.get("finished_at"),
+                    "sender": _pipeline_state.get("sender"),
+                    "subject": _pipeline_state.get("subject"),
+                    "sections": list(_pipeline_state.get("sections", {}).keys()),
+                    "status": _pipeline_state.get("status"),
+                    "emails_sent": _pipeline_state.get("emails_sent", 0),
+                },
+            )
             _pipeline_state["history"] = _pipeline_state["history"][:10]
 
-        _pipeline_state.update({
-            "message_id": message_id,
-            "sender": sender,
-            "sender_name": sender_name,
-            "subject": subject,
-            "body": body,
-            "started_at": datetime.now().isoformat(),
-            "finished_at": None,
-            "status": "running",
-            "sections_requested": list(sections),
-            "sections": {},
-            "combined_reply_html": None,
-            "emails_sent": 0,
-        })
+        _pipeline_state.update(
+            {
+                "message_id": message_id,
+                "sender": sender,
+                "sender_name": sender_name,
+                "subject": subject,
+                "body": body,
+                "started_at": datetime.now().isoformat(),
+                "finished_at": None,
+                "status": "running",
+                "sections_requested": list(sections),
+                "sections": {},
+                "combined_reply_html": None,
+                "emails_sent": 0,
+            }
+        )
 
 
 def _state_section_start(section_key):
@@ -490,9 +497,21 @@ def _state_section_done(section_key, result, duration_sec):
             html = result.get("reply_html", "") or ""
             s["reply_html"] = html
             s["reply_preview"] = html[:300] + ("..." if len(html) > 300 else "")
-            att_fields = ["pdf", "image", "image2", "emoticon", "cv_pdf", "raport_pdf",
-                          "gra_html", "plakat_svg", "horoskop_pdf", "karta_rpg_pdf",
-                          "ankieta_pdf", "ankieta_html", "debug_txt"]
+            att_fields = [
+                "pdf",
+                "image",
+                "image2",
+                "emoticon",
+                "cv_pdf",
+                "raport_pdf",
+                "gra_html",
+                "plakat_svg",
+                "horoskop_pdf",
+                "karta_rpg_pdf",
+                "ankieta_pdf",
+                "ankieta_html",
+                "debug_txt",
+            ]
             s["attachments"] = [f for f in att_fields if result.get(f)]
             lists = ["triptych", "images", "videos", "docs", "docx_list"]
             for lf in lists:
@@ -1724,7 +1743,14 @@ def webhook():
 
     # ── Odpal pipeline w tle — GAS dostaje 200 w < 1s ────────────────────────
     _pipeline_start()
-    _state_pipeline_start(message_id, sender, sender_name, subject, body, build_section_order(requested_sections))
+    _state_pipeline_start(
+        message_id,
+        sender,
+        sender_name,
+        subject,
+        body,
+        build_section_order(requested_sections),
+    )
 
     def _pipeline_wrapper():
         try:
@@ -1795,14 +1821,28 @@ def debug_view():
         sections = dict(ps.get("sections", {}))
         history = list(ps.get("history", []))
 
-    status_color = {"idle": "#888", "running": "#007bff", "done": "#28a745", "error": "#dc3545"}.get(ps["status"], "#888")
-    status_icon = {"idle": "💤", "running": "⚙️", "done": "✅", "error": "❌"}.get(ps["status"], "?")
+    status_color = {
+        "idle": "#888",
+        "running": "#007bff",
+        "done": "#28a745",
+        "error": "#dc3545",
+    }.get(ps["status"], "#888")
+    status_icon = {"idle": "💤", "running": "⚙️", "done": "✅", "error": "❌"}.get(
+        ps["status"], "?"
+    )
 
     # ── sekcje HTML ────────────────────────────────────────────────────────────
     def section_card(key, s):
         st = s.get("status", "?")
-        col = {"running": "#007bff", "done": "#28a745", "error": "#dc3545", "empty": "#888"}.get(st, "#888")
-        icon = {"running": "⏳", "done": "✅", "error": "❌", "empty": "⬜"}.get(st, "?")
+        col = {
+            "running": "#007bff",
+            "done": "#28a745",
+            "error": "#dc3545",
+            "empty": "#888",
+        }.get(st, "#888")
+        icon = {"running": "⏳", "done": "✅", "error": "❌", "empty": "⬜"}.get(
+            st, "?"
+        )
         dur = f"{s['duration_sec']}s" if s.get("duration_sec") is not None else "—"
         att = ", ".join(s.get("attachments", [])) or "brak"
 
@@ -1837,7 +1877,10 @@ def debug_view():
   {reply_section}{err_section}
 </div>"""
 
-    sections_html = "".join(section_card(k, v) for k, v in sections.items()) or '<div style="color:#999;font-style:italic">Brak danych sekcji</div>'
+    sections_html = (
+        "".join(section_card(k, v) for k, v in sections.items())
+        or '<div style="color:#999;font-style:italic">Brak danych sekcji</div>'
+    )
 
     # ── treść emaila wejściowego ───────────────────────────────────────────────
     body_raw = ps.get("body") or ""
@@ -1903,10 +1946,11 @@ def debug_view():
         fin = ps.get("finished_at") or datetime.now().isoformat()
         try:
             from datetime import timezone
+
             t_start = datetime.fromisoformat(ps["started_at"])
             t_fin = datetime.fromisoformat(fin)
             elapsed = (t_fin - t_start).total_seconds()
-            timing_info = f'&nbsp;·&nbsp; Czas: <strong>{elapsed:.1f}s</strong>'
+            timing_info = f"&nbsp;·&nbsp; Czas: <strong>{elapsed:.1f}s</strong>"
         except Exception:
             pass
 

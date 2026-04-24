@@ -37,6 +37,7 @@ from flask import current_app
 
 import numpy as np
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -44,12 +45,13 @@ from core.ai_client import call_deepseek, extract_clean_text, MODEL_TYLER
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 PROMPT_JSON = os.path.join(PROMPTS_DIR, "emocje_prompt.json")
 
 
 # ── Ładowanie promptu ─────────────────────────────────────────────────────────
+
 
 def _load_prompt() -> dict:
     try:
@@ -73,18 +75,18 @@ def _fallback_prompt() -> dict:
             "### MAIL DO ANALIZY:\n{{MAIL}}\n\n"
             "### SCHEMAT JSON:\n"
             "{\n"
-            "  \"analiza\": {\n"
-            "    \"napiecie\": 0-100,\n"
-            "    \"sentyment\": -100 do 100 (ujemny=negatywny),\n"
-            "    \"pewnosc_nadawcy\": 0-100,\n"
-            "    \"formalnosc\": 0-100,\n"
-            "    \"pilnosc\": 0-100,\n"
-            "    \"dominujaca_emocja\": \"złość|smutek|lęk|frustracja|rozczarowanie|neutralna|radość\",\n"
-            "    \"intencja\": \"eskalacja|żądanie|skarga|prośba|podziękowanie|informacja|odmowa\",\n"
-            "    \"kluczowe_frazy\": [\"fraza1\", \"fraza2\", \"fraza3\", \"fraza4\", \"fraza5\"],\n"
-            "    \"zdania_scores\": [lista liczb -100 do 100, jedna per zdanie, max 15]\n"
+            '  "analiza": {\n'
+            '    "napiecie": 0-100,\n'
+            '    "sentyment": -100 do 100 (ujemny=negatywny),\n'
+            '    "pewnosc_nadawcy": 0-100,\n'
+            '    "formalnosc": 0-100,\n'
+            '    "pilnosc": 0-100,\n'
+            '    "dominujaca_emocja": "złość|smutek|lęk|frustracja|rozczarowanie|neutralna|radość",\n'
+            '    "intencja": "eskalacja|żądanie|skarga|prośba|podziękowanie|informacja|odmowa",\n'
+            '    "kluczowe_frazy": ["fraza1", "fraza2", "fraza3", "fraza4", "fraza5"],\n'
+            '    "zdania_scores": [lista liczb -100 do 100, jedna per zdanie, max 15]\n'
             "  },\n"
-            "  \"odpowiedz\": \"pełna empatyczna odpowiedź HTML gotowa do wysłania\"\n"
+            '  "odpowiedz": "pełna empatyczna odpowiedź HTML gotowa do wysłania"\n'
             "}\n"
         ),
         "odpowiedz_instrukcja": (
@@ -96,11 +98,12 @@ def _fallback_prompt() -> dict:
             "5) zakończyć otwartym pytaniem które zachęca do dalszego dialogu. "
             "Styl: ciepły, ludzki, empatyczny — jak najlepszy przyjaciel w korporacji. "
             "Format: HTML z tagami <p>, <strong> — gotowy do wklejenia w mail."
-        )
+        ),
     }
 
 
 # ── Call AI ───────────────────────────────────────────────────────────────────
+
 
 def _analyze_with_ai(mail_text: str, prompt_data: dict) -> dict | None:
     """Wywołuje DeepSeek i zwraca sparsowany dict lub None."""
@@ -135,11 +138,14 @@ def _analyze_with_ai(mail_text: str, prompt_data: dict) -> dict | None:
                 return json.loads(m.group())
             except Exception:
                 pass
-        logger.error("[emocje] Nie można sparsować JSON z odpowiedzi AI: %s...", clean[:200])
+        logger.error(
+            "[emocje] Nie można sparsować JSON z odpowiedzi AI: %s...", clean[:200]
+        )
         return None
 
 
 # ── Ekstrakcja tekstu z załączników ──────────────────────────────────────────
+
 
 def _extract_text(raw_bytes: bytes, name: str) -> str:
     name_lower = (name or "").lower()
@@ -153,6 +159,7 @@ def _extract_text(raw_bytes: bytes, name: str) -> str:
         try:
             from docx import Document
             import io as _io
+
             doc = Document(_io.BytesIO(raw_bytes))
             return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
         except Exception:
@@ -160,6 +167,7 @@ def _extract_text(raw_bytes: bytes, name: str) -> str:
     if name_lower.endswith(".pdf"):
         try:
             import pdfplumber
+
             text = ""
             with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
                 for page in pdf.pages:
@@ -174,6 +182,7 @@ def _extract_text(raw_bytes: bytes, name: str) -> str:
 
 
 # ── Helpers wykresów ──────────────────────────────────────────────────────────
+
 
 def _fig_to_b64(fig) -> str:
     buf = io.BytesIO()
@@ -193,6 +202,7 @@ def _safe_label(text: str) -> str:
 
 # ── Wykresy ───────────────────────────────────────────────────────────────────
 
+
 def _plot_w1_radar(analiza: dict, title: str) -> str:
     """W1 — radar 5 wymiarów emocjonalnych."""
     labels = ["Napięcie", "Pilność", "Pewność\nnadawcy", "Formalność", "Intensywność"]
@@ -201,7 +211,9 @@ def _plot_w1_radar(analiza: dict, title: str) -> str:
         analiza.get("pilnosc", 0),
         analiza.get("pewnosc_nadawcy", 0),
         analiza.get("formalnosc", 0),
-        max(0, (analiza.get("sentyment", 0) * -1 + 100) / 2),  # negatywny sentyment → intensywność
+        max(
+            0, (analiza.get("sentyment", 0) * -1 + 100) / 2
+        ),  # negatywny sentyment → intensywność
     ]
 
     n = len(labels)
@@ -227,14 +239,14 @@ def _plot_w1_radar(analiza: dict, title: str) -> str:
 def _plot_w3_kategorie(analiza: dict, title: str) -> str:
     """W3 — słupki intensywności 5 wymiarów."""
     dims = {
-        "Napięcie":    analiza.get("napiecie", 0),
-        "Pilność":     analiza.get("pilnosc", 0),
-        "Pewność":     analiza.get("pewnosc_nadawcy", 0),
-        "Formalność":  analiza.get("formalnosc", 0),
+        "Napięcie": analiza.get("napiecie", 0),
+        "Pilność": analiza.get("pilnosc", 0),
+        "Pewność": analiza.get("pewnosc_nadawcy", 0),
+        "Formalność": analiza.get("formalnosc", 0),
         "Sentyment\n(abs)": abs(analiza.get("sentyment", 0)),
     }
     labels = list(dims.keys())
-    vals   = list(dims.values())
+    vals = list(dims.values())
 
     colors = []
     for v in vals:
@@ -253,8 +265,15 @@ def _plot_w3_kategorie(analiza: dict, title: str) -> str:
     ax.set_ylabel("Intensywność (0–100)")
     ax.set_title(f"Intensywność wymiarów emocjonalnych\n{title}", fontsize=11)
     for bar, val in zip(bars, vals):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 2,
-                str(int(val)), ha="center", va="bottom", fontsize=10, fontweight="bold")
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 2,
+            str(int(val)),
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            fontweight="bold",
+        )
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     return _fig_to_b64(fig)
@@ -262,12 +281,12 @@ def _plot_w3_kategorie(analiza: dict, title: str) -> str:
 
 def _plot_wK_kolo(analiza: dict, title: str) -> str:
     """WK — kołowy: rozkład emocji (napięcie / spokój / formalność)."""
-    napiecie  = analiza.get("napiecie", 0)
-    pilnosc   = analiza.get("pilnosc", 0)
+    napiecie = analiza.get("napiecie", 0)
+    pilnosc = analiza.get("pilnosc", 0)
     formalnosc = analiza.get("formalnosc", 0)
-    spokoj    = max(0, 100 - napiecie - pilnosc / 2)
+    spokoj = max(0, 100 - napiecie - pilnosc / 2)
 
-    vals   = [napiecie, pilnosc, formalnosc, spokoj]
+    vals = [napiecie, pilnosc, formalnosc, spokoj]
     labels = ["Napięcie", "Pilność", "Formalność", "Spokój"]
     colors = ["#E24B4A", "#EF9F27", "#7F77DD", "#1D9E75"]
 
@@ -279,8 +298,11 @@ def _plot_wK_kolo(analiza: dict, title: str) -> str:
 
     fig, ax = plt.subplots(figsize=(6, 6))
     wedges, _, autotexts = ax.pie(
-        vals, labels=labels, colors=colors,
-        autopct="%1.0f%%", startangle=90,
+        vals,
+        labels=labels,
+        colors=colors,
+        autopct="%1.0f%%",
+        startangle=90,
         wedgeprops={"linewidth": 0.8, "edgecolor": "white"},
         textprops={"fontsize": 11},
     )
@@ -288,8 +310,16 @@ def _plot_wK_kolo(analiza: dict, title: str) -> str:
         at.set_fontsize(10)
 
     dominant = analiza.get("dominujaca_emocja", "")
-    ax.text(0, 0, dominant, ha="center", va="center",
-            fontsize=12, fontweight="bold", color="#2C2C2A")
+    ax.text(
+        0,
+        0,
+        dominant,
+        ha="center",
+        va="center",
+        fontsize=12,
+        fontweight="bold",
+        color="#2C2C2A",
+    )
     ax.set_title(f"Ukierunkowanie emocjonalne\n{title}", fontsize=11)
     fig.tight_layout()
     return _fig_to_b64(fig)
@@ -298,14 +328,14 @@ def _plot_wK_kolo(analiza: dict, title: str) -> str:
 def _plot_wb_bilans(analiza: dict, title: str) -> str:
     """WB — bilans: napięcie vs spokój vs neutralne."""
     napiecie = analiza.get("napiecie", 50)
-    spokoj   = max(0, 100 - napiecie)
-    sent     = analiza.get("sentyment", 0)
+    spokoj = max(0, 100 - napiecie)
+    sent = analiza.get("sentyment", 0)
 
     pos = max(0, sent)
     neg = max(0, -sent)
     neu = max(0, 100 - pos - neg)
 
-    vals   = [neg, pos, neu]
+    vals = [neg, pos, neu]
     labels = ["Negatywne", "Pozytywne", "Neutralne"]
     colors = ["#E24B4A", "#1D9E75", "#888780"]
     explode = (0.05, 0.05, 0.0)
@@ -316,15 +346,29 @@ def _plot_wb_bilans(analiza: dict, title: str) -> str:
 
     fig, ax = plt.subplots(figsize=(6, 6))
     wedges, _, autotexts = ax.pie(
-        vals, labels=labels, colors=colors,
-        autopct="%1.1f%%", explode=explode, startangle=90,
+        vals,
+        labels=labels,
+        colors=colors,
+        autopct="%1.1f%%",
+        explode=explode,
+        startangle=90,
         wedgeprops={"linewidth": 1, "edgecolor": "white"},
         textprops={"fontsize": 12},
     )
-    bilans_txt = "NEGATYWNY" if neg > pos else ("POZYTYWNY" if pos > neg else "NEUTRALNY")
+    bilans_txt = (
+        "NEGATYWNY" if neg > pos else ("POZYTYWNY" if pos > neg else "NEUTRALNY")
+    )
     kolor = "#E24B4A" if neg > pos else ("#1D9E75" if pos > neg else "#888780")
-    ax.text(0, 0, bilans_txt, ha="center", va="center",
-            fontsize=13, fontweight="bold", color=kolor)
+    ax.text(
+        0,
+        0,
+        bilans_txt,
+        ha="center",
+        va="center",
+        fontsize=13,
+        fontweight="bold",
+        color=kolor,
+    )
     ax.set_title(f"Bilans emocjonalny\n{title}", fontsize=11)
     fig.tight_layout()
     return _fig_to_b64(fig)
@@ -337,8 +381,8 @@ def _plot_we_przyklady(analiza: dict, title: str) -> str:
         return None
 
     # Długość frazy jako proxy "wagi" — dłuższa = ważniejsza dla AI
-    vals   = [min(100, 40 + len(f) * 3) for f in frazy]
-    n      = len(frazy)
+    vals = [min(100, 40 + len(f) * 3) for f in frazy]
+    n = len(frazy)
     colors = ["#E24B4A", "#EF9F27", "#378ADD", "#1D9E75", "#7F77DD"][:n]
 
     fig, ax = plt.subplots(figsize=(9, max(3, n * 0.8 + 1)))
@@ -350,8 +394,13 @@ def _plot_we_przyklady(analiza: dict, title: str) -> str:
     ax.set_xlabel("Znaczenie w kontekście emocjonalnym")
     ax.set_title(f"Kluczowe frazy emocjonalne\n{title}", fontsize=11)
     for bar, val, fraza in zip(bars, vals, frazy):
-        ax.text(val + 1, bar.get_y() + bar.get_height() / 2,
-                str(int(val)), va="center", fontsize=9)
+        ax.text(
+            val + 1,
+            bar.get_y() + bar.get_height() / 2,
+            str(int(val)),
+            va="center",
+            fontsize=9,
+        )
     ax.grid(axis="x", alpha=0.3)
     fig.tight_layout()
     return _fig_to_b64(fig)
@@ -363,14 +412,28 @@ def _plot_wa_akapity(analiza: dict, title: str) -> str:
     if not scores:
         return None
 
-    x      = list(range(1, len(scores) + 1))
-    pos    = [max(0, s) for s in scores]
-    neg    = [max(0, -s) for s in scores]
+    x = list(range(1, len(scores) + 1))
+    pos = [max(0, s) for s in scores]
+    neg = [max(0, -s) for s in scores]
 
     fig, ax = plt.subplots(figsize=(min(max(7, len(x) * 0.5 + 2), 16), 4))
     width = 0.4
-    ax.bar([i - width / 2 for i in x], pos, width=width, color="#1D9E75", label="Pozytywne", alpha=0.85)
-    ax.bar([i + width / 2 for i in x], neg, width=width, color="#E24B4A", label="Negatywne", alpha=0.85)
+    ax.bar(
+        [i - width / 2 for i in x],
+        pos,
+        width=width,
+        color="#1D9E75",
+        label="Pozytywne",
+        alpha=0.85,
+    )
+    ax.bar(
+        [i + width / 2 for i in x],
+        neg,
+        width=width,
+        color="#E24B4A",
+        label="Negatywne",
+        alpha=0.85,
+    )
     ax.set_xticks(x)
     ax.set_xticklabels([f"Z.{i}" for i in x], rotation=45, fontsize=8)
     ax.set_ylabel("Intensywność emocji")
@@ -383,12 +446,13 @@ def _plot_wa_akapity(analiza: dict, title: str) -> str:
 
 # ── Raporty TXT ───────────────────────────────────────────────────────────────
 
+
 def _build_raport_txt(label: str, analiza: dict, odpowiedz: str) -> str:
-    linia  = "=" * 60
+    linia = "=" * 60
     linia2 = "-" * 60
     napiecie = analiza.get("napiecie", 0)
-    sent     = analiza.get("sentyment", 0)
-    bilans   = "POZYTYWNY" if sent > 20 else ("NEGATYWNY" if sent < -20 else "NEUTRALNY")
+    sent = analiza.get("sentyment", 0)
+    bilans = "POZYTYWNY" if sent > 20 else ("NEGATYWNY" if sent < -20 else "NEUTRALNY")
 
     lines = [
         linia,
@@ -440,12 +504,15 @@ def _build_ranking_txt(label: str, odpowiedz: str) -> str:
 
 # ── HTML dla maila ────────────────────────────────────────────────────────────
 
+
 def _build_reply_html(label: str, analiza: dict, odpowiedz_html: str) -> str:
     napiecie = analiza.get("napiecie", 0)
-    sent     = analiza.get("sentyment", 0)
+    sent = analiza.get("sentyment", 0)
     intencja = analiza.get("intencja", "—")
-    emocja   = analiza.get("dominujaca_emocja", "—")
-    bilans   = "pozytywne ✅" if sent > 20 else ("negatywne ⚠️" if sent < -20 else "neutralne")
+    emocja = analiza.get("dominujaca_emocja", "—")
+    bilans = (
+        "pozytywne ✅" if sent > 20 else ("negatywne ⚠️" if sent < -20 else "neutralne")
+    )
 
     return (
         f"{odpowiedz_html or ''}"
@@ -458,23 +525,26 @@ def _build_reply_html(label: str, analiza: dict, odpowiedz_html: str) -> str:
 
 # ── Główna funkcja responderu ─────────────────────────────────────────────────
 
-def build_emocje_section(body: str, attachments: list = None, test_mode: bool = False) -> dict:
+
+def build_emocje_section(
+    body: str, sender_name: str = "", attachments: list = None, test_mode: bool = False
+) -> dict:
     """
     Emocje responder — analiza AI + empatyczna odpowiedź deeskalacyjna.
     Zwraca dict z reply_html, images (PNG), docs (TXT).
     """
     prompt_data = _load_prompt()
 
-    images     = []
-    docs       = []
+    images = []
+    docs = []
     reply_html = ""
-    sources    = []
+    sources = []
 
     if body and body.strip():
         sources.append(("Treść_maila", body))
 
-    for att in (attachments or []):
-        att_b64  = att.get("base64")
+    for att in attachments or []:
+        att_b64 = att.get("base64")
         att_name = att.get("name", "dokument")
         if not att_b64:
             continue
@@ -490,7 +560,7 @@ def build_emocje_section(body: str, attachments: list = None, test_mode: bool = 
         return {
             "reply_html": "<p>Brak tekstu do analizy emocjonalnej.</p>",
             "images": [],
-            "docs":   [],
+            "docs": [],
         }
 
     for label, text in sources:
@@ -502,29 +572,31 @@ def build_emocje_section(body: str, attachments: list = None, test_mode: bool = 
                 logger.warning("[emocje] AI nie zwróciło wyniku dla '%s'", label)
                 continue
 
-            analiza     = result.get("analiza", {})
-            odpowiedz   = result.get("odpowiedz", "<p>Brak odpowiedzi.</p>")
-            sl          = _safe_label(label)
+            analiza = result.get("analiza", {})
+            odpowiedz = result.get("odpowiedz", "<p>Brak odpowiedzi.</p>")
+            sl = _safe_label(label)
 
             # ── 6 wykresów PNG (te same nazwy plików co poprzednio) ───────────
             plot_fns = [
-                (_plot_w1_radar,     f"w1_radar_{sl}.png"),
+                (_plot_w1_radar, f"w1_radar_{sl}.png"),
                 (_plot_w3_kategorie, f"w3_kategorie_{sl}.png"),
-                (_plot_wK_kolo,      f"wK_kolo_{sl}.png"),
-                (_plot_wb_bilans,    f"wB_bilans_{sl}.png"),
+                (_plot_wK_kolo, f"wK_kolo_{sl}.png"),
+                (_plot_wb_bilans, f"wB_bilans_{sl}.png"),
                 (_plot_we_przyklady, f"wE_przyklady_{sl}.png"),
-                (_plot_wa_akapity,   f"wA_akapity_{sl}.png"),
+                (_plot_wa_akapity, f"wA_akapity_{sl}.png"),
             ]
 
             for fn, fname in plot_fns:
                 try:
                     b64 = fn(analiza, label)
                     if b64:
-                        images.append({
-                            "base64":       b64,
-                            "filename":     fname,
-                            "content_type": "image/png",
-                        })
+                        images.append(
+                            {
+                                "base64": b64,
+                                "filename": fname,
+                                "content_type": "image/png",
+                            }
+                        )
                 except Exception as e:
                     logger.warning("[emocje] Błąd wykresu %s: %s", fname, e)
                 finally:
@@ -533,18 +605,22 @@ def build_emocje_section(body: str, attachments: list = None, test_mode: bool = 
 
             # ── Raporty TXT (te same nazwy co poprzednio) ─────────────────────
             raport = _build_raport_txt(label, analiza, odpowiedz)
-            docs.append({
-                "base64":       base64.b64encode(raport.encode("utf-8")).decode("ascii"),
-                "filename":     f"raport_{sl}.txt",
-                "content_type": "text/plain",
-            })
+            docs.append(
+                {
+                    "base64": base64.b64encode(raport.encode("utf-8")).decode("ascii"),
+                    "filename": f"raport_{sl}.txt",
+                    "content_type": "text/plain",
+                }
+            )
 
             ranking = _build_ranking_txt(label, odpowiedz)
-            docs.append({
-                "base64":       base64.b64encode(ranking.encode("utf-8")).decode("ascii"),
-                "filename":     f"raport2_najwiecej_wyrazow_{sl}.txt",
-                "content_type": "text/plain",
-            })
+            docs.append(
+                {
+                    "base64": base64.b64encode(ranking.encode("utf-8")).decode("ascii"),
+                    "filename": f"raport2_najwiecej_wyrazow_{sl}.txt",
+                    "content_type": "text/plain",
+                }
+            )
 
             reply_html += _build_reply_html(label, analiza, odpowiedz)
 
@@ -557,11 +633,15 @@ def build_emocje_section(body: str, attachments: list = None, test_mode: bool = 
     if not reply_html:
         reply_html = "<p>Nie udało się wygenerować analizy emocjonalnej.</p>"
 
-    logger.info("[emocje] źródeł=%d | wykresów=%d | raportów=%d",
-                len(sources), len(images), len(docs))
+    logger.info(
+        "[emocje] źródeł=%d | wykresów=%d | raportów=%d",
+        len(sources),
+        len(images),
+        len(docs),
+    )
 
     return {
         "reply_html": reply_html,
-        "images":     images,
-        "docs":       docs,
+        "images": images,
+        "docs": docs,
     }

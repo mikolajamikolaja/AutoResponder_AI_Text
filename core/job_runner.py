@@ -155,6 +155,7 @@ def run_pipeline_async(
         ordered_keys = build_section_order(list(tasks.keys()))
         sections_done = []
         combined_results = {}  # Łączymy wszystkie wyniki sekcji
+        emails_sent = 0  # Licznik wysłanych emaili
 
         for section_key in ordered_keys:
             fn = tasks.get(section_key)
@@ -167,6 +168,7 @@ def run_pipeline_async(
                 if on_section_start:
                     on_section_start(section_key)
                 import time as _time
+
                 _t0 = _time.time()
                 result = fn()
                 _duration = _time.time() - _t0
@@ -260,13 +262,12 @@ def run_pipeline_async(
                 except Exception as e:
                     flask_app.logger.error("[async] Błąd smierc sheet: %s", e)
 
-        # ── Wyślij JEDEN połączony email ze wszystkimi sekcjami ───────────────
-        emails_sent = 0
-        if combined_results:
+            # ── Wyślij osobny email dla tej sekcji ──────────────────────────────
             try:
-                _token_refresh(get_token_fn, flask_app, "combined")
-                success = _send_combined_email(
-                    combined_results,
+                _token_refresh(get_token_fn, flask_app, section_key)
+                success = _send_section_email(
+                    section_key,
+                    result,
                     sender,
                     sender_name,
                     previous_subject,
@@ -276,9 +277,12 @@ def run_pipeline_async(
                     logger,
                 )
                 if success:
-                    emails_sent = 1
+                    emails_sent += 1
             except Exception as e:
-                flask_app.logger.error("[async] Błąd wysyłki połączonej: %s", e)
+                flask_app.logger.error("[async] Błąd wysyłki '%s': %s", section_key, e)
+
+        # ── Usuń wysyłkę połączonego emaila ────────────────────────────────────
+        # (Teraz wysyłamy osobne emaile dla każdej sekcji)
 
         if on_pipeline_done:
             on_pipeline_done(combined_results.get("reply_html", ""), emails_sent)
