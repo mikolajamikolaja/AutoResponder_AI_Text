@@ -420,6 +420,55 @@ def _send_section_email(
     return success
 
 
+def _build_attachment_warning(combined_results: dict, actual_attachments: int) -> str:
+    """
+    Buduje ostrzeżenie HTML o brakujących załącznikach, jeśli sekcje sugerują
+    że powinny były wygenerować pliki.
+    """
+    expected_fields = [
+        "pdf",
+        "image",
+        "images",
+        "raport_pdf",
+        "gra_html",
+        "docx_list",
+        "analizier_pdf",
+        "bienes_pdf",
+        "plakat_svg",
+        "video",
+        "videos",
+    ]
+
+    expected_count = 0
+    for key, value in combined_results.items():
+        if key == "reply_html" or key.startswith("log_"):
+            continue
+        if isinstance(value, dict):
+            for field in expected_fields:
+                if field in value and value[field] is not None:
+                    # Sprawdzenie czy ma base64
+                    if isinstance(value[field], dict) and not value[field].get(
+                        "base64"
+                    ):
+                        expected_count += 1
+                    elif isinstance(value[field], str):
+                        expected_count += 1
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and not item.get("base64"):
+                    expected_count += 1
+
+    if expected_count > 0 and actual_attachments < expected_count:
+        warning_html = f"""
+<div style="background-color:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:12px;margin:10px 0;font-size:13px;color:#856404;">
+  <strong>⚠️ Uwaga:</strong> Nie udało się wygenerować {expected_count - actual_attachments} załącznika(ów). 
+  Otrzymujesz odpowiedź tekstową. Jeśli to problem, spróbuj ponownie.
+</div>
+"""
+        return warning_html
+    return ""
+
+
 def _send_combined_email(
     combined_results,
     sender,
@@ -438,6 +487,11 @@ def _send_combined_email(
 
     email_html = combined_results.get("reply_html", "")
     zal = zbierz_fn(combined_results)  # Przekazujemy cały combined_results
+
+    # Dodaj ostrzeżenie o brakujących załącznikach jeśli trzeba
+    attachment_warning = _build_attachment_warning(combined_results, len(zal))
+    if attachment_warning:
+        email_html = attachment_warning + email_html
 
     flask_app.logger.info(
         "[async] COMBINED — email_html len: %d, załączników: %d",

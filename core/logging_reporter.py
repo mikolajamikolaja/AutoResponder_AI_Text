@@ -1,29 +1,19 @@
 """
 core/logging_reporter.py
 
-Moduł do szczegółowego logowania przebiegu programu.
-Tworzy log.txt z przebiegiem rozumowania i decyzji programu.
-Wysyła logi na Google Drive dla programisty.
+Logi trzymane są W PAMIĘCI (bez zapisu lokalnego — Render free ma read-only FS).
+Na końcu sesji (finalize()) log wysyłany jest jako plik .txt do Google Drive
+do folderu DRIVE_FOLDER_ID, przez ten sam OAuth co reszta projektu (drive_utils).
 """
 
 import os
 import json
 import time
-import base64
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-try:
-    from google.auth.transport.requests import Request
-    from google.oauth2.service_account import Credentials
-    from google.api_errors import HttpError
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
-
-    GOOGLE_DRIVE_AVAILABLE = True
-except ImportError:
-    GOOGLE_DRIVE_AVAILABLE = False
+_mod_logger = logging.getLogger(__name__)
 
 
 class ExecutionLogger:
@@ -31,154 +21,43 @@ class ExecutionLogger:
 
     def __init__(
         self,
-        output_dir: str = "logs",
+        output_dir: str = "logs",  # ignorowany — dla kompatybilności
         session_id: str = "",
         upload_to_drive: bool = True,
     ):
-        self.output_dir = output_dir
         self.entries: List[Dict[str, Any]] = []
+        self._log_lines: List[str] = []
         self.start_time = time.time()
         self.start_datetime = datetime.now()
         self.session_id = session_id or self.start_datetime.strftime("%Y%m%d_%H%M%S")
-        self.metadata: Dict[str, Any] = {}  # Metadane sesji
+        self.metadata: Dict[str, Any] = {}
         self.upload_to_drive = upload_to_drive
 
-        # Logger dla debugowania samego systemu logowania
-        self.logger = logging.getLogger(__name__)
+        self._log_lines.append("=" * 80)
+        self._log_lines.append("RAPORT WYKONANIA PROGRAMU")
+        self._log_lines.append(
+            f"Data/Czas: {self.start_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        self._log_lines.append("=" * 80)
+        self._log_lines.append("")
 
-        # Utwórz katalog jeśli nie istnieje
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
+    # ── Kompatybilność z logging.Logger ────────────────────────────────────────
 
-        # Typ nazwy pliku: log_{session_id}.txt
-        self.log_file = os.path.join(output_dir, f"log_{self.session_id}.txt")
-        self._write_header()
+    def info(self, msg: str):
+        _mod_logger.info(msg)
 
-        # Inicjalizuj Google Drive jeśli dostępne
-        self.drive_service = None
-        self.drive_folder_id = None
-        if self.upload_to_drive and GOOGLE_DRIVE_AVAILABLE:
-            self._init_google_drive()
+    def error(self, msg: str):
+        _mod_logger.error(msg)
 
-    def _write_header(self):
-        """Wpisz nagłówek loga."""
-        with open(self.log_file, "w", encoding="utf-8") as f:
-            f.write("=" * 80 + "\n")
-            f.write(f"RAPORT WYKONANIA PROGRAMU\n")
-            f.write(f"Data/Czas: {self.start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write("=" * 80 + "\n\n")
+    def warning(self, msg: str):
+        _mod_logger.warning(msg)
 
-    def _init_google_drive(self):
-        """Inicjalizuj połączenie z Google Drive."""
-        try:
-            # Ścieżka do service account key (zakładamy że jest w env lub pliku)
-            service_account_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
-            if not service_account_key:
-                # Spróbuj przeczytać z pliku
-                key_file = os.path.join(
-                    os.path.dirname(__file__), "..", "service_account.json"
-                )
-                if os.path.exists(key_file):
-                    with open(key_file, "r") as f:
-                        service_account_key = f.read()
+    def debug(self, msg: str):
+        _mod_logger.debug(msg)
 
-            if service_account_key:
-                # Decode base64 jeśli potrzebne
-                try:
-                    service_account_key = base64.b64decode(service_account_key).decode(
-                        "utf-8"
-                    )
-                except:
-                    pass  # Może już jest plain JSON
-
-                creds_dict = json.loads(service_account_key)
-                creds = Credentials.from_service_account_info(
-                    creds_dict, scopes=["https://www.googleapis.com/auth/drive.file"]
-                )
-
-                if creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-
-                self.drive_service = build("drive", "v3", credentials=creds)
-
-                # Znajdź lub utwórz folder "AutoResponder_Logs"
-                self.drive_folder_id = self._get_or_create_logs_folder()
-                self.logger.info("[LOGGER] ✓ Google Drive połączony dla uploadów logów")
-
-        except Exception as e:
-            self.logger.warning(
-                f"[LOGGER] ⚠️ Nie udało się połączyć z Google Drive: {e}"
-            )
-            self.drive_service = None
-
-    def _get_or_create_logs_folder(self):
-        """Znajdź folder AutoResponder_Logs lub go utwórz."""
-        if not self.drive_service:
-            return None
-
-        try:
-            # Szukaj istniejącego folderu
-            query = "name='AutoResponder_Logs' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            results = (
-                self.drive_service.files()
-                .list(q=query, spaces="drive", fields="files(id, name)")
-                .execute()
-            )
-            items = results.get("files", [])
-
-            if items:
-                return items[0]["id"]
-            else:
-                # Utwórz nowy folder
-                folder_metadata = {
-                    "name": "AutoResponder_Logs",
-                    "mimeType": "application/vnd.google-apps.folder",
-                }
-                folder = (
-                    self.drive_service.files()
-                    .create(body=folder_metadata, fields="id")
-                    .execute()
-                )
-                return folder.get("id")
-
-        except Exception as e:
-            self.logger.error(f"[LOGGER] Błąd podczas tworzenia folderu na Drive: {e}")
-            return None
-
-    def upload_log_to_drive(self):
-        """Wyślij plik loga na Google Drive."""
-        if not self.drive_service or not self.drive_folder_id:
-            self.logger.warning("[LOGGER] Google Drive niedostępny - pomijam upload")
-            return False
-
-        try:
-            file_metadata = {
-                "name": f"log_{self.session_id}.txt",
-                "parents": [self.drive_folder_id],
-            }
-
-            media = MediaFileUpload(
-                self.log_file, mimetype="text/plain", resumable=True
-            )
-
-            file = (
-                self.drive_service.files()
-                .create(body=file_metadata, media_body=media, fields="id")
-                .execute()
-            )
-
-            file_id = file.get("id")
-            self.logger.info(
-                f"[LOGGER] ✓ Log wysłany na Google Drive: https://drive.google.com/file/d/{file_id}/view"
-            )
-            return True
-
-        except Exception as e:
-            self.logger.error(f"[LOGGER] ❌ Błąd podczas wysyłania na Drive: {e}")
-            return False
+    # ── Metody logowania domenowego ────────────────────────────────────────────
 
     def log_input(self, sender: str, subject: str, body: str, sender_name: str = ""):
-        """Zarejestruj oryginalne dane wejściowe."""
         self._append_log(
             "INPUT",
             {
@@ -193,17 +72,14 @@ class ExecutionLogger:
         )
 
     def log_variables_detected(self, variables: Dict[str, Any]):
-        """Zarejestruj wykryte zmienne."""
         self._append_log("VARIABLES_DETECTED", variables)
 
     def set_metadata(self, key: str, value: Any):
-        """Ustaw metadaną sesji."""
         self.metadata[key] = value
 
     def log_step(
         self, step_name: str, details: Dict[str, Any] = None, status: str = "running"
     ):
-        """Zarejestruj krok procesu."""
         entry = {
             "step": step_name,
             "status": status,
@@ -222,7 +98,6 @@ class ExecutionLogger:
         success: bool = True,
         error: str = "",
     ):
-        """Zarejestruj wywołanie API."""
         entry = {
             "api": api_name,
             "model": model,
@@ -237,7 +112,6 @@ class ExecutionLogger:
     def log_decision(
         self, decision_name: str, condition: str, result: Any, reason: str = ""
     ):
-        """Zarejestruj decyzję warunkową."""
         self._append_log(
             "DECISION",
             {
@@ -255,7 +129,6 @@ class ExecutionLogger:
         traceback_str: str = "",
         recoverable: bool = True,
     ):
-        """Zarejestruj błąd."""
         self._append_log(
             "ERROR",
             {
@@ -269,11 +142,7 @@ class ExecutionLogger:
     def log_section_result(
         self, section_name: str, success: bool = True, details: Dict[str, Any] = None
     ):
-        """Zarejestruj wynik sekcji responderu."""
-        entry = {
-            "section": section_name,
-            "success": success,
-        }
+        entry = {"section": section_name, "success": success}
         if details:
             entry.update(details)
         self._append_log("SECTION_RESULT", entry)
@@ -286,11 +155,6 @@ class ExecutionLogger:
         tokens_used: int = 0,
         duration_sec: float = 0,
     ):
-        """Zarejestruj pełną odpowiedź AI dla debugowania."""
-        # Skróć bardzo długie odpowiedzi dla czytelności
-        response_preview = response[:2000] + "..." if len(response) > 2000 else response
-        prompt_preview = prompt[:1000] + "..." if len(prompt) > 1000 else prompt
-
         self._append_log(
             "AI_RESPONSE",
             {
@@ -299,14 +163,17 @@ class ExecutionLogger:
                 "response_length": len(response),
                 "tokens_used": tokens_used,
                 "duration_sec": duration_sec,
-                "prompt_preview": prompt_preview,
-                "response_preview": response_preview,
-                "full_response": response,  # Pełna odpowiedź dla analizy
+                "prompt_preview": (
+                    prompt[:1000] + "..." if len(prompt) > 1000 else prompt
+                ),
+                "response_preview": (
+                    response[:2000] + "..." if len(response) > 2000 else response
+                ),
+                "full_response": response,
             },
         )
 
     def log_config_snapshot(self, config_data: Dict[str, Any]):
-        """Zarejestruj snapshot konfiguracji."""
         self._append_log("CONFIG_SNAPSHOT", config_data)
 
     def log_pipeline_step(
@@ -316,28 +183,24 @@ class ExecutionLogger:
         output_data: Any = None,
         metadata: Dict[str, Any] = None,
     ):
-        """Zarejestruj krok pipeline'u z pełnymi danymi."""
         entry = {"step": step_name}
-
         if input_data is not None:
-            if isinstance(input_data, (dict, list)):
-                entry["input"] = input_data
-            else:
-                entry["input"] = str(input_data)[:500]
-
+            entry["input"] = (
+                input_data
+                if isinstance(input_data, (dict, list))
+                else str(input_data)[:500]
+            )
         if output_data is not None:
-            if isinstance(output_data, (dict, list)):
-                entry["output"] = output_data
-            else:
-                entry["output"] = str(output_data)[:500]
-
+            entry["output"] = (
+                output_data
+                if isinstance(output_data, (dict, list))
+                else str(output_data)[:500]
+            )
         if metadata:
             entry.update(metadata)
-
         self._append_log("PIPELINE_STEP", entry)
 
     def log_memory_usage(self):
-        """Zarejestruj użycie pamięci."""
         try:
             import psutil
 
@@ -362,7 +225,6 @@ class ExecutionLogger:
         size_bytes: int = 0,
         error: str = "",
     ):
-        """Zarejestruj operację na pliku."""
         self._append_log(
             "FILE_OPERATION",
             {
@@ -374,115 +236,136 @@ class ExecutionLogger:
             },
         )
 
-    def info(self, msg: str):
-        """Standardowa metoda logowania informacji (kompatybilność z logging.Logger)."""
-        self.logger.info(msg)
-
-    def error(self, msg: str):
-        """Standardowa metoda logowania błędów (kompatybilność z logging.Logger)."""
-        self.logger.error(msg)
-
-    def warning(self, msg: str):
-        """Standardowa metoda logowania ostrzeżeń (kompatybilność z logging.Logger)."""
-        self.logger.warning(msg)
-
-    def debug(self, msg: str):
-        """Standardowa metoda logowania debug (kompatybilność z logging.Logger)."""
-        self.logger.debug(msg)
-
-    def log_debug_info(self, category: str, data: Any, level: str = "DEBUG"):
-        """Ogólna metoda do logowania informacji debugowania."""
-        entry = {"category": category, "level": level}
-
-        if isinstance(data, (dict, list)):
-            entry["data"] = data
-        else:
-            entry["data"] = str(data)
-
-        self._append_log("DEBUG_INFO", entry)
-
-    def log_timing(self, operation: str, duration_sec: float):
-        """Zarejestruj czas trwania operacji."""
+    def log_attachment_generation(
+        self,
+        section: str,
+        attachment_name: str,
+        success: bool,
+        file_size: int = 0,
+        content_type: str = "",
+        error: str = "",
+    ):
         self._append_log(
-            "TIMING",
+            "ATTACHMENT_GENERATION",
             {
-                "operation": operation,
-                "duration_sec": duration_sec,
+                "section": section,
+                "attachment_name": attachment_name,
+                "success": success,
+                "file_size": file_size,
+                "content_type": content_type,
+                "error": error,
             },
         )
 
+    def log_debug_info(self, category: str, data: Any, level: str = "DEBUG"):
+        entry = {"category": category, "level": level}
+        entry["data"] = data if isinstance(data, (dict, list)) else str(data)
+        self._append_log("DEBUG_INFO", entry)
+
+    def log_timing(self, operation: str, duration_sec: float):
+        self._append_log(
+            "TIMING", {"operation": operation, "duration_sec": duration_sec}
+        )
+
+    # ── Wewnętrzne ─────────────────────────────────────────────────────────────
+
     def _append_log(self, log_type: str, data: Dict[str, Any]):
-        """Dodaj wpis do logów."""
         entry = {
             "type": log_type,
             "timestamp": time.time() - self.start_time,
             "data": data,
         }
         self.entries.append(entry)
-        self._write_entry_to_file(entry)
+        self._write_entry_to_buffer(entry)
 
-    def _write_entry_to_file(self, entry: Dict[str, Any]):
-        """Wpisz wpis do pliku."""
-        timestamp_sec = entry.get("timestamp", 0)
-        minutes = int(timestamp_sec) // 60
-        seconds = int(timestamp_sec) % 60
-        time_str = f"[{minutes:02d}:{seconds:02d}]"
+    def _write_entry_to_buffer(self, entry: Dict[str, Any]):
+        ts = entry.get("timestamp", 0)
+        time_str = f"[{int(ts)//60:02d}:{int(ts)%60:02d}]"
+        self._log_lines.append(f"{time_str} {entry['type']}")
+        data = entry.get("data", {})
+        if data:
+            for key, value in data.items():
+                if isinstance(value, (dict, list)):
+                    self._log_lines.append(
+                        f"  {key}: {json.dumps(value, ensure_ascii=False, indent=2)}"
+                    )
+                else:
+                    self._log_lines.append(f"  {key}: {value}")
+        self._log_lines.append("")
 
-        with open(self.log_file, "a", encoding="utf-8") as f:
-            f.write(f"{time_str} {entry['type']}\n")
-            if entry["data"]:
-                for key, value in entry["data"].items():
-                    if isinstance(value, (dict, list)):
-                        f.write(
-                            f"  {key}: {json.dumps(value, ensure_ascii=False, indent=2)}\n"
-                        )
-                    else:
-                        f.write(f"  {key}: {value}\n")
-            f.write("\n")
+    def _build_log_text(self) -> str:
+        total_time = time.time() - self.start_time
+        lines = list(self._log_lines)
+        lines += [
+            "=" * 80,
+            "PODSUMOWANIE",
+            "=" * 80,
+            f"Całkowity czas: {total_time:.2f} sekund",
+            f"Liczba wpisów: {len(self.entries)}",
+        ]
+
+        api_calls = [e for e in self.entries if e["type"] == "API_CALL"]
+        if api_calls:
+            lines.append("\nWywołania API:")
+            for c in api_calls:
+                s = "✓" if c["data"].get("success") else "✗"
+                lines.append(f"  {s} {c['data'].get('api', 'unknown')}")
+
+        errors = [e for e in self.entries if e["type"] == "ERROR"]
+        if errors:
+            lines.append(f"\nBłędy ({len(errors)}):")
+            for e in errors:
+                lines.append(
+                    f"  ✗ {e['data'].get('error_type','?')}: {e['data'].get('message','')}"
+                )
+
+        lines.append("\n" + "=" * 80)
+        return "\n".join(lines)
 
     def finalize(self):
-        """Zakończ i wpisz podsumowanie."""
-        total_time = time.time() - self.start_time
+        """Zakończ sesję i wyślij log jako .txt do DRIVE_FOLDER_ID."""
+        log_text = self._build_log_text()
 
-        with open(self.log_file, "a", encoding="utf-8") as f:
-            f.write("=" * 80 + "\n")
-            f.write("PODSUMOWANIE\n")
-            f.write("=" * 80 + "\n")
-            f.write(f"Całkowity czas: {total_time:.2f} sekund\n")
-            f.write(f"Liczba wpisów: {len(self.entries)}\n")
+        if not self.upload_to_drive:
+            _mod_logger.info("[LOGGER] upload_to_drive=False — pomijam wysyłkę logu")
+            return
 
-            # Policz API calle
-            api_calls = [e for e in self.entries if e["type"] == "API_CALL"]
-            if api_calls:
-                f.write(f"\nWywołania API:\n")
-                for api_call in api_calls:
-                    api_name = api_call["data"].get("api", "unknown")
-                    success = api_call["data"].get("success", False)
-                    status = "✓" if success else "✗"
-                    f.write(f"  {status} {api_name}\n")
+        drive_folder_id = os.getenv("DRIVE_FOLDER_ID", "").strip()
+        if not drive_folder_id:
+            _mod_logger.warning(
+                "[LOGGER] Brak DRIVE_FOLDER_ID — nie wysyłam logu na Drive"
+            )
+            return
 
-            # Policz błędy
-            errors = [e for e in self.entries if e["type"] == "ERROR"]
-            if errors:
-                f.write(f"\nBłędy ({len(errors)}):\n")
-                for error in errors:
-                    error_type = error["data"].get("error_type", "unknown")
-                    message = error["data"].get("message", "")
-                    f.write(f"  ✗ {error_type}: {message}\n")
+        try:
+            from drive_utils import upload_file_to_drive
 
-            f.write("\n" + "=" * 80 + "\n")
+            result = upload_file_to_drive(
+                file_data=log_text.encode("utf-8"),
+                filename=f"log_{self.session_id}.txt",
+                mime_type="text/plain",
+                folder_id=drive_folder_id,
+            )
+            if result:
+                _mod_logger.info(
+                    f"[LOGGER] ✓ Log wysłany na Drive: {result.get('url', result.get('id'))}"
+                )
+            else:
+                _mod_logger.warning("[LOGGER] ⚠️ upload_file_to_drive zwrócił None")
+        except Exception as e:
+            _mod_logger.warning(f"[LOGGER] ⚠️ Błąd wysyłki logu na Drive: {e}")
 
-        # Wyślij log na Google Drive
-        if self.upload_to_drive:
-            self.upload_log_to_drive()
+    def upload_log_to_drive(self):
+        """Alias dla finalize() — kompatybilność wsteczna."""
+        self.finalize()
 
 
-# Global logger instance
+# ── Singleton globalny ─────────────────────────────────────────────────────────
+
 _global_logger: Optional[ExecutionLogger] = None
 
 
 def get_logger() -> ExecutionLogger:
-    """Pobierz globalny logger."""
     global _global_logger
     if _global_logger is None:
         _global_logger = ExecutionLogger()
@@ -492,7 +375,6 @@ def get_logger() -> ExecutionLogger:
 def init_logger(
     output_dir: str = "logs", session_id: str = "", upload_to_drive: bool = True
 ) -> ExecutionLogger:
-    """Inicjalizuj nowy logger."""
     global _global_logger
     _global_logger = ExecutionLogger(output_dir, session_id, upload_to_drive)
     return _global_logger

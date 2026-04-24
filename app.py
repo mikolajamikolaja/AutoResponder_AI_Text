@@ -57,6 +57,7 @@ from smtp_wysylka import wyslij_odpowiedz, zbierz_zalaczniki_z_response
 
 from core.hf_token_manager import hf_tokens
 from core.responder_manager import ResponderManager, PipelineBuilder
+from core.job_runner import run_pipeline_async, build_section_order
 
 # from core.user_manager import UserManager  # Lazy import w webhook
 from core.resource_manager import ResourceManager
@@ -118,25 +119,63 @@ def health_check():
         mem_info = resource_manager.get_memory_usage()
         uptime = datetime.now() - start_time
 
-        # Oblicz uptime w czytelnej formie
         uptime_seconds = int(uptime.total_seconds())
         uptime_str = f"{uptime_seconds // 3600}h {(uptime_seconds % 3600) // 60}m {uptime_seconds % 60}s"
+
+        # Szczegółowe dane pamięci z psutil
+        mem_extra = {}
+        try:
+            import psutil
+
+            proc = psutil.Process()
+            proc_mem = proc.memory_info()
+            sys_mem = psutil.virtual_memory()
+            mem_extra = {
+                "rss_mb": round(proc_mem.rss / 1024 / 1024, 2),
+                "vms_mb": round(proc_mem.vms / 1024 / 1024, 2),
+                "sys_total_mb": round(sys_mem.total / 1024 / 1024, 2),
+                "sys_available_mb": round(sys_mem.available / 1024 / 1024, 2),
+                "sys_used_mb": round(sys_mem.used / 1024 / 1024, 2),
+                "sys_percent": round(sys_mem.percent, 1),
+                "proc_percent": round(proc.memory_percent(), 2),
+                "num_threads": proc.num_threads(),
+            }
+        except Exception:
+            mem_extra = {
+                "rss_mb": round(mem_info.get("rss_mb", 0), 2),
+                "vms_mb": 0,
+                "sys_total_mb": 0,
+                "sys_available_mb": 0,
+                "sys_used_mb": 0,
+                "sys_percent": round(mem_info.get("percent", 0), 1),
+                "proc_percent": round(mem_info.get("percent", 0), 2),
+                "num_threads": 0,
+            }
+
+        all_responders = responder_manager.config.get("responders", {})
+        enabled_responders = [
+            k for k, v in all_responders.items() if v.get("enabled", False)
+        ]
+        disabled_responders = [
+            k for k, v in all_responders.items() if not v.get("enabled", False)
+        ]
 
         status_data = {
             "status": "active",
             "version": "Tyler v6",
             "active_pipelines": _active_pipelines,
-            "memory_usage_mb": round(mem_info["rss_mb"], 2),
-            "memory_percent": round(mem_info["percent"], 2),
+            "memory_usage_mb": mem_extra["rss_mb"],
+            "memory_percent": mem_extra["proc_percent"],
             "uptime": uptime_str,
             "total_emails_processed": total_emails_processed,
             "timestamp": datetime.now().isoformat(),
+            "mem_extra": mem_extra,
             "last_error": (
                 {
                     "time": last_error_time.isoformat() if last_error_time else None,
                     "message": (
-                        last_error_message[:100] + "..."
-                        if last_error_message and len(last_error_message) > 100
+                        last_error_message[:200] + "..."
+                        if last_error_message and len(last_error_message) > 200
                         else last_error_message
                     ),
                 }
@@ -150,127 +189,141 @@ def health_check():
                 "memory_threshold_mb": responder_manager.config.get(
                     "performance", {}
                 ).get("memory_threshold_mb", 400),
-                "enabled_responders": [
-                    k
-                    for k, v in responder_manager.config.get("responders", {}).items()
-                    if v.get("enabled", False)
-                ],
+                "enabled_responders": enabled_responders,
+                "disabled_responders": disabled_responders,
             },
         }
 
-        # Jeśli klient żąda JSON (np. GAS), zwróć JSON
         if request.headers.get("Accept", "").find("application/json") != -1:
             response = make_response(jsonify(status_data), 200)
             return no_cache_response(response)
 
-        # W przeciwnym razie zwróć HTML z meta refresh
-        html_response = f"""
-        <!DOCTYPE html>
-        <html lang="pl">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <meta http-equiv="refresh" content="30">
-            <link rel="icon" type="image/x-icon" href="/favicon.ico">
-            <title>AutoResponder AI Text - Status</title>
-            <style>
-                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }}
-                .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }}
-                h1 {{ color: #333; margin-bottom: 30px; text-align: center; font-size: 2.5em; }}
-                .status-header {{ text-align: center; margin-bottom: 30px; }}
-                .status-badge {{ display: inline-block; padding: 10px 20px; background: #28a745; color: white; border-radius: 25px; font-weight: bold; font-size: 18px; }}
-                .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }}
-                .metric {{ background: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 5px solid #007bff; transition: transform 0.2s; }}
-                .metric:hover {{ transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }}
-                .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }}
-                .metric .value {{ font-size: 28px; font-weight: bold; color: #333; }}
-                .metric .unit {{ font-size: 16px; color: #666; font-weight: normal; }}
-                .active {{ border-left-color: #28a745; }}
-                .warning {{ border-left-color: #ffc107; }}
-                .danger {{ border-left-color: #dc3545; }}
-                .error-section {{ background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 10px; padding: 20px; margin: 20px 0; }}
-                .error-section h3 {{ color: #856404; margin-top: 0; }}
-                .config-section {{ background: #f8f9fa; border-radius: 10px; padding: 20px; margin: 20px 0; }}
-                .config-section h3 {{ margin-top: 0; color: #495057; }}
-                .config-list {{ display: flex; flex-wrap: wrap; gap: 10px; }}
-                .config-tag {{ background: #007bff; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; }}
-                .footer {{ text-align: center; margin-top: 30px; color: #666; font-size: 14px; }}
-                .footer a {{ color: #007bff; text-decoration: none; }}
-                .footer a:hover {{ text-decoration: underline; }}
-                @media (max-width: 768px) {{
-                    .container {{ padding: 20px; }}
-                    h1 {{ font-size: 2em; }}
-                    .metrics-grid {{ grid-template-columns: 1fr; }}
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🤖 AutoResponder AI Text - Tyler v6</h1>
-                <div class="status-header">
-                    <span class="status-badge">System Aktywny</span>
-                </div>
-                
-                <div class="metrics-grid">
-                    <div class="metric active">
-                        <h3>Aktywne Pipeline'y</h3>
-                        <div class="value">{status_data['active_pipelines']}</div>
-                    </div>
-                    <div class="metric">
-                        <h3>Użycie Pamięci</h3>
-                        <div class="value">{status_data['memory_usage_mb']}<span class="unit"> MB</span></div>
-                    </div>
-                    <div class="metric">
-                        <h3>% Pamięci</h3>
-                        <div class="value">{status_data['memory_percent']}<span class="unit"> %</span></div>
-                    </div>
-                    <div class="metric">
-                        <h3>Uptime</h3>
-                        <div class="value">{status_data['uptime']}</div>
-                    </div>
-                    <div class="metric">
-                        <h3>Przetworzone Emaile</h3>
-                        <div class="value">{status_data['total_emails_processed']}</div>
-                    </div>
-                    <div class="metric">
-                        <h3>Maks. Współbieżność</h3>
-                        <div class="value">{status_data['config']['max_concurrent_pipelines']}</div>
-                    </div>
-                </div>
-                
-                {"".join(f'''
-                <div class="error-section">
-                    <h3>⚠️ Ostatni Błąd</h3>
-                    <p><strong>Czas:</strong> {status_data["last_error"]["time"]}</p>
-                    <p><strong>Błąd:</strong> {status_data["last_error"]["message"]}</p>
-                </div>
-                ''' for _ in [None] if status_data.get('last_error'))}
-                
-                <div class="config-section">
-                    <h3>⚙️ Konfiguracja Systemu</h3>
-                    <p><strong>Próg Pamięci:</strong> {status_data['config']['memory_threshold_mb']} MB</p>
-                    <p><strong>Włączone respondery:</strong></p>
-                    <div class="config-list">
-                        {"".join(f'<span class="config-tag">{responder}</span>' for responder in status_data["config"]["enabled_responders"])}
-                    </div>
-                </div>
-                
-                <div class="footer">
-                    <p>Ostatnia aktualizacja: {status_data['timestamp'][:19]} | 
-                    <a href="/status">API JSON</a> | 
-                    Auto-refresh co 30 sekund</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+        mem_color = "#28a745"
+        if mem_extra["sys_percent"] > 80:
+            mem_color = "#dc3545"
+        elif mem_extra["sys_percent"] > 60:
+            mem_color = "#ffc107"
+
+        def responder_rows(names, icon):
+            if not names:
+                return '<div style="color:#999;font-style:italic;padding:4px 0;">brak</div>'
+            return "".join(
+                f'<div style="padding:5px 0;border-bottom:1px solid #f0f0f0;font-family:monospace;font-size:14px;">'
+                + f"{icon} {name}</div>"
+                for name in names
+            )
+
+        enabled_rows = responder_rows(enabled_responders, "\u2705")
+        disabled_rows = responder_rows(disabled_responders, "\u274c")
+
+        error_html = ""
+        if status_data.get("last_error"):
+            err = status_data["last_error"]
+            error_html = (
+                '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:16px;margin:12px 0;">'
+                + '<div style="font-weight:bold;color:#856404;margin-bottom:8px;">\u26a0\ufe0f Ostatni B\u0142\u0105d</div>'
+                + '<div style="font-family:monospace;font-size:13px;color:#333;">'
+                + f"Czas: {err['time']}<br>B\u0142\u0105d: {html.escape(str(err['message']))}"
+                + "</div></div>"
+            )
+
+        # Sekcja wyłączonych responderów — poza f-stringiem
+        disabled_section = ""
+        if disabled_responders:
+            disabled_section = (
+                '<div class="card"><div class="card-title">\u274c Respondery wyłączone ('
+                + str(len(disabled_responders))
+                + ")</div>"
+                + disabled_rows
+                + "</div>"
+            )
+
+        sys_bar_pct = min(mem_extra["sys_percent"], 100)
+        now_str = status_data["timestamp"][:19].replace("T", " ")
+
+        html_response = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="30">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
+<title>Tyler v6 - Status</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:'Segoe UI',sans-serif;background:#f0f2f5;padding:16px;color:#222}}
+.wrap{{max-width:680px;margin:0 auto}}
+h1{{font-size:1.3em;margin-bottom:4px}}
+.badge{{display:inline-block;background:#28a745;color:white;border-radius:10px;padding:2px 12px;font-size:13px;font-weight:bold;margin-bottom:14px}}
+.card{{background:white;border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,0.07)}}
+.card-title{{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px;font-weight:700}}
+.row{{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f2f2f2;font-size:14px}}
+.row:last-child{{border-bottom:none}}
+.lbl{{color:#555}}
+.val{{font-weight:600;font-family:monospace}}
+.bar-wrap{{background:#eee;border-radius:4px;height:7px;margin:10px 0 3px 0}}
+.bar{{height:7px;border-radius:4px;background:{mem_color};width:{sys_bar_pct:.1f}%}}
+.bar-lbl{{font-size:11px;color:#999;text-align:right}}
+.footer{{text-align:center;font-size:12px;color:#bbb;margin-top:14px}}
+.footer a{{color:#999}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div style="margin-bottom:14px">
+<h1>\U0001f916 AutoResponder AI Text \u2014 Tyler v6</h1>
+<span class="badge">System Aktywny</span>
+</div>
+
+<div class="card">
+<div class="card-title">\U0001f4ca Pami\u0119\u0107 procesu (ten serwer)</div>
+<div class="row"><span class="lbl">RAM procesu (RSS)</span><span class="val">{mem_extra["rss_mb"]} MB</span></div>
+<div class="row"><span class="lbl">RAM wirtualna (VMS)</span><span class="val">{mem_extra["vms_mb"]} MB</span></div>
+<div class="row"><span class="lbl">% RAM procesu</span><span class="val">{mem_extra["proc_percent"]} %</span></div>
+<div class="row"><span class="lbl">W\u0105tki procesu</span><span class="val">{mem_extra["num_threads"]}</span></div>
+</div>
+
+<div class="card">
+<div class="card-title">\U0001f5a5\ufe0f Pami\u0119\u0107 systemu (kontener Render)</div>
+<div class="row"><span class="lbl">Ca\u0142kowita RAM</span><span class="val">{mem_extra["sys_total_mb"]} MB</span></div>
+<div class="row"><span class="lbl">U\u017cywana RAM</span><span class="val">{mem_extra["sys_used_mb"]} MB</span></div>
+<div class="row"><span class="lbl">Dost\u0119pna RAM</span><span class="val">{mem_extra["sys_available_mb"]} MB</span></div>
+<div class="bar-wrap"><div class="bar"></div></div>
+<div class="bar-lbl">Zaj\u0119te: {mem_extra["sys_percent"]} % RAM kontenera</div>
+</div>
+
+<div class="card">
+<div class="card-title">\u2699\ufe0f Pipeline i dzia\u0142anie</div>
+<div class="row"><span class="lbl">Aktywne pipeline'y</span><span class="val">{status_data["active_pipelines"]}</span></div>
+<div class="row"><span class="lbl">Maks. wsp\u00f3\u0142bie\u017cno\u015b\u0107</span><span class="val">{status_data["config"]["max_concurrent_pipelines"]}</span></div>
+<div class="row"><span class="lbl">Pr\u00f3g RAM (limit)</span><span class="val">{status_data["config"]["memory_threshold_mb"]} MB</span></div>
+<div class="row"><span class="lbl">Przetworzone emaile</span><span class="val">{status_data["total_emails_processed"]}</span></div>
+<div class="row"><span class="lbl">Uptime</span><span class="val">{status_data["uptime"]}</span></div>
+</div>
+
+<div class="card">
+<div class="card-title">\u2705 Respondery w\u0142\u0105czone ({len(enabled_responders)})</div>
+{enabled_rows}
+</div>
+
+{disabled_section}
+
+{error_html}
+
+<div class="footer">
+Ostatnia aktualizacja: {now_str} &nbsp;|&nbsp; <a href="/status">JSON API</a> &nbsp;|&nbsp; Auto-refresh co 30s
+</div>
+</div>
+</body>
+</html>"""
+
         response = make_response(html_response, 200)
         response.headers["Content-Type"] = "text/html; charset=utf-8"
         return no_cache_response(response)
 
     except Exception as e:
         log_error(str(e))
-        return f"Błąd systemu: {str(e)}", 500
+        return f"B\u0142\u0105d systemu: {str(e)}", 500
 
 
 # ── Szczegółowy status systemu ──────────────────────────────────────────────

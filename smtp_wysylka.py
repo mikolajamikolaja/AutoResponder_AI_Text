@@ -47,33 +47,57 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 # ── KONFIGURACJA ──────────────────────────────────────────────────────────────
-SMTP_USER      = os.getenv("SMTP_USER", "")
+SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Bot")
 
 # Metoda A — Service Account
 _SA_JSON_STR = os.getenv("GMAIL_SERVICE_ACCOUNT_JSON", "").strip()
 
-_GMAIL_SERVICE_ACCOUNT_TYPE = os.getenv("GMAIL_SERVICE_ACCOUNT_TYPE", "service_account").strip()
-_GMAIL_SERVICE_ACCOUNT_PROJECT_ID = os.getenv("GMAIL_SERVICE_ACCOUNT_PROJECT_ID", "").strip()
-_GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID = os.getenv("GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID", "").strip()
-_GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY = os.getenv("GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY", "").replace("\\n", "\n").strip()
-_GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL = os.getenv("GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL", "").strip()
-_GMAIL_SERVICE_ACCOUNT_CLIENT_ID = os.getenv("GMAIL_SERVICE_ACCOUNT_CLIENT_ID", "").strip()
-_GMAIL_SERVICE_ACCOUNT_AUTH_URI = os.getenv("GMAIL_SERVICE_ACCOUNT_AUTH_URI", "https://accounts.google.com/o/oauth2/auth").strip()
-_GMAIL_SERVICE_ACCOUNT_TOKEN_URI = os.getenv("GMAIL_SERVICE_ACCOUNT_TOKEN_URI", "https://oauth2.googleapis.com/token").strip()
-_GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL = os.getenv("GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs").strip()
-_GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL = os.getenv("GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL", "").strip()
+_GMAIL_SERVICE_ACCOUNT_TYPE = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_TYPE", "service_account"
+).strip()
+_GMAIL_SERVICE_ACCOUNT_PROJECT_ID = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_PROJECT_ID", ""
+).strip()
+_GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID", ""
+).strip()
+_GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY = (
+    os.getenv("GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY", "").replace("\\n", "\n").strip()
+)
+_GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL", ""
+).strip()
+_GMAIL_SERVICE_ACCOUNT_CLIENT_ID = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_CLIENT_ID", ""
+).strip()
+_GMAIL_SERVICE_ACCOUNT_AUTH_URI = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"
+).strip()
+_GMAIL_SERVICE_ACCOUNT_TOKEN_URI = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_TOKEN_URI", "https://oauth2.googleapis.com/token"
+).strip()
+_GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL",
+    "https://www.googleapis.com/oauth2/v1/certs",
+).strip()
+_GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL = os.getenv(
+    "GMAIL_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL", ""
+).strip()
 
 # Metoda B — OAuth2 Refresh Token
-_CLIENT_ID     = os.getenv("GMAIL_CLIENT_ID", "")
+_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID", "")
 _CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET", "")
 _REFRESH_TOKEN = os.getenv("GMAIL_REFRESH_TOKEN", "")
 
-GMAIL_SEND_URL = f"https://gmail.googleapis.com/gmail/v1/users/{SMTP_USER}/messages/send"
-GMAIL_SCOPES   = ["https://www.googleapis.com/auth/gmail.send"]
+GMAIL_SEND_URL = (
+    f"https://gmail.googleapis.com/gmail/v1/users/{SMTP_USER}/messages/send"
+)
+GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
 # ── AUTORYZACJA ───────────────────────────────────────────────────────────────
+
 
 def _load_gmail_service_account():
     if _SA_JSON_STR:
@@ -83,7 +107,10 @@ def _load_gmail_service_account():
             logger.error("[gmail] Nieprawidłowe GMAIL_SERVICE_ACCOUNT_JSON")
             return None
 
-    if not _GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY or not _GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL:
+    if (
+        not _GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY
+        or not _GMAIL_SERVICE_ACCOUNT_CLIENT_EMAIL
+    ):
         return None
 
     return {
@@ -113,19 +140,19 @@ def _get_access_token_service_account() -> Optional[str]:
 
         now = int(time.time())
         payload = {
-            "iss":   sa["client_email"],
-            "sub":   SMTP_USER,
+            "iss": sa["client_email"],
+            "sub": SMTP_USER,
             "scope": " ".join(GMAIL_SCOPES),
-            "aud":   "https://oauth2.googleapis.com/token",
-            "iat":   now,
-            "exp":   now + 3600,
+            "aud": "https://oauth2.googleapis.com/token",
+            "iat": now,
+            "exp": now + 3600,
         }
         token = jwt.encode(payload, sa["private_key"], algorithm="RS256")
-        resp  = requests.post(
+        resp = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
                 "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                "assertion":  token,
+                "assertion": token,
             },
             timeout=15,
         )
@@ -142,10 +169,10 @@ def _get_access_token_refresh() -> Optional[str]:
         resp = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
-                "client_id":     _CLIENT_ID,
+                "client_id": _CLIENT_ID,
                 "client_secret": _CLIENT_SECRET,
                 "refresh_token": _REFRESH_TOKEN,
-                "grant_type":    "refresh_token",
+                "grant_type": "refresh_token",
             },
             timeout=15,
         )
@@ -170,6 +197,7 @@ def _get_access_token() -> Optional[str]:
 
 # ── WYSYŁKA ───────────────────────────────────────────────────────────────────
 
+
 def wyslij_odpowiedz(
     to_email: str,
     to_name: str,
@@ -187,42 +215,58 @@ def wyslij_odpowiedz(
     if admin_email and to_email.strip().lower() == admin_email:
         logger.warning(
             "[gmail] 🔒 BLOKADA WYSYŁKI: Nie wysyłam do ADMIN_EMAIL (%s) — ochrona przed pętlą",
-            to_email
+            to_email,
         )
         return False
 
     # ── Buduj wiadomość MIME ──────────────────────────────────────────────────
     msg = MIMEMultipart("mixed")
-    msg["From"]     = formataddr((SMTP_FROM_NAME, SMTP_USER))
-    msg["To"]       = formataddr((to_name, to_email)) if to_name else to_email
-    msg["Subject"]  = subject
+    msg["From"] = formataddr((SMTP_FROM_NAME, SMTP_USER))
+    msg["To"] = formataddr((to_name, to_email)) if to_name else to_email
+    msg["Subject"] = subject
     msg["Reply-To"] = reply_to or SMTP_USER
 
     msg.attach(MIMEText(html_body or "<p>Brak treści</p>", "html", "utf-8"))
 
     attached_count = 0
-    for item in (zalaczniki or []):
+    attachment_errors = []
+    for item in zalaczniki or []:
         if not item or not item.get("base64"):
+            if item and item.get("filename"):
+                attachment_errors.append(f"{item.get('filename')} (brak base64)")
             continue
         try:
-            raw        = base64.b64decode(item["base64"])
-            ctype      = item.get("content_type", "application/octet-stream")
+            raw = base64.b64decode(item["base64"])
+            ctype = item.get("content_type", "application/octet-stream")
             main_type, sub_type = ctype.split("/", 1)
             part = MIMEBase(main_type, sub_type)
             part.set_payload(raw)
             encoders.encode_base64(part)
             part.add_header(
-                "Content-Disposition", "attachment",
-                filename=item.get("filename", "zalacznik")
+                "Content-Disposition",
+                "attachment",
+                filename=item.get("filename", "zalacznik"),
             )
             msg.attach(part)
             attached_count += 1
+            logger.debug(
+                "[gmail] ✓ Załącznik: %s (%s)", item.get("filename", "?"), len(raw)
+            )
         except Exception as e:
-            logger.warning("[gmail] Błąd załącznika: %s", e)
+            filename = item.get("filename", "unknown")
+            attachment_errors.append(f"{filename} ({str(e)[:50]})")
+            logger.warning("[gmail] ✗ Błąd załącznika %s: %s", filename, e)
+
+    if attachment_errors:
+        logger.warning(
+            "[gmail] Błędy przy załącznikach (%d): %s",
+            len(attachment_errors),
+            "; ".join(attachment_errors[:3]),
+        )
 
     # ── Kodowanie do base64url (wymagane przez Gmail API) ─────────────────────
     raw_bytes = msg.as_bytes()
-    raw_b64   = base64.urlsafe_b64encode(raw_bytes).decode("ascii")
+    raw_b64 = base64.urlsafe_b64encode(raw_bytes).decode("ascii")
 
     # ── Pobierz token i wyślij ────────────────────────────────────────────────
     access_token = _get_access_token()
@@ -235,7 +279,7 @@ def wyslij_odpowiedz(
             GMAIL_SEND_URL,
             headers={
                 "Authorization": f"Bearer {access_token}",
-                "Content-Type":  "application/json",
+                "Content-Type": "application/json",
             },
             json={"raw": raw_b64},
             timeout=30,
@@ -254,6 +298,7 @@ def wyslij_odpowiedz(
 
 
 # ── ZBIERANIE ZAŁĄCZNIKÓW — PEŁNA WERSJA ─────────────────────────────────────
+
 
 def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
     """
@@ -277,49 +322,90 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
     """
     result: List[dict] = []
     seen_filenames: set = set()
+    missing_attachments: List[dict] = []  # Śledź brakujące base64
 
     # TOP-LEVEL FIELDS — bezpośrednio w response_data (nie wewnątrz sekcji)
     TOP_LEVEL_FIELDS = ["log_svg", "log_txt"]
 
     # Pola pojedyncze (każde to dict z kluczem "base64")
     SINGLE_FIELDS = [
-        "pdf", "emoticon", "cv_pdf", "log_psych",
-        "psych_photo_1", "psych_photo_2",
-        "ankieta_html", "ankieta_pdf", "horoskop_pdf",
-        "karta_rpg_pdf", "raport_pdf", "debug_txt",
-        "explanation_txt", "plakat_svg", "gra_html",
-        "image", "image2", "prompt1_txt", "prompt2_txt",
+        "pdf",
+        "emoticon",
+        "cv_pdf",
+        "log_psych",
+        "psych_photo_1",
+        "psych_photo_2",
+        "ankieta_html",
+        "ankieta_pdf",
+        "horoskop_pdf",
+        "karta_rpg_pdf",
+        "raport_pdf",
+        "debug_txt",
+        "explanation_txt",
+        "plakat_svg",
+        "gra_html",
+        "image",
+        "image2",
+        "prompt1_txt",
+        "prompt2_txt",
     ]
 
     # Pola listowe (każde to lista dict-ów z kluczem "base64")
     LIST_FIELDS = [
-        "triptych", "images", "videos", "docs", "docx_list",
+        "triptych",
+        "images",
+        "videos",
+        "docs",
+        "docx_list",
     ]
 
-    def _dodaj(item: object) -> None:
+    def _dodaj(item: object, field_name: str = "", section_name: str = "") -> None:
         """Dodaje jeden obiekt-załącznik do listy wynikowej (jeśli ma base64)."""
         if not isinstance(item, dict):
             return
-        if not item.get("base64"):
-            return
+
         filename = item.get("filename") or "zalacznik"
+
+        if not item.get("base64"):
+            # Zarejestruj brakujący base64
+            missing_attachments.append(
+                {
+                    "filename": filename,
+                    "field": field_name,
+                    "section": section_name,
+                    "reason": "missing_base64",
+                }
+            )
+            logger.debug(
+                "[zbierz] BRAKUJE base64: %s (sekcja: %s, pole: %s)",
+                filename,
+                section_name,
+                field_name,
+            )
+            return
+
         # Unikaj duplikatów (ten sam plik w wielu sekcjach)
         if filename in seen_filenames:
             logger.debug("[zbierz] Pomijam duplikat: %s", filename)
             return
         seen_filenames.add(filename)
-        result.append({
-            "base64":       item["base64"],
-            "content_type": item.get("content_type", "application/octet-stream"),
-            "filename":     filename,
-        })
-        logger.debug("[zbierz] Dodano załącznik: %s (%s)",
-                     filename, item.get("content_type", "?"))
+        result.append(
+            {
+                "base64": item["base64"],
+                "content_type": item.get("content_type", "application/octet-stream"),
+                "filename": filename,
+            }
+        )
+        logger.debug(
+            "[zbierz] Dodano załącznik: %s (%s)",
+            filename,
+            item.get("content_type", "?"),
+        )
 
     # ── Top-level fields (np. log_svg z app.py) ──────────────────────────────
     for field in TOP_LEVEL_FIELDS:
         if field in response_data:
-            _dodaj(response_data[field])
+            _dodaj(response_data[field], field, "top-level")
 
     # ── Sekcje respondery (zwykly, biznes, emocje, etc.) ────────────────────
     for section_key, section_val in response_data.items():
@@ -331,15 +417,38 @@ def zbierz_zalaczniki_z_response(response_data: dict) -> List[dict]:
 
         # Pola pojedyncze w sekcji
         for field in SINGLE_FIELDS:
-            _dodaj(section_val.get(field))
+            item = section_val.get(field)
+            if item is not None:  # Jeśli pole istnieje, nawet jeśli None
+                _dodaj(item, field, section_key)
 
         # Pola listowe w sekcji
         for field in LIST_FIELDS:
             arr = section_val.get(field)
             if isinstance(arr, list):
-                for element in arr:
-                    _dodaj(element)
+                for idx, element in enumerate(arr):
+                    _dodaj(element, f"{field}[{idx}]", section_key)
 
-    logger.info("[zbierz] Łącznie załączników: %d (z %d sekcji)",
-                len(result), len(response_data))
+    logger.info(
+        "[zbierz] Łącznie załączników: %d (z %d sekcji), brakuje: %d",
+        len(result),
+        len(response_data),
+        len(missing_attachments),
+    )
+
+    # Loguj brakujące załączniki po kilka
+    if missing_attachments:
+        logger.warning(
+            "[zbierz] OSTRZEŻENIE: Brakuje base64 dla %d plików:",
+            len(missing_attachments),
+        )
+        for att in missing_attachments[:10]:  # Pokaż pierwsze 10
+            logger.warning(
+                "  - %s (sekcja: %s, pole: %s)",
+                att["filename"],
+                att["section"],
+                att["field"],
+            )
+        if len(missing_attachments) > 10:
+            logger.warning("  ... i %d więcej", len(missing_attachments) - 10)
+
     return result
