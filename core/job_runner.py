@@ -212,6 +212,11 @@ def run_pipeline_async(
 
             # ── Łączymy wyniki wszystkich sekcji ───────────────────────────────
             if isinstance(result, dict):
+                # Zachowaj wynik pod kluczem sekcji — zbierz_zalaczniki_z_response
+                # iteruje po combined_results szukając sekcji jako zagnieżdżonych dict-ów
+                combined_results[section_key] = {
+                    k: v for k, v in result.items() if k != "reply_html"
+                }
                 for key, value in result.items():
                     if key == "reply_html":
                         # Łączymy reply_html z różnych sekcji
