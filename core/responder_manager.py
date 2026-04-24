@@ -6,10 +6,14 @@ Centralne zarządzanie responderami i budowaniem pipeline'u.
 """
 
 import json
+import logging
 import os
 from typing import Dict, List, Optional, Any
 
 from core.logging_reporter import get_logger
+
+# Standardowy logger modułu — działa zawsze, niezależnie od ExecutionLogger
+_log = logging.getLogger(__name__)
 
 
 class ResponderManager:
@@ -59,17 +63,17 @@ class ResponderManager:
                         f"Responder {responder_name} 'enabled' must be boolean"
                     )
 
-            self.logger.info("Config validation passed")
+            _log.info("Config validation passed")
             return config
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid JSON in config file: {e}")
+            _log.error(f"Invalid JSON in config file: {e}")
             raise RuntimeError(f"Config JSON parse error: {e}")
         except ValueError as e:
-            self.logger.error(f"Config validation failed: {e}")
+            _log.error(f"Config validation failed: {e}")
             raise RuntimeError(f"Config validation failed: {e}")
         except Exception as e:
-            self.logger.error(f"Error loading config: {e}")
+            _log.error(f"Error loading config: {e}")
             raise RuntimeError(f"Config load error: {e}")
 
     def get_responder_config(self, responder_name: str) -> Optional[Dict[str, Any]]:
