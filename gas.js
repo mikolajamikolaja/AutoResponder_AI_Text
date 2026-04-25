@@ -179,7 +179,8 @@ function _getKnownSenders() {
   try {
     var sheetId = PropertiesService.getScriptProperties().getProperty("HISTORY_SHEET_ID");
     if (!sheetId) return [];
-    var sheet   = SpreadsheetApp.openById(sheetId).getSheets()[0];
+    var ss      = SpreadsheetApp.openById(sheetId);
+    var sheet   = ss.getSheetByName("Historia") || ss.getSheets()[0];
     var lastRow = sheet.getLastRow();
     if (lastRow < 2) return [];
     return sheet.getRange(2, 2, lastRow - 1, 1).getValues()
@@ -1880,7 +1881,8 @@ function _checkUnprocessedMessages(webhookUrl) {
 
     var retryIsBiz          = RETRY_BIZ_LIST.indexOf(retryFromEmail) !== -1;
     var retryIsAllowed      = RETRY_ALLOWED.indexOf(retryFromEmail) !== -1;
-    var retryIsKnownSender  = retryIsAllowed || retryIsBiz;
+    var retryKnownSenders   = _getKnownSenders();
+    var retryIsKnownSender  = retryIsAllowed || retryIsBiz || retryKnownSenders.indexOf(retryFromEmail) !== -1;
     var retryContainsKeyword  = _containsAny(retrySearchText, RETRY_KEYWORDS);
     var retryContainsKeyword1 = _containsAny(retrySearchText, RETRY_KEYWORDS1);
     var retryContainsKeyword2 = _containsAny(retrySearchText, RETRY_KEYWORDS2);

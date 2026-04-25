@@ -401,6 +401,10 @@ _pipeline_state: dict = {
 }
 _pipeline_state_lock = _threading.Lock()
 
+# ── Deduplikacja message_id — zapobiega podwójnemu wysłaniu przy retry GAS ──
+_processed_message_ids: set = set()
+_processed_ids_lock = _threading.Lock()
+
 
 def _pipeline_start():
     global _active_pipelines
@@ -689,6 +693,16 @@ def webhook():
         save_to_drive = data.get("save_to_drive", True)
         skip_save_to_history = data.get("skip_save_to_history", False)
 
+        # ── Deduplikacja — odrzucamy powtórne wysłanie tego samego message_id ──
+        if message_id:
+            with _processed_ids_lock:
+                if message_id in _processed_message_ids:
+                    app.logger.warning("[webhook] Duplikat message_id=%s — pomijam", message_id)
+                    return jsonify({"accepted": True, "duplicate": True, "message_id": message_id}), 200
+                _processed_message_ids.add(message_id)
+                if len(_processed_message_ids) > 500:
+                    _processed_message_ids.clear()
+
         if not sender:
             app.logger.warning("[webhook] Brak nadawcy (sender)")
             return jsonify({"accepted": False, "error": "Brak nadawcy"}), 400
@@ -938,22 +952,27 @@ def debug_pipeline():
             f'{content_html}</div>'
         )
 
-    def _preblock(text, max_chars=600):
+    def _preblock(text):
+        """Wyświetla czysty tekst (np. treść wiadomości) — bez limitu znaków."""
         if not text:
             return '<span style="color:#aaa">—</span>'
-        s = str(text)
-        truncated = ""
-        if len(s) > max_chars:
-            s = s[:max_chars]
-            truncated = f'<div style="color:#aaa;font-size:11px;margin-top:4px">… (skrócono do {max_chars} znaków)</div>'
-        # Strip HTML tags for body preview
-        clean = re.sub(r'<[^>]+>', ' ', s)
+        clean = re.sub(r'<[^>]+>', ' ', str(text))
         clean = re.sub(r'\s+', ' ', clean).strip()
         return (
             f'<pre style="background:#f8f8f8;border-radius:6px;padding:10px;'
             f'font-size:12px;white-space:pre-wrap;word-break:break-word;'
-            f'max-height:200px;overflow-y:auto;margin:6px 0 0 0">{html.escape(clean)}</pre>'
-            + truncated
+            f'max-height:300px;overflow-y:auto;margin:6px 0 0 0">{html.escape(clean)}</pre>'
+        )
+
+    def _html_preview(html_content):
+        """Wyświetla odpowiedź HTML jako iframe — czytelny podgląd dla człowieka."""
+        if not html_content:
+            return '<span style="color:#aaa">—</span>'
+        escaped = html.escape(str(html_content))
+        return (
+            f'<iframe srcdoc="{escaped}" '
+            f'style="width:100%;height:300px;border:1px solid #ddd;border-radius:6px;'
+            f'background:#fff;margin:6px 0 0 0;" sandbox="allow-same-origin"></iframe>'
         )
 
     # ── Główna karta: status pipeline ────────────────────────────────────────
@@ -972,7 +991,7 @@ def debug_pipeline():
     main_card = _card("Stan pipeline", main_rows, "📋")
 
     # ── Treść wiadomości wejściowej ───────────────────────────────────────────
-    body_card = _card("Treść wiadomości (body)", _preblock(state.get("body"), 800), "📨")
+    body_card = _card("Treść wiadomości (body)", _preblock(state.get("body")), "📨")
 
     # ── Sekcje ────────────────────────────────────────────────────────────────
     sections_html = ""
@@ -993,14 +1012,14 @@ def debug_pipeline():
         if reply:
             sec_rows += (
                 '<div style="margin-top:8px;font-size:12px;color:#888;font-weight:700">Podgląd odpowiedzi:</div>'
-                + _preblock(reply, 600)
+                + _html_preview(reply)
             )
 
         sections_html += _card(f"Sekcja: {sec_name}", sec_rows, "🔧")
 
     # ── Podgląd combined_reply_html ───────────────────────────────────────────
     combined = state.get("combined_reply_html") or ""
-    combined_card = _card("Połączona odpowiedź (combined_reply_html)", _preblock(combined, 800), "📤")
+    combined_card = _card("Połączona odpowiedź (combined_reply_html)", _html_preview(combined), "📤")
 
     # ── Historia ──────────────────────────────────────────────────────────────
     history_rows = ""
