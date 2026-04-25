@@ -298,6 +298,32 @@ def _repair_truncated_json(raw: str) -> str:
     return raw
 
 
+# Wymagane klucze dla każdej sekcji — jeśli brakuje po naprawie, logujemy WARNING
+_REQUIRED_KEYS: dict[str, list[str]] = {
+    "pacjent":               ["dane_pacjenta", "powod_przyjecia"],
+    "diagnozy":              ["diagnoza_wstepna", "objawy"],
+    "wypis":                 ["wypis"],
+    "zalecenia_7a":          ["zalecenia_tylera", "rokowanie"],
+    "zalecenia_7b":          ["notatki_pielegniarek"],
+    "zalecenia_7c":          ["notatki_sprzataczki", "incydenty_specjalne"],
+    "deepseek_completeness": [],  # merge dict — nie walidujemy
+}
+
+
+def _check_required_keys(result: object, section: str) -> None:
+    """Loguje WARNING jeśli w dict brakuje wymaganych kluczy dla danej sekcji."""
+    required = _REQUIRED_KEYS.get(section, [])
+    if not required or not isinstance(result, dict):
+        return
+    missing = [k for k in required if k not in result]
+    if missing:
+        current_app.logger.warning(
+            "[psych-raport] JSON brakujące pola sekcja=%s: %s",
+            section,
+            missing,
+        )
+
+
 def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     if not raw:
         return None
@@ -309,7 +335,9 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     try:
         result = json.loads(clean)
         current_app.logger.info("[psych-raport] JSON OK sekcja=%s", section)
-        return _wrap_section_list(section, result)
+        result = _wrap_section_list(section, result)
+        _check_required_keys(result, section)
+        return result
     except json.JSONDecodeError as e:
         current_app.logger.warning(
             "[psych-raport] JSON błąd sekcja=%s: %s — próba naprawy uciętego JSON",
@@ -325,7 +353,9 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
             section,
             len(extracted_text or ""),
         )
-        return _wrap_section_list(section, extracted)
+        result = _wrap_section_list(section, extracted)
+        _check_required_keys(result, section)
+        return result
 
     repaired = _repair_truncated_json(clean)
     try:
@@ -334,7 +364,9 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
             "[psych-raport] JSON naprawiony sekcja=%s (ucięty output)",
             section,
         )
-        return _wrap_section_list(section, result)
+        result = _wrap_section_list(section, result)
+        _check_required_keys(result, section)
+        return result
     except Exception as repair_e:
         extracted, extracted_text = _extract_best_json(repaired)
         if extracted is not None:
@@ -343,7 +375,9 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
                 section,
                 len(extracted_text or ""),
             )
-            return _wrap_section_list(section, extracted)
+            result = _wrap_section_list(section, extracted)
+            _check_required_keys(result, section)
+            return result
 
     raw_len = len(raw) if raw else 0
     current_app.logger.warning(
@@ -519,7 +553,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SENDER_NAME (priorytet dla imienia): {sender_name or '(brak)'}\n\n"
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
-        f"Zwróć TYLKO czysty JSON."
+        f"LIMIT DŁUGOŚCI: Każde pole tekstowe maksymalnie 300 znaków. Zwróć TYLKO czysty JSON."
     )
     raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=3000)
     result = _parse_json_safe(raw, "pacjent")
@@ -671,9 +705,9 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"DATA WYPISU (dzień 15): {data_wypisu}\n\n"
         f"SCHEMAT JSON:\n{schema}\n\n"
-        f"Zwróć TYLKO czysty JSON."
+        f"LIMIT DŁUGOŚCI: Każde pole tekstowe maksymalnie 300 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=2500)
     result = _parse_json_safe(raw, "wypis")
     if not result or not isinstance(result, dict):
         return {
@@ -709,10 +743,8 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
             else ""
         )
         + f"SCHEMAT JSON:\n{schema}\n\n"
-        f"Zwróć TYLKO czysty JSON."
+        f"LIMIT DŁUGOŚCI: Każde pole tekstowe maksymalnie 300 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
-    result = _parse_json_safe(raw, "diagnozy")
     if not result or not isinstance(result, dict):
         return {
             "diagnoza_wstepna": {
@@ -817,9 +849,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
         f"nawiązuje do KONKRETNYCH zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
         f"KAŻDA notatka musi nawiązywać do INNEGO zdarzenia i INNEGO dnia.\n"
-        f"Zwróć TYLKO czysty JSON."
+        f"LIMIT DŁUGOŚCI: Pole tresc maksymalnie 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER, max_tokens=1500)
+    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER, max_tokens=2500)
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b")
     if not isinstance(result_7b, dict):
         result_7b = {}
@@ -848,9 +880,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"incydenty_specjalne: DOKŁADNIE 2 incydenty, każdy 4-5 zdań, NAPRAWDĘ absurdalnych i śmiesznych, "
         f"nawiązujących do emaila. KAŻDY incydent INNY motyw. "
         f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
-        f"Zwróć TYLKO czysty JSON."
+        f"LIMIT DŁUGOŚCI: Pole tresc/opis maksymalnie 400 znaków na obiekt. Zwróć TYLKO czysty JSON."
     )
-    raw_7c = call_deepseek(system_7, user_7c, MODEL_TYLER, max_tokens=1500)
+    raw_7c = call_deepseek(system_7, user_7c, MODEL_TYLER, max_tokens=2500)
     result_7c = _parse_json_safe(raw_7c, "zalecenia_7c")
     if not isinstance(result_7c, dict):
         result_7c = {}
@@ -995,7 +1027,7 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
         "[psych-raport] DeepSeek completeness check START (slim=%d kluczy)",
         len(raport_slim),
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=2500)
     if not raw:
         current_app.logger.warning(
             "[psych-raport] DeepSeek completeness → brak odpowiedzi, skip"
