@@ -70,36 +70,108 @@ def _fix_unicode_escapes(raw: str) -> str:
     return raw
 
 
+def _extract_python_dicts(raw: str) -> list | None:
+    """
+    Wyciąga jeden lub wiele Python dict-ów z surowego tekstu używając
+    skanowania nawiasów (bezpieczniejsze niż regex dla zagnieżdżonych cudzysłowów).
+    Zwraca listę sparsowanych obiektów lub None jeśli nic nie znaleziono.
+
+    Obsługuje główny przypadek: DeepSeek zwraca N osobnych Python dict-ów
+    jeden pod drugim zamiast JSON array.
+    """
+    results = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        # Znajdź następne '{'
+        while i < n and raw[i] != '{':
+            i += 1
+        if i >= n:
+            break
+        # Skanuj do pasującego '}' z obsługą stringów i zagnieżdżeń
+        depth = 0
+        in_str = False
+        str_char = None
+        escape = False
+        start = i
+        j = i
+        while j < n:
+            ch = raw[j]
+            if escape:
+                escape = False
+                j += 1
+                continue
+            if ch == '\\' and in_str:
+                escape = True
+                j += 1
+                continue
+            if not in_str:
+                if ch in ('"', "'"):
+                    in_str = True
+                    str_char = ch
+                elif ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        fragment = raw[start : j + 1]
+                        try:
+                            import ast as _ast
+                            obj = _ast.literal_eval(fragment)
+                            if isinstance(obj, dict):
+                                results.append(obj)
+                        except Exception:
+                            pass
+                        i = j + 1
+                        break
+            else:
+                if ch == str_char:
+                    in_str = False
+            j += 1
+        else:
+            break
+    return results if results else None
+
+
 def _convert_python_dict_to_json(raw: str) -> str:
     """
-    Konwertuje odpowiedź DeepSeek w formacie Python dict (apostrofy) na JSON.
-    Obsługuje: {'klucz': 'wartość'} → {"klucz": "wartość"}
-    Ostrożnie — zamienia tylko apostrofy poza stringami podwójnymi.
+    Konwertuje odpowiedź DeepSeek w formacie Python dict/dicts na JSON.
+    Obsługuje:
+      - pojedynczy dict: {'k': 'v'} → {"k": "v"}
+      - wiele dict-ów pod sobą: {'k':1}\n{'k':2} → [{"k":1},{"k":2}]
+    Heurystyka: jeśli nie ma apostrofów jako delimitatorów stringów — zwraca raw.
     """
-    # Szybki test: jeśli są podwójne cudzysłowy i brak apostrofów jako delimitatorów — OK
     stripped = raw.strip()
-    # Heurystyka: Python dict zaczyna się od { i ma klucze w apostrofach
+    if not stripped:
+        return raw
+
+    # Szybki test: musi zaczynać się od { lub [
     if not (stripped.startswith("{") or stripped.startswith("[")):
         return raw
-    # Sprawdź czy mamy apostrofy jako string delimitatory (Python dict)
-    if "': '" not in raw and "': \"" not in raw and "\": '" not in raw:
-        return raw
-    # Zamień Python single-quoted strings na JSON double-quoted strings
-    # Używamy ast.literal_eval jako bezpieczniejszy parser
+
+    # Jeśli to już poprawny JSON — nie ruszaj
     try:
-        import ast
-        parsed = ast.literal_eval(stripped)
-        return json.dumps(parsed, ensure_ascii=False)
-    except Exception:
+        json.loads(stripped)
+        return raw
+    except json.JSONDecodeError:
         pass
-    # Fallback: prosta zamiana apostrofów (mniej bezpieczna, ale lepsza niż nic)
-    try:
-        # Zamień 'key' na "key" dla prostych przypadków
-        converted = re.sub(r"(?<![\\])'", '"', raw)
-        json.loads(converted)
-        return converted
-    except Exception:
+
+    # Heurystyka: Python dict używa apostrofów jako delimitatorów kluczy
+    # Szukamy wzorca ': ' lub "': " który wskazuje na Python dict
+    has_python_style = "': " in raw or "',\n" in raw or "': \"" in raw
+    if not has_python_style:
         return raw
+
+    # Wyciągnij wszystkie Python dict-y ze skanowania nawiasów
+    dicts = _extract_python_dicts(stripped)
+    if not dicts:
+        return raw
+
+    if len(dicts) == 1:
+        return json.dumps(dicts[0], ensure_ascii=False)
+    else:
+        # Wiele dict-ów → tablica JSON
+        return json.dumps(dicts, ensure_ascii=False)
 
 
 def _repair_leading_comma(raw: str) -> str:
