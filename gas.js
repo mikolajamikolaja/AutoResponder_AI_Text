@@ -1779,7 +1779,9 @@ function _checkUnprocessedMessages(webhookUrl) {
 
     // Obsłużone = Render podjął próbę (sukces lub błąd — nie ponawiamy)
     // v12: GAS_FALLBACK i WYSŁANO:GAS_FALLBACK również traktowane jako obsłużone
+    // PRZYJETO = Render przyjął zadanie i zaraz zacznie — nie rób retry
     if (statusRend === "WYSŁANO" ||
+        statusRend === "PRZYJETO" ||
         statusRend.indexOf("GAS_FALLBACK") !== -1 ||
         responder.indexOf("ERROR:") === 0 ||
         responder.indexOf("EMPTY:") === 0) {
