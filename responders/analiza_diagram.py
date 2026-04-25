@@ -403,235 +403,311 @@ def generate_jpg_diagram(gra: Dict[str, Any]) -> Optional[bytes]:
 
 def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") -> str:
     """
-    Generuje HTML z interaktywnym SVG diagramem drzewa decyzyjnego.
-    Na bazie struktury z backup/eryk_responder_flowchart.html
-    """
-    # Obsługuj zarówno starą strukturę (kroki) jak i nową (pytania)
-    kroki = gra.get("kroki", []) or gra.get("pytania", [])
-    wyrok = gra.get("wyrok", "Brak wyroku.")
-    sn = sender_name or "Anonim"
+    Generuje samodzielny plik HTML z SVG drzewa decyzyjnego.
+    Obsługuje nową strukturę drzewiastą (pytania → opcje A/B/C → runda2)
+    oraz starą sekwencyjną (kroki) dla kompatybilności wstecznej.
 
-    if not kroki:
-        _log(
-            f"Brak danych do diagramu — kroki: {len(gra.get('kroki', []))}, pytania: {len(gra.get('pytania', []))}"
-        )
+    Nowa struktura: każde pytanie rozgałęzia się na A/B/C,
+    każda gałąź ma reakcję Eryka i opcjonalnie runda2 z kolejnymi A/B/C.
+    """
+    pytania = gra.get("pytania", [])
+    kroki_legacy = gra.get("kroki", [])
+    wyrok = gra.get("wyrok", "Brak wyroku.")
+    sn = escape(sender_name or "Anonim")
+
+    # ── Stara struktura — zachowaj kompatybilność ─────────────────────────────
+    if not pytania and kroki_legacy:
+        _log("Używam starej struktury (kroki) dla SVG diagramu")
+        return _generate_svg_legacy(kroki_legacy, wyrok, sn)
+
+    if not pytania:
+        _log("Brak danych do diagramu SVG")
         return "<p>Brak danych do diagramu.</p>"
 
-    # Oblicz wymiary SVG
-    num_kroki = len(kroki)
-    svg_height = 100 + num_kroki * 350 + 200  # Zwiększona wysokość na każde pytanie
-    svg_width = 2200
+    _log(f"Generuję SVG dla nowej struktury drzewiastej: {len(pytania)} pytań")
 
-    # Buduj SVG
+    # ── Stałe layoutu ─────────────────────────────────────────────────────────
+    # Szerokość SVG: 3 kolumny na opcje + marginesy
+    W = 2000
+    # Wysokości wierszy
+    ROW_ROOT   = 70   # korzeń pytania
+    ROW_GAP    = 40   # odstęp między poziomami
+    ROW_OPC    = 80   # kafelek opcji 1. rundy
+    ROW_REAKC  = 44   # kafelek reakcji
+    ROW_R2_PYT = 36   # pytanie rundy 2
+    ROW_OPC2   = 60   # kafelek opcji 2. rundy
+    ROW_REAKC2 = 36   # reakcja rundy 2
+    BLOCK_H = ROW_GAP + ROW_OPC + ROW_REAKC + ROW_R2_PYT + ROW_OPC2 + ROW_REAKC2 + 30
+
+    # X środków 3 kolumn opcji
+    COL_X = [340, W // 2, W - 340]
+    OPC_W  = 520   # szerokość kafelka opcji rundy 1
+    OPC2_W = 340   # szerokość kafelka opcji rundy 2
+    ROOT_W = 900
+
+    COLORS = {
+        "A": {"fill": "#E6F1FB", "stroke": "#185FA5", "text": "#0C447C", "line": "#185FA5"},
+        "B": {"fill": "#E1F5EE", "stroke": "#0F6E56", "text": "#085041", "line": "#0F6E56"},
+        "C": {"fill": "#FAEEDA", "stroke": "#854F0B", "text": "#633806", "line": "#854F0B"},
+    }
+    ROOT_FILL   = "#EEEDFE"
+    ROOT_STROKE = "#534AB7"
+    ROOT_TEXT   = "#3C3489"
+    REAKC_FILL  = "#FFF8F0"
+    REAKC_STROKE= "#C8A96A"
+    WYROK_FILL  = "#2C2C2A"
+
+    # Całkowita wysokość SVG
+    total_height = 80 + len(pytania) * (ROW_ROOT + BLOCK_H + 60) + 120
+    svg = []
+
+    # ── Nagłówek SVG ──────────────────────────────────────────────────────────
+    svg.append(f'<?xml version="1.0" encoding="UTF-8"?>')
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{total_height}" '
+               f'viewBox="0 0 {W} {total_height}" font-family="Arial, sans-serif">')
+    svg.append(f'<rect width="{W}" height="{total_height}" fill="#FAF8F4"/>')
+
+    # Tytuł
+    svg.append(f'<rect x="{W//2 - 500}" y="14" width="1000" height="44" rx="12" fill="{WYROK_FILL}"/>')
+    svg.append(f'<text x="{W//2}" y="41" text-anchor="middle" font-size="15" '
+               f'fill="#F1EFE8" font-weight="bold">ERYK RESPONDER™ · Drzewo decyzyjne · {sn}</text>')
+
+    y = 80  # bieżąca pozycja Y
+
+    for p_idx, pytanie in enumerate(pytania):
+        tresc = pytanie.get("tresc", f"Pytanie {p_idx+1}")
+        opcje = pytanie.get("opcje", {})
+        p_num = p_idx + 1
+
+        # ── Korzeń pytania ────────────────────────────────────────────────────
+        root_x = W // 2 - ROOT_W // 2
+        root_lines = _wrap_svg_text(tresc, 70)
+        root_h = max(ROW_ROOT, 28 + len(root_lines) * 18)
+
+        svg.append(f'<rect x="{root_x}" y="{y}" width="{ROOT_W}" height="{root_h}" '
+                   f'rx="8" fill="{ROOT_FILL}" stroke="{ROOT_STROKE}" stroke-width="2"/>')
+        svg.append(f'<text x="{W//2}" y="{y + 16}" text-anchor="middle" font-size="11" '
+                   f'fill="{ROOT_STROKE}" font-weight="bold" letter-spacing="2">PYTANIE {p_num}</text>')
+        svg.append(_svg_text_block(root_lines, W//2, y + 32, font_size=13,
+                                   fill=ROOT_TEXT, font_weight="bold"))
+
+        y_root_bottom = y + root_h
+        y_opc = y_root_bottom + ROW_GAP
+
+        # ── Trzy kolumny opcji (A, B, C) ─────────────────────────────────────
+        for col_idx, lit in enumerate(["A", "B", "C"]):
+            cx = COL_X[col_idx]
+            c = COLORS.get(lit, COLORS["A"])
+            opcja = opcje.get(lit, {})
+            tekst_opc = opcja.get("tekst", f"Opcja {lit}")
+            reakcja   = opcja.get("reakcja", "")
+            runda2    = opcja.get("runda2", {})
+            r2_pytanie = runda2.get("pytanie", "")
+            r2_opcje   = runda2.get("opcje", {})
+
+            # Linia korzeń → opcja
+            svg.append(f'<line x1="{W//2}" y1="{y_root_bottom}" x2="{cx}" y2="{y_opc}" '
+                       f'stroke="{c["line"]}" stroke-width="1.5" stroke-dasharray="5,3"/>')
+            # Etykieta litery na linii
+            lbl_x = (W//2 + cx) // 2
+            lbl_y = (y_root_bottom + y_opc) // 2
+            svg.append(f'<circle cx="{lbl_x}" cy="{lbl_y}" r="11" fill="{c["stroke"]}"/>')
+            svg.append(f'<text x="{lbl_x}" y="{lbl_y + 4}" text-anchor="middle" '
+                       f'font-size="11" font-weight="bold" fill="white">{lit}</text>')
+
+            # Kafelek opcji R1
+            opc_lines = _wrap_svg_text(tekst_opc, 42)
+            opc_h = max(ROW_OPC, 20 + len(opc_lines) * 18)
+            svg.append(f'<rect x="{cx - OPC_W//2}" y="{y_opc}" width="{OPC_W}" height="{opc_h}" '
+                       f'rx="6" fill="{c["fill"]}" stroke="{c["stroke"]}" stroke-width="1.5"/>')
+            svg.append(f'<text x="{cx}" y="{y_opc + 14}" text-anchor="middle" '
+                       f'font-size="10" fill="{c["stroke"]}" font-weight="bold" letter-spacing="1">{lit})</text>')
+            svg.append(_svg_text_block(opc_lines, cx, y_opc + 28,
+                                       font_size=11, fill=c["text"], font_weight="normal"))
+
+            y_reakc = y_opc + opc_h + 8
+
+            # Kafelek reakcji Eryka
+            if reakcja:
+                reakc_lines = _wrap_svg_text(f'Eryk: „{reakcja}"', 50)
+                reakc_h = max(ROW_REAKC, 16 + len(reakc_lines) * 16)
+                svg.append(f'<rect x="{cx - OPC_W//2}" y="{y_reakc}" width="{OPC_W}" height="{reakc_h}" '
+                           f'rx="4" fill="{REAKC_FILL}" stroke="{REAKC_STROKE}" stroke-width="1" '
+                           f'stroke-dasharray="4,2"/>')
+                svg.append(_svg_text_block(reakc_lines, cx, y_reakc + 14,
+                                           font_size=10, fill="#5A4A2A",
+                                           font_weight="normal"))
+                y_r2 = y_reakc + reakc_h + 12
+            else:
+                y_r2 = y_reakc + 8
+
+            # ── Runda 2 ───────────────────────────────────────────────────────
+            if r2_pytanie and r2_opcje:
+                # Pytanie rundy 2
+                r2_pyt_lines = _wrap_svg_text(r2_pytanie, 44)
+                r2_pyt_h = max(ROW_R2_PYT, 14 + len(r2_pyt_lines) * 16)
+                svg.append(f'<rect x="{cx - OPC_W//2}" y="{y_r2}" width="{OPC_W}" height="{r2_pyt_h}" '
+                           f'rx="4" fill="{ROOT_FILL}" stroke="{ROOT_STROKE}" stroke-width="1"/>')
+                svg.append(f'<text x="{cx}" y="{y_r2 + 12}" text-anchor="middle" '
+                           f'font-size="9" fill="{ROOT_STROKE}" font-weight="bold" letter-spacing="1">'
+                           f'RUNDA 2 — {lit}</text>')
+                svg.append(_svg_text_block(r2_pyt_lines, cx, y_r2 + 24,
+                                           font_size=10, fill=ROOT_TEXT, font_weight="normal"))
+
+                y_r2_opc = y_r2 + r2_pyt_h + 8
+
+                # 3 opcje rundy 2 — w wierszu obok siebie
+                r2_step = OPC_W // 3
+                for r2_idx, r2_lit in enumerate(["A", "B", "C"]):
+                    r2_opcja = r2_opcje.get(r2_lit, {})
+                    r2_tekst  = r2_opcja.get("tekst", f"Opcja {r2_lit}")
+                    r2_reakc  = r2_opcja.get("reakcja", "")
+                    r2_c = COLORS.get(r2_lit, COLORS["A"])
+
+                    r2x = cx - OPC_W//2 + r2_idx * r2_step
+                    r2_lines = _wrap_svg_text(r2_tekst, 22)
+                    r2_h = max(ROW_OPC2, 18 + len(r2_lines) * 15)
+
+                    # Linia r2_pytanie → r2_opcja
+                    svg.append(f'<line x1="{cx}" y1="{y_r2 + r2_pyt_h}" '
+                               f'x2="{r2x + OPC2_W//3}" y2="{y_r2_opc}" '
+                               f'stroke="{r2_c["line"]}" stroke-width="1" stroke-dasharray="3,2" opacity="0.7"/>')
+
+                    svg.append(f'<rect x="{r2x}" y="{y_r2_opc}" width="{r2_step - 4}" height="{r2_h}" '
+                               f'rx="3" fill="{r2_c["fill"]}" stroke="{r2_c["stroke"]}" stroke-width="1"/>')
+                    svg.append(f'<text x="{r2x + (r2_step-4)//2}" y="{y_r2_opc + 12}" text-anchor="middle" '
+                               f'font-size="9" fill="{r2_c["stroke"]}" font-weight="bold">'
+                               f'{lit}{r2_lit}</text>')
+                    svg.append(_svg_text_block(r2_lines, r2x + (r2_step-4)//2,
+                                               y_r2_opc + 22, font_size=9,
+                                               fill=r2_c["text"], font_weight="normal"))
+
+                    # Reakcja rundy 2 (tylko 1 linia, pod kafelkiem)
+                    if r2_reakc:
+                        reakc2_y = y_r2_opc + r2_h + 2
+                        reakc2_short = _wrap_svg_text(r2_reakc, 22)[0] if r2_reakc else ""
+                        svg.append(f'<text x="{r2x + (r2_step-4)//2}" y="{reakc2_y + 10}" '
+                                   f'text-anchor="middle" font-size="8" fill="#7A6040" '
+                                   f'font-style="italic">{escape(reakc2_short[:30])}…</text>')
+
+        # Oblicz Y dla następnego pytania — max dna wszystkich 3 kolumn
+        y_next_pytanie = y_opc
+        for lit in ["A", "B", "C"]:
+            opcja  = opcje.get(lit, {})
+            opc_h  = max(ROW_OPC, 20 + len(_wrap_svg_text(opcja.get("tekst",""), 42)) * 18)
+            reakc_h = max(ROW_REAKC, 16 + len(_wrap_svg_text(opcja.get("reakcja",""), 50)) * 16) if opcja.get("reakcja") else 0
+            runda2 = opcja.get("runda2", {})
+            if runda2.get("pytanie") and runda2.get("opcje"):
+                r2_pyt_h = max(ROW_R2_PYT, 14 + len(_wrap_svg_text(runda2.get("pytanie",""), 44)) * 16)
+                r2_opc_h = max(ROW_OPC2, 18 + 2 * 15)
+                col_bottom = y_opc + opc_h + 8 + reakc_h + 12 + r2_pyt_h + 8 + r2_opc_h + 20
+            else:
+                col_bottom = y_opc + opc_h + 8 + reakc_h + 20
+            y_next_pytanie = max(y_next_pytanie, col_bottom)
+
+        # Strzałka do następnego pytania lub wyroku
+        y_arrow_end = y_next_pytanie + 40
+        svg.append(f'<line x1="{W//2}" y1="{y_next_pytanie}" x2="{W//2}" y2="{y_arrow_end}" '
+                   f'stroke="#888780" stroke-width="2" '
+                   f'marker-end="url(#arr-m)"/>')
+        y = y_arrow_end + 10
+
+    # ── Wyrok końcowy ─────────────────────────────────────────────────────────
+    wyrok_lines = _wrap_svg_text(wyrok, 70)
+    wyrok_h = max(80, 30 + len(wyrok_lines) * 18)
+    svg.append(f'<rect x="{W//2 - 550}" y="{y}" width="1100" height="{wyrok_h}" '
+               f'rx="10" fill="{WYROK_FILL}" stroke="#8B6914" stroke-width="2"/>')
+    svg.append(f'<text x="{W//2}" y="{y + 22}" text-anchor="middle" font-size="13" '
+               f'fill="#8B6914" font-weight="bold" letter-spacing="2">⚖ WYROK KOŃCOWY</text>')
+    svg.append(_svg_text_block(wyrok_lines, W//2, y + 42,
+                               font_size=11, fill="#E8D5B0", font_weight="normal"))
+    y += wyrok_h
+
+    # Markery strzałek (defs)
+    svg.insert(2, '<defs>'
+        '<marker id="arr-m" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">'
+        '<path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/>'
+        '</marker></defs>')
+
+    svg.append('</svg>')
+
+    # Opakuj w HTML z auto-scroll
+    svg_content = "\n".join(svg)
+    return f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eryk Responder™ — Drzewo decyzyjne</title>
+<style>
+  body {{ margin: 0; background: #FAF8F4; font-family: Arial, sans-serif; }}
+  .wrap {{ overflow-x: auto; padding: 16px; }}
+  .info {{ font-size: 11px; color: #888; text-align: center; padding: 8px; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+{svg_content}
+</div>
+<div class="info">Eryk Responder™ · Drzewo decyzyjne · Wygenerowano automatycznie</div>
+</body>
+</html>"""
+
+
+def _generate_svg_legacy(kroki: list, wyrok: str, sn: str) -> str:
+    """Stara logika SVG dla struktury sekwencyjnej (kroki). Zachowana dla kompatybilności."""
+    W = 2200
+    num_kroki = len(kroki)
+    svg_height = 100 + num_kroki * 350 + 200
     svg_lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
-        f'<svg width="2200" viewBox="0 0 {svg_width} {svg_height}" xmlns="http://www.w3.org/2000/svg">',
+        f'<svg width="{W}" viewBox="0 0 {W} {svg_height}" xmlns="http://www.w3.org/2000/svg">',
         "<defs>",
-        '  <marker id="arr-a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">',
-        '    <path d="M2 1L8 5L2 9" fill="none" stroke="#185FA5" stroke-width="1.5" stroke-linecap="round"/>',
-        "  </marker>",
-        '  <marker id="arr-b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">',
-        '    <path d="M2 1L8 5L2 9" fill="none" stroke="#0F6E56" stroke-width="1.5" stroke-linecap="round"/>',
-        "  </marker>",
-        '  <marker id="arr-c" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">',
-        '    <path d="M2 1L8 5L2 9" fill="none" stroke="#854F0B" stroke-width="1.5" stroke-linecap="round"/>',
-        "  </marker>",
         '  <marker id="arr-m" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">',
         '    <path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/>',
         "  </marker>",
         "</defs>",
         "<style>",
         "  .q-node rect { fill: #EEEDFE; stroke: #534AB7; stroke-width: 1; }",
-        "  .q-node text { fill: #3C3489; font-size: 12px; font-weight: bold; }",
         "  .leaf-a rect { fill: #E6F1FB; stroke: #185FA5; stroke-width: 0.8; }",
-        "  .leaf-a text { fill: #0C447C; font-size: 10px; }",
         "  .leaf-b rect { fill: #E1F5EE; stroke: #0F6E56; stroke-width: 0.8; }",
-        "  .leaf-b text { fill: #085041; font-size: 10px; }",
         "  .leaf-c rect { fill: #FAEEDA; stroke: #854F0B; stroke-width: 0.8; }",
-        "  .leaf-c text { fill: #633806; font-size: 10px; }",
-        "  .arr-a { stroke: #185FA5; stroke-width: 1; fill: none; marker-end: url(#arr-a); }",
-        "  .arr-b { stroke: #0F6E56; stroke-width: 1; fill: none; marker-end: url(#arr-b); }",
-        "  .arr-c { stroke: #854F0B; stroke-width: 1; fill: none; marker-end: url(#arr-c); }",
-        "  .arr-main { stroke: #888780; stroke-width: 1.2; fill: none; marker-end: url(#arr-m); }",
-        "  .lbl { font-size: 10px; font-weight: bold; }",
-        "  .lbl-a { fill: #185FA5; }",
-        "  .lbl-b { fill: #0F6E56; }",
-        "  .lbl-c { fill: #854F0B; }",
         "</style>",
     ]
-
-    # Header
-    svg_lines.append(
-        f'<rect x="850" y="20" width="500" height="44" rx="14" fill="#2C2C2A"/>'
-    )
-    svg_lines.append(
-        f'<text x="1100" y="47" text-anchor="middle" font-size="14" fill="#F1EFE8" '
-        f'font-weight="bold" font-family="Arial">ERYK RESPONDER™ · Drzewo decyzyjne · {sn}</text>'
-    )
-    svg_lines.append('<line x1="1100" y1="64" x2="1100" y2="90" class="arr-main"/>')
-
-    # Rysuj każde pytanie
+    svg_lines.append(f'<rect x="850" y="20" width="500" height="44" rx="14" fill="#2C2C2A"/>')
+    svg_lines.append(f'<text x="1100" y="47" text-anchor="middle" font-size="14" fill="#F1EFE8" '
+                     f'font-weight="bold" font-family="Arial">ERYK RESPONDER™ · {sn}</text>')
     y_current = 90
     for i, krok in enumerate(kroki, 1):
-        nr = krok.get("nr", i)
-        pytanie = krok.get("pytanie", f"P{i}")
-        intro = krok.get("intro", "")
+        pytanie = krok.get("pytanie") or krok.get("tresc", f"P{i}")
         opcje = krok.get("opcje", {})
-
-        pytanie_lines = _wrap_svg_text(pytanie, 48)
-        intro_lines = _wrap_svg_text(intro, 52)
-        node_height = 40 + max(len(pytanie_lines), len(intro_lines)) * 16
-        node_height = max(node_height, 60)
-
-        # Node pytania
-        svg_lines.append(f'<g class="q-node">')
-        svg_lines.append(
-            f'  <rect x="750" y="{y_current}" width="700" height="{node_height}" rx="8"/>'
-        )
-        svg_lines.append(
-            _svg_text_block(
-                pytanie_lines,
-                1100,
-                y_current + 22,
-                font_size=13,
-                fill="#3C3489",
-                font_weight="bold",
-            )
-        )
-        if any(intro_lines):
-            svg_lines.append(
-                _svg_text_block(
-                    intro_lines,
-                    1100,
-                    y_current + 40,
-                    font_size=10,
-                    fill="#7F77DD",
-                    font_weight="normal",
-                )
-            )
+        pyt_lines = _wrap_svg_text(pytanie, 48)
+        node_h = max(60, 40 + len(pyt_lines) * 16)
+        svg_lines.append(f'<g class="q-node"><rect x="750" y="{y_current}" width="700" height="{node_h}" rx="8"/>')
+        svg_lines.append(_svg_text_block(pyt_lines, 1100, y_current + 22, 13, "#3C3489", "bold"))
         svg_lines.append("</g>")
-
-        # Połączenia do opcji
-        y_next = y_current + node_height + 26
-
-        # Opcja A
-        if "A" in opcje:
-            tekst_a = opcje["A"].get("tekst", "A")
-            tekst_a_lines = _wrap_svg_text(tekst_a, 38)
-            leaf_height = 32 + len(tekst_a_lines) * 18  # Zwiększona wysokość
-            leaf_height = max(leaf_height, 60)
-            svg_lines.append(
-                f'<path d="M900 {y_current + (node_height // 2)} L900 {y_current + node_height + 10} L640 {y_current + node_height + 10} L640 {y_next}" class="arr-a"/>'
-            )
-            svg_lines.append(
-                f'<text x="760" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-a" text-anchor="middle" '
-                f'font-family="Arial">A</text>'
-            )
-            svg_lines.append(
-                f'<g class="leaf-a"><rect x="480" y="{y_next}" width="320" height="{leaf_height}" rx="6"/>'
-            )
-            svg_lines.append(
-                _svg_text_block(
-                    tekst_a_lines,
-                    640,
-                    y_next + 18,
-                    font_size=10,
-                    fill="#0C447C",
-                    font_weight="normal",
-                )
-            )
+        y_next = y_current + node_h + 26
+        positions = {"A": 640, "B": 1100, "C": 1560}
+        classes = {"A": "leaf-a", "B": "leaf-b", "C": "leaf-c"}
+        fills = {"A": "#0C447C", "B": "#085041", "C": "#633806"}
+        for lit in ["A", "B", "C"]:
+            if lit not in opcje:
+                continue
+            tekst = opcje[lit].get("tekst", lit)
+            lx = positions[lit]
+            tlines = _wrap_svg_text(tekst, 38)
+            lh = max(60, 32 + len(tlines) * 18)
+            svg_lines.append(f'<line x1="{1100}" y1="{y_current + node_h}" x2="{lx}" y2="{y_next}" '
+                             f'stroke="#888" stroke-width="1" stroke-dasharray="4,2"/>')
+            svg_lines.append(f'<g class="{classes[lit]}"><rect x="{lx-160}" y="{y_next}" width="320" height="{lh}" rx="6"/>')
+            svg_lines.append(_svg_text_block(tlines, lx, y_next + 18, 10, fills[lit], "normal"))
             svg_lines.append("</g>")
-
-        # Opcja B
-        if "B" in opcje:
-            tekst_b = opcje["B"].get("tekst", "B")
-            tekst_b_lines = _wrap_svg_text(tekst_b, 38)
-            leaf_height = 32 + len(tekst_b_lines) * 18  # Zwiększona wysokość
-            leaf_height = max(leaf_height, 60)
-            svg_lines.append(
-                f'<path d="M1100 {y_current + (node_height // 2)} L1100 {y_next}" class="arr-b"/>'
-            )
-            svg_lines.append(
-                f'<text x="1145" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-b" font-family="Arial">B</text>'
-            )
-            svg_lines.append(
-                f'<g class="leaf-b"><rect x="940" y="{y_next}" width="320" height="{leaf_height}" rx="6"/>'
-            )
-            svg_lines.append(
-                _svg_text_block(
-                    tekst_b_lines,
-                    1100,
-                    y_next + 18,
-                    font_size=10,
-                    fill="#085041",
-                    font_weight="normal",
-                )
-            )
-            svg_lines.append("</g>")
-
-        # Opcja C
-        if "C" in opcje:
-            tekst_c = opcje["C"].get("tekst", "C")
-            tekst_c_lines = _wrap_svg_text(tekst_c, 38)
-            leaf_height = 32 + len(tekst_c_lines) * 18  # Zwiększona wysokość
-            leaf_height = max(leaf_height, 60)
-            svg_lines.append(
-                f'<path d="M1300 {y_current + (node_height // 2)} L1300 {y_current + node_height + 10} L1560 {y_current + node_height + 10} L1560 {y_next}" class="arr-c"/>'
-            )
-            svg_lines.append(
-                f'<text x="1430" y="{y_current + (node_height // 2) + 8}" class="lbl lbl-c" text-anchor="middle" '
-                f'font-family="Arial">C</text>'
-            )
-            svg_lines.append(
-                f'<g class="leaf-c"><rect x="1400" y="{y_next}" width="320" height="{leaf_height}" rx="6"/>'
-            )
-            svg_lines.append(
-                _svg_text_block(
-                    tekst_c_lines,
-                    1560,
-                    y_next + 18,
-                    font_size=10,
-                    fill="#633806",
-                    font_weight="normal",
-                )
-            )
-            svg_lines.append("</g>")
-
-        # Połączenie do następnego pytania
-        y_connect = y_next + 52
-        svg_lines.append(
-            f'<path d="M640 {y_connect} L640 {y_connect + 30} L1100 {y_connect + 30} L1100 {y_connect + 50}" class="arr-main"/>'
-        )
-        svg_lines.append(
-            f'<path d="M1100 {y_connect} L1100 {y_connect + 50}" class="arr-main"/>'
-        )
-        svg_lines.append(
-            f'<path d="M1560 {y_connect} L1560 {y_connect + 30} L1100 {y_connect + 30}" class="arr-main"/>'
-        )
-
-        y_current = y_connect + 60
-
-    # Wyrok końcowy
+        y_current = y_next + 80
     wyrok_lines = _wrap_svg_text(wyrok, 50)
-    wyrok_height = 30 + len(wyrok_lines) * 16
-    wyrok_height = max(wyrok_height, 60)
-    svg_lines.append(
-        f'<g><rect x="850" y="{y_current}" width="500" height="{wyrok_height}" rx="8" fill="#3C3489"/>'
-        f'<text x="1100" y="{y_current + 22}" text-anchor="middle" font-size="12" fill="#F1EFE8" '
-        f'font-weight="bold" font-family="Arial">⚖ WYROK KOŃCOWY</text>'
-    )
-    svg_lines.append(
-        _svg_text_block(
-            wyrok_lines,
-            1100,
-            y_current + 40,
-            font_size=10,
-            fill="#E8D5B0",
-            font_weight="normal",
-        )
-    )
-    svg_lines.append("</g>")
-
+    wyrok_h = max(60, 30 + len(wyrok_lines) * 16)
+    svg_lines.append(f'<rect x="850" y="{y_current}" width="500" height="{wyrok_h}" rx="8" fill="#3C3489"/>')
+    svg_lines.append(f'<text x="1100" y="{y_current + 22}" text-anchor="middle" font-size="12" fill="#F1EFE8" '
+                     f'font-weight="bold">⚖ WYROK KOŃCOWY</text>')
+    svg_lines.append(_svg_text_block(wyrok_lines, 1100, y_current + 40, 10, "#E8D5B0", "normal"))
     svg_lines.append("</svg>")
-
-    return "\n".join(svg_lines)
+    return f'<html><body style="margin:0;background:#faf8f4">{"".join(svg_lines)}</body></html>'

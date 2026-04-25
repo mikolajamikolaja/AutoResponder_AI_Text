@@ -70,8 +70,67 @@ def _fix_unicode_escapes(raw: str) -> str:
     return raw
 
 
+def _convert_python_dict_to_json(raw: str) -> str:
+    """
+    Konwertuje odpowiedź DeepSeek w formacie Python dict (apostrofy) na JSON.
+    Obsługuje: {'klucz': 'wartość'} → {"klucz": "wartość"}
+    Ostrożnie — zamienia tylko apostrofy poza stringami podwójnymi.
+    """
+    # Szybki test: jeśli są podwójne cudzysłowy i brak apostrofów jako delimitatorów — OK
+    stripped = raw.strip()
+    # Heurystyka: Python dict zaczyna się od { i ma klucze w apostrofach
+    if not (stripped.startswith("{") or stripped.startswith("[")):
+        return raw
+    # Sprawdź czy mamy apostrofy jako string delimitatory (Python dict)
+    if "': '" not in raw and "': \"" not in raw and "\": '" not in raw:
+        return raw
+    # Zamień Python single-quoted strings na JSON double-quoted strings
+    # Używamy ast.literal_eval jako bezpieczniejszy parser
+    try:
+        import ast
+        parsed = ast.literal_eval(stripped)
+        return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        pass
+    # Fallback: prosta zamiana apostrofów (mniej bezpieczna, ale lepsza niż nic)
+    try:
+        # Zamień 'key' na "key" dla prostych przypadków
+        converted = re.sub(r"(?<![\\])'", '"', raw)
+        json.loads(converted)
+        return converted
+    except Exception:
+        return raw
+
+
+def _repair_leading_comma(raw: str) -> str:
+    """
+    Naprawia odpowiedzi DeepSeek zaczynające się od przecinka:
+    ',\n  "klucz": "wartość"\n}' → '{\n  "klucz": "wartość"\n}'
+    Wzorzec: model zwraca fragment JSON bez otwierającego '{' — zaczyna od ','
+    """
+    stripped = raw.strip()
+    if not stripped.startswith(","):
+        return raw
+    # Usuń wiodący przecinek i ewentualne białe znaki po nim
+    content = stripped.lstrip(",").strip()
+    # Dodaj brakujące '{' na początku
+    if not content.startswith("{"):
+        content = "{" + content
+    # Upewnij się że jest zamknięcie '}'
+    if not content.endswith("}"):
+        content = content + "}"
+    current_app.logger.warning(
+        "[psych-raport] _repair_leading_comma: naprawiono fragment JSON zaczynający się od ','"
+    )
+    return content
+
+
 def _normalize_json_text(raw: str) -> str:
     raw = raw.replace("\r\n", "\n")
+    # Napraw Python dict (apostrofy) zanim cokolwiek innego
+    raw = _convert_python_dict_to_json(raw)
+    # Napraw fragment zaczynający się od przecinka (brak '{')
+    raw = _repair_leading_comma(raw)
     raw = re.sub(r"//[^\n]*", "", raw)
     raw = re.sub(r",\s*([}\]])", r"\1", raw)
     raw = _fix_unicode_escapes(raw)
@@ -115,6 +174,10 @@ def _extract_best_json(raw: str) -> tuple[object | None, str | None]:
 
 def _repair_truncated_json(raw: str) -> str:
     raw = raw.strip()
+    # Napraw fragment zaczynający się od przecinka (brak '{')
+    raw = _repair_leading_comma(raw)
+    # Napraw Python dict (apostrofy) przed dalszą naprawą
+    raw = _convert_python_dict_to_json(raw)
     start = next((i for i, c in enumerate(raw) if c in "{["), 0)
     raw = raw[start:]
     raw = re.sub(r"//[^\n]*", "", raw)
@@ -386,7 +449,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=750)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=3000)
     result = _parse_json_safe(raw, "pacjent")
     if not result or not isinstance(result, dict):
         fb = cfg.get("fallback_dane_pacjenta", {})
@@ -413,12 +476,9 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
         f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=750)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "depozyt_leki")
     if not result or not isinstance(result, dict):
-        current_app.logger.warning(
-            "[psych-raport] sekcja_depozyt_leki → fallback (nie dict lub pusty)"
-        )
         return {
             "depozyt": {
                 "lista_przedmiotow": (
@@ -579,12 +639,9 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=750)
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
     result = _parse_json_safe(raw, "diagnozy")
     if not result or not isinstance(result, dict):
-        current_app.logger.warning(
-            "[psych-raport] sekcja_diagnozy → fallback (nie dict lub pusty)"
-        )
         return {
             "diagnoza_wstepna": {
                 "nazwa_lacinska": "Syndroma Emaili Desperati",
@@ -901,6 +958,7 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
 
     system = sec.get("system", "")
     schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    instrukcje = "\n".join(sec.get("instrukcje", []))
 
     # Przygotuj kontekst z raportu: imię pacjenta, stan cywilny, kluczowe zachowania
     imie_pacjenta = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
@@ -912,15 +970,46 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
         f"- Imię: {imie_pacjenta}\n"
         f"- Stan cywilny: {stan_cywilny if stan_cywilny else 'nieznany'}\n\n"
         f"SCHEMAT JSON:\n{schema}\n\n"
+        + (f"INSTRUKCJE:\n{instrukcje}\n\n" if instrukcje else "")
+        + "Wygeneruj DOKŁADNIE 6 relacji świadków (ksiądz, dostawca jedzenia, kurier, rodzina, hydraulik, serwisant automatu do kawy).\n"
         f"Zwróć TYLKO czysty JSON z listą relacji świadków."
     )
 
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
+    # 6 świadków × 5 zdań + gwara + kontekst = potrzeba dużo tokenów
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=3000)
     result = _parse_json_safe(raw, "relacje_swiadkow")
 
-    if not result or not isinstance(result, dict):
+    if not result:
         current_app.logger.warning(
             "[psych-raport] _sekcja_relacje_swiadkow → brak wyników"
+        )
+        return {"relacje_swiadkow": []}
+
+    # Obsłuż przypadek gdy DeepSeek zwróci listę zamiast dict
+    if isinstance(result, list):
+        current_app.logger.info(
+            "[psych-raport] relacje_swiadkow: otrzymano listę (%d) — owijam w dict",
+            len(result),
+        )
+        return {"relacje_swiadkow": result}
+
+    if not isinstance(result, dict):
+        current_app.logger.warning(
+            "[psych-raport] _sekcja_relacje_swiadkow → nieoczekiwany typ: %s",
+            type(result),
+        )
+        return {"relacje_swiadkow": []}
+
+    # Jeśli dict nie ma klucza relacje_swiadkow ale ma listę na pierwszym kluczu
+    if "relacje_swiadkow" not in result:
+        for v in result.values():
+            if isinstance(v, list) and len(v) > 0:
+                current_app.logger.info(
+                    "[psych-raport] relacje_swiadkow: wyciągnięto listę z klucza"
+                )
+                return {"relacje_swiadkow": v}
+        current_app.logger.warning(
+            "[psych-raport] relacje_swiadkow: brak klucza relacje_swiadkow w dict"
         )
         return {"relacje_swiadkow": []}
 
