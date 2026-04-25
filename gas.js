@@ -965,11 +965,20 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
     sender_name:         senderName        || "",
     subject:             subject,
     body:                body,
+    // ── Flagi respondentów ──────────────────────────────────────────────────
     wants_scrabble:      wantsScrabble      ? true : false,
-    wants_analiza:       wantsDociekliwy   ? true : false,
+    wants_analiza:       wantsDociekliwy    ? true : false,
     wants_emocje:        wantsEmocje        ? true : false,
     wants_generator_pdf: wantsGeneratorPdf  ? true : false,
     wants_smierc:        wantsSmierc        ? true : false,
+    // wants_zwykly i wants_biznes — Render czyta je wprost z payload-u
+    wants_zwykly:        (isBiz || isAllowed || isKnownSender || containsKeyword || containsJoker) ? true : false,
+    wants_biznes:        (isBiz || containsKeyword1 || containsJoker) ? true : false,
+    // ── Status nadawcy — Render używa isBiz/isAllowed/isKnownSender ────────
+    isBiz:               isBiz              ? true : false,
+    isAllowed:           isAllowed          ? true : false,
+    isKnownSender:       isKnownSender      ? true : false,
+    // ── Flagi keywordów ─────────────────────────────────────────────────────
     contains_keyword:    containsKeyword    ? true : false,
     contains_keyword1:   containsKeyword1   ? true : false,
     contains_keyword2:   containsKeyword2   ? true : false,
@@ -979,7 +988,7 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
     contains_keyword_generator_pdf: containsKeywordGeneratorPdf ? true : false,
     contains_keyword_smierc: containsKeywordSmierc ? true : false,
     contains_keyword_joker: containsJoker ? true : false,
-    wants_text_reply:    (isBiz || isAllowed || isKnownSender || containsKeyword || wantsScrabble || wantsDociekliwy || wantsEmocje || wantsGeneratorPdf) ? true : false,
+    wants_text_reply:    (isBiz || isAllowed || isKnownSender || containsKeyword || containsJoker || wantsScrabble || wantsDociekliwy || wantsEmocje || wantsGeneratorPdf) ? true : false,
     attachments:         attachments        || [],
     previous_body:       previousBody       || null,
     previous_subject:    previousSubject    || null,
@@ -1339,16 +1348,32 @@ function __AAA_processEmails() {
       // ── Zapisz ODEBRANO przed callем ──────────────────────────────────────
       _saveOdebranoToHistory(msgId, fromEmail, subject, plainBody);
 
+      // 🃏 JOKER — wszystkie respondery włączone, wszystkie keyword-flagi true
+      var jokerPrevData = findLastMessageBySender(fromEmail);
       var responseJoker = _callBackend(
         fromEmail, senderName, subject, plainBody, plainBody, webhookUrl, msgId,
-        true, true, true, true, shouldSendSmierc,
+        /*wantsScrabble*/           true,
+        /*wantsDociekliwy*/         true,
+        /*wantsEmocje*/             true,
+        /*wantsGeneratorPdf*/       true,
+        /*wantsSmierc*/             shouldSendSmierc,
         smircData, getAllAttachments(msg),
-        findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).body    : null,
-        findLastMessageBySender(fromEmail) ? findLastMessageBySender(fromEmail).subject : null,
-        isBiz, isAllowed, isKnownSender,
-        false, false, false, false, false,
-        containsFlagaTest, false, false,
-        true, shouldSendSmierc, containsFlagaTest,
+        jokerPrevData ? jokerPrevData.body    : null,
+        jokerPrevData ? jokerPrevData.subject : null,
+        /*isBiz*/                   true,
+        /*isAllowed*/               true,
+        /*isKnownSender*/           true,
+        /*containsKeyword*/         true,
+        /*containsKeyword1*/        true,
+        /*containsKeyword2*/        true,
+        /*containsKeyword3*/        true,
+        /*containsKeyword4*/        true,
+        containsFlagaTest,
+        /*containsKeywordGeneratorPdf*/ true,
+        /*containsKeywordSmierc*/   containsKeywordSmierc,
+        /*containsJoker*/           true,
+        /*shouldSendSmierc*/        shouldSendSmierc,
+        /*disableFlux*/             containsFlagaTest,
         null, [], 1
       );
 
@@ -1840,34 +1865,84 @@ function _checkUnprocessedMessages(webhookUrl) {
 
     // Oblicz flagi keywordów i zapisz do arkusza decyzji (zielone "tak")
     var retrySearchText = retryBody + " " + (item.subject || "");
-    var RETRY_BIZ_LIST  = _getListFromProps("BIZ_LIST");
-    var RETRY_ALLOWED   = _getListFromProps("ALLOWED_LIST");
+    var RETRY_BIZ_LIST        = _getListFromProps("BIZ_LIST");
+    var RETRY_ALLOWED         = _getListFromProps("ALLOWED_LIST");
+    var RETRY_ALLOWED_GEN_PDF = _getListFromProps("ALLOWED_LIST_GENERATOR_PDF");
+    var RETRY_KEYWORDS        = _getListFromProps("KEYWORDS");
+    var RETRY_KEYWORDS1       = _getListFromProps("KEYWORDS1");
+    var RETRY_KEYWORDS2       = _getListFromProps("KEYWORDS2");
+    var RETRY_KEYWORDS3       = _getListFromProps("KEYWORDS3");
+    var RETRY_KEYWORDS4       = _getListFromProps("KEYWORDS4");
+    var RETRY_KEYWORDS_JOKER  = _getListFromProps("KEYWORDS_JOKER");
+    var RETRY_KEYWORDS_SMIERC = _getListFromProps("KEYWORDS_SMIERC");
+    var RETRY_KEYWORDS_GEN_PDF = _getListFromProps("KEYWORDS_GENERATOR_PDF");
+    var RETRY_FLAGA_TEST      = _getListFromProps("FLAGA_TEST");
+
+    var retryIsBiz          = RETRY_BIZ_LIST.indexOf(retryFromEmail) !== -1;
+    var retryIsAllowed      = RETRY_ALLOWED.indexOf(retryFromEmail) !== -1;
+    var retryIsKnownSender  = retryIsAllowed || retryIsBiz;
+    var retryContainsKeyword  = _containsAny(retrySearchText, RETRY_KEYWORDS);
+    var retryContainsKeyword1 = _containsAny(retrySearchText, RETRY_KEYWORDS1);
+    var retryContainsKeyword2 = _containsAny(retrySearchText, RETRY_KEYWORDS2);
+    var retryContainsKeyword3 = _containsAny(retrySearchText, RETRY_KEYWORDS3);
+    var retryContainsKeyword4 = _containsAny(retrySearchText, RETRY_KEYWORDS4);
+    var retryContainsJoker    = _containsAny(retrySearchText, RETRY_KEYWORDS_JOKER);
+    var retryContainsSmierc   = _containsAny(retrySearchText, RETRY_KEYWORDS_SMIERC);
+    var retryContainsGenPdf   = _containsAny(retrySearchText, RETRY_KEYWORDS_GEN_PDF);
+    var retryContainsFlagaTest = _containsAny(retrySearchText, RETRY_FLAGA_TEST);
+    var retryIsAllowedGenPdf  = RETRY_ALLOWED_GEN_PDF.indexOf(retryFromEmail) !== -1;
+    var retryWantsGenPdf      = retryIsAllowedGenPdf || retryContainsGenPdf;
+
+    // Jeżeli JOKER — wszystkie flagi true, tak jak w głównej pętli
+    var retryIsJoker = retryContainsJoker;
+    if (retryIsJoker) {
+      retryIsBiz = true; retryIsAllowed = true; retryIsKnownSender = true;
+      retryContainsKeyword = true; retryContainsKeyword1 = true;
+      retryContainsKeyword2 = true; retryContainsKeyword3 = true; retryContainsKeyword4 = true;
+      retryWantsGenPdf = true;
+    }
+
+    // Sprawdź czy nadawca jest na liście SMIERC (ma arkusz)
+    var retrySmircData = _getSmircData(retryFromEmail);
+    var retryIsSmierc  = retrySmircData !== null;
+    var retryShouldSendSmierc = retryIsSmierc || retryContainsJoker;
+    var retryShouldSendZwykly = retryIsBiz || retryIsAllowed || retryIsKnownSender || retryContainsKeyword;
+    var retryDisableFlux = retryContainsFlagaTest && (retryIsBiz || retryIsAllowed || retryIsKnownSender ||
+      retryContainsKeyword || retryContainsKeyword2 || retryContainsKeyword3 || retryContainsKeyword4 ||
+      retryShouldSendSmierc);
+
     _appendPrzeplywSheetRow({
       ts:        new Date().toISOString(),
       fromEmail: retryFromEmail,
       subject:   item.subject || "",
       isNewMsg:  true,
-      KEYWORDS:              _containsAny(retrySearchText, _getListFromProps("KEYWORDS")),
-      KEYWORDS1:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS1")),
-      KEYWORDS2:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS2")),
-      KEYWORDS3:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS3")),
-      KEYWORDS4:             _containsAny(retrySearchText, _getListFromProps("KEYWORDS4")),
-      KEYWORDS_GENERATOR_PDF:_containsAny(retrySearchText, _getListFromProps("KEYWORDS_GENERATOR_PDF")),
-      KEYWORDS_SMIERC:       _containsAny(retrySearchText, _getListFromProps("KEYWORDS_SMIERC")),
-      JOKER:                 _containsAny(retrySearchText, _getListFromProps("KEYWORDS_JOKER")),
-      lista_smiert:          false,
-      lista_historia:        RETRY_ALLOWED.indexOf(retryFromEmail) !== -1 || RETRY_BIZ_LIST.indexOf(retryFromEmail) !== -1,
-      flaga_test:            _containsAny(retrySearchText, _getListFromProps("FLAGA_TEST")),
+      KEYWORDS:               retryContainsKeyword,
+      KEYWORDS1:              retryContainsKeyword1,
+      KEYWORDS2:              retryContainsKeyword2,
+      KEYWORDS3:              retryContainsKeyword3,
+      KEYWORDS4:              retryContainsKeyword4,
+      KEYWORDS_GENERATOR_PDF: retryContainsGenPdf,
+      KEYWORDS_SMIERC:        retryContainsSmierc,
+      JOKER:                  retryContainsJoker,
+      lista_smiert:           retryIsSmierc,
+      lista_historia:         retryShouldSendZwykly,
+      flaga_test:             retryContainsFlagaTest,
       wysylka:  true,
-      action:   "RETRY",
-      notes:    "próba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG
+      action:   retryIsJoker ? "RETRY_JOKER" : "RETRY",
+      notes:    "proba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG
     });
 
     console.log("[check] Retry dla: " + item.sender + " msg_id=" + item.message_id +
                 " temat=\"" + item.subject + "\"" +
-                " (próba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG + ")");
+                " (proba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG + ")" +
+                " zwykly=" + retryShouldSendZwykly + " smierc=" + retryShouldSendSmierc +
+                " joker=" + retryIsJoker + " isAllowed=" + retryIsAllowed + " isBiz=" + retryIsBiz);
 
     try {
+      var retrySmircPayload = null;
+      if (retrySmircData) {
+        retrySmircPayload = { etap: retrySmircData.etap || 1, data_smierci: retrySmircData.data_smierci || "nieznanego dnia", historia: retrySmircData.historia || [] };
+      }
       var retryPayload = {
         msg_id:           item.message_id,
         message_id:       item.message_id,
@@ -1876,7 +1951,35 @@ function _checkUnprocessedMessages(webhookUrl) {
         body:             retryBody,
         is_retry:         true,
         retry_responders: [],
-        attempt_count:    1
+        attempt_count:    1,
+        // -- Flagi list i statusu nadawcy --
+        isBiz:            retryIsBiz,
+        isAllowed:        retryIsAllowed,
+        isKnownSender:    retryIsKnownSender,
+        wants_zwykly:     retryShouldSendZwykly,
+        wants_text_reply: retryShouldSendZwykly || retryIsBiz,
+        wants_smierc:     retryShouldSendSmierc,
+        wants_scrabble:   retryContainsKeyword2,
+        wants_analiza:    retryContainsKeyword3,
+        wants_emocje:     retryContainsKeyword4,
+        wants_generator_pdf: retryWantsGenPdf,
+        wants_biznes:     retryIsBiz || retryContainsKeyword1,
+        // -- Flagi keywordow --
+        contains_keyword:               retryContainsKeyword,
+        contains_keyword1:              retryContainsKeyword1,
+        contains_keyword2:              retryContainsKeyword2,
+        contains_keyword3:              retryContainsKeyword3,
+        contains_keyword4:              retryContainsKeyword4,
+        contains_keyword_joker:         retryContainsJoker,
+        contains_keyword_smierc:        retryContainsSmierc,
+        contains_keyword_generator_pdf: retryContainsGenPdf,
+        contains_flaga_test:            retryContainsFlagaTest,
+        disable_flux:                   retryDisableFlux,
+        // -- Dane SMIERC (jesli dotyczy) --
+        smircData:        retrySmircPayload,
+        etap:             retrySmircData ? (retrySmircData.etap || 1) : 1,
+        data_smierci:     retrySmircData ? (retrySmircData.data_smierci || "nieznanego dnia") : "nieznanego dnia",
+        historia:         retrySmircData ? (retrySmircData.historia || []) : [],
       };
       var retryOptions = {
         method:             "post",
