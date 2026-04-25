@@ -158,21 +158,55 @@ from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _extract_first_json_object(text: str) -> str:
+    """
+    Wyciąga PIERWSZY kompletny obiekt JSON ({ ... }) lub tablicę ([ ... ]) z tekstu.
+    Liczy nawiasy — bezpieczniejsze niż zachłanny regex (naprawia 'Extra data').
+    Obsługuje zarówno dict jak i list na najwyższym poziomie.
+    """
+    for opener, closer in [("{", "}"), ("[", "]")]:
+        start = text.find(opener)
+        if start == -1:
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for i, ch in enumerate(text[start:], start):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        # Nie zamknięto — zwróć od startu do końca jako fallback
+        return text[start:]
+    return text
+
+
 def _strip_json_markdown(raw: str) -> str:
     """
     Usuwa opakowanie ```json ... ``` lub ``` ... ``` z odpowiedzi AI.
-    Wyciąga pierwszy blok { ... } z tekstu.
+    Wyciąga PIERWSZY kompletny blok { ... } lub [ ... ] z tekstu.
+    Naprawia błąd 'Extra data' gdy model zwrócił dwa obiekty JSON.
     Zwraca czysty string gotowy do json.loads().
     """
     clean = raw.strip()
     # Usuń znaczniki ```json lub ``` (z dowolnym językiem)
     clean = re.sub(r"```[a-zA-Z]*", "", clean)
     clean = re.sub(r"```", "", clean)
-    # Wyciągnij pierwszy blok { ... }
-    m = re.search(r"\{.*\}", clean, re.DOTALL)
-    if m:
-        return m.group(0).strip()
-    return clean.strip()
+    clean = clean.strip()
+    return _extract_first_json_object(clean)
 
 
 def _load_prompt_json() -> dict:
@@ -453,6 +487,14 @@ def _parse_response(raw: str) -> tuple[str, str]:
 
     json_str = _strip_json_markdown(raw)
 
+    # Guard: jeśli po stripowaniu nie ma { — model zwrócił tekst zamiast JSON
+    if not json_str.strip().startswith("{"):
+        logger.warning(
+            "[zwykly] Odpowiedź nie jest JSON (brak '{') — używam sanitize | raw=%.120s",
+            raw,
+        )
+        return sanitize_model_output(raw), FALLBACK_EMOT
+
     try:
         data = json.loads(json_str)
         if not isinstance(data, dict):
@@ -689,6 +731,12 @@ def _extract_nouns_deepseek(body: str) -> dict:
     # Parsuj JSON — obsługa ```json...``` wszędzie w tekście
     try:
         clean = _strip_json_markdown(raw)
+        # Guard: jeśli model zwrócił tekst zamiast JSON
+        if not clean.strip().startswith("{"):
+            logger.warning(
+                "[rzeczowniki] Odpowiedź nie jest JSON — fallback regex | raw: %.120s", raw
+            )
+            return {}
         result = json.loads(clean)
         if not isinstance(result, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
@@ -1791,8 +1839,14 @@ def _generate_triptych_prompts_batch(
 
     try:
         clean = _strip_json_markdown(raw)
-        data = json.loads(clean)
-        prompts = data.get("prompts", [])
+        # Obsłuż przypadek gdy model zwrócił tablicę bezpośrednio: ["p1","p2",...]
+        # zamiast {"prompts": ["p1","p2",...]}
+        if clean.strip().startswith("["):
+            prompts = json.loads(clean)
+            logger.info("[tryptyk-batch] Model zwrócił tablicę bezpośrednio — akceptuję")
+        else:
+            data = json.loads(clean)
+            prompts = data.get("prompts", [])
         if isinstance(prompts, list) and len(prompts) >= 1:
             # Uzupełnij do 7 jeśli model zwrócił mniej
             while len(prompts) < 7:
