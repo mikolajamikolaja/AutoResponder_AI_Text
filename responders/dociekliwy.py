@@ -28,7 +28,7 @@ from typing import Optional
 import requests
 from flask import current_app
 
-from .analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive
+from .analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive, generate_thumbnail_jpg
 from core.logging_reporter import get_logger
 
 logger = logging.getLogger(__name__)
@@ -440,7 +440,8 @@ def _buduj_html_email_pierwsza_gra(
   .intro { font-style: italic; color: #666; font-size: 13px; padding: 8px 12px; border-left: 3px solid #c8b89a; margin-bottom: 14px; }
   .pyt { font-size: 16px; font-weight: bold; color: #1a1a2e; margin-bottom: 18px; line-height: 1.5; }
   .opc { margin-bottom: 4px; }
-  .olink { display: block; margin: 7px 0; padding: 10px 16px; background: #1a1a2e; color: #e8d5b0 !important; text-decoration: none !important; font-size: 13px; font-family: 'Courier New', monospace; }
+  .opc-row { display: block; margin: 6px 0; }
+  .olink { display: block; width: 100%; box-sizing: border-box; padding: 10px 16px; background: #1a1a2e; color: #e8d5b0 !important; text-decoration: none !important; font-size: 13px; font-family: 'Courier New', monospace; }
   .olink .lit { color: #8b6914; font-weight: bold; margin-right: 10px; }
   .diagram-wrap { margin: 28px 0; padding: 20px; border: 2px dashed #8b6914; background: #faf8f4; }
   .diagram-wrap p { font-size: 11px; color: #666; margin: 0 0 14px 0; line-height: 1.6; }
@@ -452,7 +453,12 @@ def _buduj_html_email_pierwsza_gra(
     for lit in ["A", "B", "C"]:
         if lit in opcje:
             tekst = opcje[lit].get("tekst", lit)
-            opcje_html += f"<a href='#' class='olink'><span class='lit'>{lit})</span> {tekst}</a>\n"
+            # Kazda opcja w osobnym bloku display:block z marginesem — oddzielna linia w mailu
+            opcje_html += (
+                f"<div class=\"opc-row\">"
+                f"<a href='#' class='olink'><span class='lit'>{lit})</span> {tekst}</a>"
+                f"</div>\n"
+            )
 
     # Oblicz całkowitą liczbę ścieżek: 3 pytania × 3 rundy × 3 opcje = 3^4? W rzeczywistości: każde pytanie ma 3^3 = 27 ścieżek, 3 pytania = 81 ścieżek
     total_sciezek = len(pytania) * (3**MAX_RUNDY)
@@ -784,18 +790,23 @@ def build_dociekliwy_section(
 
     # ── GENERUJ DIAGRAMY ──────────────────────────────────────────────────────
     logger.info("[ERYK] Krok 2: Generowanie diagramów...")
-    # JPG diagram (1024x1024) — z oddali, pokazuje całą strukturę
-    diagram_jpg_bytes = generate_jpg_diagram(gra_data)
+    # Miniatura JPG — renderujemy ten sam SVG co eryk_diagram_interaktywny.html
+    # Dzieki temu obrazek w mailu jest wierna miniatura drzewa decyzyjnego
+    diagram_jpg_bytes = generate_thumbnail_jpg(gra_data, sn, thumb_width=900)
+    if not diagram_jpg_bytes:
+        # Fallback na stary generator jesli cairosvg niedostepny
+        logger.warning("[ERYK] cairosvg niedostepny — fallback na generate_jpg_diagram")
+        diagram_jpg_bytes = generate_jpg_diagram(gra_data)
     diagram_jpg_b64 = ""
     if diagram_jpg_bytes:
         diagram_jpg_b64 = base64.b64encode(diagram_jpg_bytes).decode("ascii")
         logger.info(
-            "[ERYK] ✓ JPG diagram: %d bytes → base64: %d chars",
+            "[ERYK] ✓ JPG miniatura drzewa: %d bytes → base64: %d chars",
             len(diagram_jpg_bytes),
             len(diagram_jpg_b64),
         )
     else:
-        logger.warning("[ERYK] ⚠️ Nie wygenerowano JPG diagramu")
+        logger.warning("[ERYK] ⚠️ Nie wygenerowano JPG miniatury drzewa")
 
     # SVG HTML interaktywny
     diagram_svg_html = generate_svg_html_interactive(gra_data, sn)

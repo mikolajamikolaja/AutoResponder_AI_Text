@@ -401,6 +401,88 @@ def generate_jpg_diagram(gra: Dict[str, Any]) -> Optional[bytes]:
     return jpg
 
 
+
+
+def generate_thumbnail_jpg(
+    gra: Dict[str, Any],
+    sender_name: str = "",
+    thumb_width: int = 900,
+) -> Optional[bytes]:
+    """
+    Generuje miniaturowy JPG z tego samego SVG co eryk_diagram_interaktywny.html.
+    Dzieki temu obrazek inline w mailu jest wierna, czytalna miniatura drzewa.
+
+    Strategia:
+      1. Generuj SVG przez generate_svg_html_interactive (ta sama logika co zalacznik)
+      2. Wyciagnij blok <svg ...> z HTML
+      3. Renderuj SVG -> PNG przez cairosvg (skalowanie do thumb_width)
+      4. Konwertuj PNG -> JPG przez PIL
+      5. Zwroc bytes JPG
+
+    Fallback: jezeli cairosvg niedostepny, zwraca None
+    (caller uzyje wtedy starego generate_jpg_diagram lub pominie obrazek).
+    """
+    try:
+        # Krok 1: Generuj HTML z SVG
+        html_str = generate_svg_html_interactive(gra, sender_name)
+        if not html_str:
+            _log("generate_thumbnail_jpg: brak HTML z generate_svg_html_interactive")
+            return None
+
+        # Krok 2: Wyciagnij blok SVG z HTML
+        # Szukamy od pierwszego <?xml lub <svg do zamykajacego </svg>
+        svg_match = re.search(
+            r'(<\?xml[^>]*\?>\s*)?(<svg\b.*?</svg>)',
+            html_str,
+            re.DOTALL | re.IGNORECASE,
+        )
+        if not svg_match:
+            _log("generate_thumbnail_jpg: nie znaleziono bloku SVG w HTML")
+            return None
+
+        svg_str = svg_match.group(2)  # sam blok <svg>...</svg>
+
+        # Upewnij sie ze ma xmlns (cairosvg wymaga)
+        if 'xmlns=' not in svg_str:
+            svg_str = svg_str.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ', 1)
+
+        # Krok 3: Odczytaj oryginalne wymiary SVG zeby zachowac proporcje
+        w_match = re.search(r'<svg[^>]+width=["\'](\d+)["\']', svg_str)
+        h_match = re.search(r'<svg[^>]+height=["\'](\d+)["\']', svg_str)
+        orig_w = int(w_match.group(1)) if w_match else 2000
+        orig_h = int(h_match.group(1)) if h_match else 1200
+        ratio = orig_h / orig_w
+        thumb_height = int(thumb_width * ratio)
+
+        # Krok 4: Render SVG -> PNG przez cairosvg
+        try:
+            import cairosvg
+            png_bytes = cairosvg.svg2png(
+                bytestring=svg_str.encode("utf-8"),
+                output_width=thumb_width,
+                output_height=thumb_height,
+            )
+        except ImportError:
+            _log("generate_thumbnail_jpg: cairosvg niedostepny — fallback na generate_jpg_diagram")
+            return None
+
+        # Krok 5: PNG -> JPG przez PIL
+        from PIL import Image
+
+        img = Image.open(BytesIO(png_bytes)).convert("RGB")
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=88, optimize=True)
+        jpg_bytes = buf.getvalue()
+
+        _log(
+            f"generate_thumbnail_jpg: SVG({orig_w}x{orig_h}) -> JPG({thumb_width}x{thumb_height}) = {len(jpg_bytes)//1024}KB"
+        )
+        return jpg_bytes
+
+    except Exception as e:
+        _log(f"generate_thumbnail_jpg: blad — {e}")
+        return None
+
 def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") -> str:
     """
     Generuje samodzielny plik HTML z SVG drzewa decyzyjnego.
