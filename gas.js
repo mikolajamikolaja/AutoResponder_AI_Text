@@ -1018,6 +1018,12 @@ function _callBackend(sender, senderName, subject, body, searchText, url, msgId,
     payload.historia     = smircData.historia     || [];
   }
 
+  // Przekaż ID arkusza śmierci — Render sam zapisze wyniki po przetworzeniu
+  var smircHistSheetId = PropertiesService.getScriptProperties().getProperty("SMIERC_HISTORY_SHEET_ID");
+  if (smircHistSheetId) {
+    payload.smierc_sheet_id = smircHistSheetId;
+  }
+
   var options = {
     method:             "post",
     contentType:        "application/json",

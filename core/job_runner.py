@@ -500,13 +500,29 @@ def _send_combined_email(
 
 
 def _update_smierc_sheet(smierc_sheet_id, sender, data, smierc_result):
+    """
+    Zapisuje wynik sekcji smierc do arkusza Google Sheets.
+
+    Struktura arkusza (zakładka = email z @ i . zamienionymi na _):
+      A = nr_etapu
+      B = data_smierci  (kopiowana z wiersza 2, nie nadpisujemy)
+      C = mail_od_osoby (treść wiadomości od nadawcy)
+      D = odpowiedz_pawla (plain text odpowiedzi — czytelny dla użytkownika)
+      E = last_msg_id
+
+    Wiersz bieżący  = etap_który_właśnie_obsłużyliśmy + 1
+      np. etap 1 → wiersz 2, etap 2 → wiersz 3
+
+    Wiersz następny = nowy_etap + 1
+      Wpisujemy tam nowy_etap w kolumnie A żeby script wiedział
+      na jakim etapie jest korespondencja przy kolejnym mailu.
+    """
     import re
     import html as html_lib
 
     def strip_html(h):
         if not h:
             return ""
-        # Najpierw usuń <style>...</style> i <script>...</script>
         text = re.sub(r"<style[\s\S]*?</style>", "", h, flags=re.IGNORECASE)
         text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
         text = re.sub(r"(?i)<br\s*/?>", "\n", text)
@@ -515,20 +531,40 @@ def _update_smierc_sheet(smierc_sheet_id, sender, data, smierc_result):
 
     if "nowy_etap" not in smierc_result:
         return
-    range_name = (
-        f"{sender.replace('@', '_').replace('.', '_')}"
-        f"!A{smierc_result['nowy_etap'] + 1}"
-    )
-    values = [
-        [
-            smierc_result["nowy_etap"],
-            "",
-            data.get("body", "")[:2000],
-            (
-                smierc_result.get("reply_text")
-                or strip_html(smierc_result.get("reply_html", ""))
-            )[:2000],
-            "",
-        ]
-    ]
-    update_sheet_with_data(smierc_sheet_id, range_name, values)
+
+    nowy_etap = smierc_result["nowy_etap"]
+    # Etap który właśnie obsłużyliśmy = nowy_etap - 1 (bo smierc.py już inkrementuje)
+    etap_biezacy = nowy_etap - 1
+    sheet_tab = sender.replace("@", "_").replace(".", "_")
+
+    # Treść odpowiedzi — preferujemy reply_text (plain), fallback do strip_html(reply_html)
+    odpowiedz = (
+        smierc_result.get("reply_text")
+        or strip_html(smierc_result.get("reply_html", ""))
+    )[:5000]
+
+    body_text = data.get("body", "")[:2000]
+    msg_id = data.get("message_id", data.get("msg_id", ""))[:100]
+
+    # ── Wiersz bieżący: zapisz odpowiedź i treść wiadomości ───────────────────
+    # Wiersz = etap_biezacy + 1 (etap 1 → wiersz 2)
+    current_row = etap_biezacy + 1
+    if current_row < 2:
+        current_row = 2  # Minimum wiersz 2 (wiersz 1 to nagłówki)
+
+    range_current = f"{sheet_tab}!A{current_row}:E{current_row}"
+    values_current = [[
+        etap_biezacy,   # A: nr_etapu (bieżący)
+        "",             # B: data_smierci (GAS ustawia, nie nadpisujemy)
+        body_text,      # C: mail_od_osoby
+        odpowiedz,      # D: odpowiedz_pawla — PLAIN TEXT, czytelny
+        msg_id,         # E: last_msg_id
+    ]]
+    update_sheet_with_data(smierc_sheet_id, range_current, values_current)
+
+    # ── Wiersz następny: zapisz nowy_etap w kolumnie A ────────────────────────
+    # Dzięki temu GAS przy kolejnym mailu odczyta właściwy etap z lastRow
+    next_row = nowy_etap + 1
+    range_next = f"{sheet_tab}!A{next_row}"
+    values_next = [[nowy_etap]]
+    update_sheet_with_data(smierc_sheet_id, range_next, values_next)
