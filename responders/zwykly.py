@@ -4687,6 +4687,8 @@ def build_zwykly_section(
 
     reply_html = build_html_reply(res_text)
     analiza_docx_list = []
+    htm_for_drive = None   # HTM do zapisu na Drive (podmieni placeholder w reply_html)
+    drive_url = None       # URL pliku HTM na Drive (po wgraniu)
 
     # Dociekliwy działa na podstawie body + opcjonalnych zalacznikow.
     # NIE wymaga zalacznikow — analizuje tresc emaila nadawcy.
@@ -4730,18 +4732,37 @@ def build_zwykly_section(
                             len(interactive_html_b64),
                         )
 
-                # Dolacz HTML z dociekliwego jako zalacznik
-                if interactive_html_b64:
-                    analiza_docx_list.append(
-                        {
-                            "base64": interactive_html_b64,
-                            "content_type": "application/octet-stream",
-                            "filename": "eryk_diagram_interaktywny.htm",
-                        }
-                    )
-                    logger.info(
-                        "[zwykly_dociekliwy_ATTACHED] ✓ Dodano SVG diagram jako załącznik"
-                    )
+                # ── Upload HTM na Google Drive (zamiast załącznika do maila) ──
+                htm_for_drive = analiza_res.get("htm_for_drive")
+                drive_url = None
+                if htm_for_drive and htm_for_drive.get("base64"):
+                    try:
+                        from drive_utils import upload_file_to_drive
+                        import os as _os
+                        drive_folder_id = _os.getenv("DRIVE_FOLDER_ID", "")
+                        drive_result = upload_file_to_drive(
+                            file_data=htm_for_drive["base64"],
+                            filename=htm_for_drive["filename"],
+                            mime_type=htm_for_drive["content_type"],
+                            folder_id=drive_folder_id or None,
+                        )
+                        if drive_result and drive_result.get("id"):
+                            drive_url = f"https://drive.google.com/file/d/{drive_result['id']}/view"
+                            logger.info(
+                                "[zwykly_dociekliwy_DRIVE] ✓ HTM wgrany na Drive: %s",
+                                drive_url,
+                            )
+                        else:
+                            logger.warning(
+                                "[zwykly_dociekliwy_DRIVE] ⚠️ Upload HTM na Drive nie zwrócił ID"
+                            )
+                    except Exception as _drive_err:
+                        logger.error(
+                            "[zwykly_dociekliwy_DRIVE] ❌ Błąd uploadu HTM na Drive: %s",
+                            _drive_err,
+                        )
+
+                # Nie dołączamy już HTM jako załącznik — trafia tylko na Drive
 
                 # Wstaw obrazek JPG (diagram) inline do tresci maila
                 if diagram_jpg_b64:
@@ -4752,6 +4773,28 @@ def build_zwykly_section(
 
                 # Dolacz pierwsza odpowiedz tekstowa dociekliwego na koncu tresci maila
                 dociekliwy_reply = analiza_res.get("reply_html", "")
+                if dociekliwy_reply and dociekliwy_reply.strip():
+                    # Podmień placeholder linku Drive (przed wstawieniem do maila)
+                    if drive_url:
+                        dociekliwy_reply = dociekliwy_reply.replace(
+                            "{DRIVE_LINK_PLACEHOLDER}", drive_url
+                        )
+                        logger.info(
+                            "[zwykly_dociekliwy_PLACEHOLDER] ✓ Podmieniono DRIVE_LINK_PLACEHOLDER → %s",
+                            drive_url,
+                        )
+                    else:
+                        # Fallback: link niedostępny — ukryj przycisk i wstaw info
+                        dociekliwy_reply = dociekliwy_reply.replace(
+                            "{DRIVE_LINK_PLACEHOLDER}", "#"
+                        )
+                        dociekliwy_reply = dociekliwy_reply.replace(
+                            "▶ Otwórz interaktywną grę Eryka",
+                            "(link niedostępny)",
+                        )
+                        logger.warning(
+                            "[zwykly_dociekliwy_PLACEHOLDER] ⚠️ Brak drive_url — wstawiono fallback '(link niedostępny)'"
+                        )
                 if dociekliwy_reply and dociekliwy_reply.strip():
                     logger.info(
                         "[zwykly_dociekliwy_REPLY] ✓ reply_html z dociekliwego: %d bytes",
@@ -4859,4 +4902,7 @@ def build_zwykly_section(
         "explanation_txt": explanation_txt,
         "provider": provider,
         "nouns_dict": nouns_dict,
+        # Dla logowania / ewentualnej obsługi w smtp_wysylka.py
+        "htm_for_drive": htm_for_drive,
+        "drive_url": drive_url,
     }

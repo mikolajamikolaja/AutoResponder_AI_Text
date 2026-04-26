@@ -745,6 +745,8 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         + f"SCHEMAT JSON:\n{schema}\n\n"
         f"LIMIT DŁUGOŚCI: Każde pole tekstowe maksymalnie 300 znaków. Zwróć TYLKO czysty JSON."
     )
+    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=2000)
+    result = _parse_json_safe(raw, "diagnozy")
     if not result or not isinstance(result, dict):
         return {
             "diagnoza_wstepna": {

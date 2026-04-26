@@ -465,9 +465,16 @@ def _buduj_html_email_pierwsza_gra(
     diagram_html = ""
     if diagram_jpg_b64:
         diagram_html = f"""<div class="diagram-wrap">
-<p><strong>Mapa całej gry:</strong> {len(pytania)} pytań × {MAX_RUNDY} rund × 3 opcje = do {total_sciezek} ścieżek decyzyjnych. 
-Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_interaktywny.html</strong></p>
+<p><strong>Mapa całej gry:</strong> {len(pytania)} pytań × {MAX_RUNDY} rund × 3 opcje = do {total_sciezek} ścieżek decyzyjnych.</p>
 <img src="data:image/jpeg;base64,{diagram_jpg_b64}" alt="Diagram struktury gry Edka" class="diagram-img" />
+<p style="text-align:center;margin:16px 0;">
+  <a href="{{DRIVE_LINK_PLACEHOLDER}}" target="_blank"
+     style="background:#1a1a2e;color:#e8d5b0;padding:10px 24px;
+            font-family:'Courier New',monospace;font-size:13px;
+            text-decoration:none;border:1px solid #8b6914;">
+    ▶ Otwórz interaktywną grę Eryka
+  </a>
+</p>
 </div>"""
 
     html = f"""{css}
@@ -483,7 +490,7 @@ Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_
     <div class="opc">{opcje_html}</div>
     {diagram_html}
   </div>
-  <div class="ft">Eryk Responder™ v3.0 (drzewiasty) · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
+  <div class="ft">Eryk Responder™ v3.0 (drzewiasty) · Kliknij przycisk powyżej, aby grać aktywnie · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
 </div>"""
 
     return html
@@ -871,14 +878,17 @@ def build_dociekliwy_section(
             "filename": "eryk_gra.htm",
             "content_type": "application/octet-stream",
         },
+        # Plik HTM do zapisu na Drive (NIE trafia jako załącznik do maila).
+        # zwykly.py wgra go na Drive i podmieni {DRIVE_LINK_PLACEHOLDER} w reply_html.
+        "htm_for_drive": {
+            "base64": diagram_svg_b64,
+            "filename": "eryk_diagram_interaktywny.htm",
+            "content_type": "text/html",
+        },
+        # Pusty string — wypełni go zwykly.py po zapisie na Drive.
+        "drive_link": "",
         "docx_list": [
-            # Diagram interaktywny SVG
-            {
-                "base64": diagram_svg_b64,
-                "filename": "eryk_diagram_interaktywny.htm",
-                "content_type": "application/octet-stream",
-            },
-            # Diagram JPG z oddali
+            # Diagram JPG z oddali — Gmail nie blokuje JPG
             {
                 "base64": diagram_jpg_b64,
                 "filename": "eryk_diagram_mapa.jpg",
