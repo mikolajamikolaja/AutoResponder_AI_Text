@@ -421,372 +421,128 @@ def _buduj_html_email_pierwsza_gra(
     is_pilne: bool = False,
 ) -> str:
     """
-    Buduje dynamiczny HTML reply_html — wszystkie pytania z JS, dźwiękami, typewriterem.
-    Na górze: link Drive ({DRIVE_LINK_PLACEHOLDER}) + treść oryginalnego emaila.
-    Bez JPG, bez wyroku.
+    Buduje STATYCZNY HTML reply_html (bez JS) — kompatybilny z Gmail/Google.
+    Na górze: link Drive ({DRIVE_LINK_PLACEHOLDER}) + info o załączniku .txt.
+    Poniżej: lista pytań i opcji do wglądu (statyczna, bez interaktywności).
     """
     pytania = gra.get("pytania", [])
     if not pytania:
         return "<p>Brak pytań gry.</p>"
 
     sn = sender_name or "Użytkowniku"
-    n_pytan = len(pytania)
-    pilne_js = "true" if is_pilne else "false"
-    pilne_badge = '<span class="pilne-badge">&#9888; PILNE</span>' if is_pilne else ""
+    pilne_badge = "&#9888; PILNE &mdash; " if is_pilne else ""
+
+    def esc(s):
+        return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
     # ── Sekcja oryginalnej treści emaila ──────────────────────────────────────
-    body_escaped = (body_original or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-    body_html = f"""<div class="orig-email">
-<div class="orig-label">&#9993; Twoja wiadomość:</div>
-<div class="orig-text">{body_escaped}</div>
+    body_escaped = esc(body_original)
+    body_html = f"""<div style="background:#f5f0e8;border-left:3px solid #8b6914;padding:10px 14px;
+  margin:0 0 14px;border-radius:0 4px 4px 0;font-family:Arial,sans-serif">
+<div style="font-size:10px;color:#8b6914;font-weight:bold;letter-spacing:1px;margin-bottom:5px">
+  &#9993; Twoja wiadomość:</div>
+<div style="font-size:12px;color:#444;line-height:1.6;white-space:pre-wrap;word-break:break-word">{body_escaped}</div>
 </div>""" if body_escaped.strip() else ""
 
-    # ── Buduj sekcje pytań ────────────────────────────────────────────────────
-    KOLORY = [
-        ("background:#E6F1FB", "border-color:#185FA5", "color:#0C447C", "outline-color:#185FA5", "#185FA5"),
-        ("background:#E1F5EE", "border-color:#0F6E56", "color:#085041", "outline-color:#0F6E56", "#0F6E56"),
-        ("background:#FAEEDA", "border-color:#854F0B", "color:#633806", "outline-color:#854F0B", "#854F0B"),
+    # ── Statyczna lista pytań i opcji ─────────────────────────────────────────
+    KOLORY_OPC = [
+        ("#E6F1FB", "#185FA5", "#0C447C"),
+        ("#E1F5EE", "#0F6E56", "#085041"),
+        ("#FAEEDA", "#854F0B", "#633806"),
     ]
     LIT = ["A", "B", "C"]
 
-    sekcje_html = ""
+    pytania_html = ""
     for pi, pytanie in enumerate(pytania, 1):
-        tresc = pytanie.get("tresc", f"Pytanie {pi}").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+        tresc = esc(pytanie.get("tresc", f"Pytanie {pi}"))
         opcje = pytanie.get("opcje", {})
 
-        strzalka = '<div class="dg-arrow">&#8595;</div>' if pi > 1 else ""
-        hidden = ' class="section-hidden"' if pi > 1 else ""
-
-        cols_html = ""
+        opcje_html = ""
         for li, lit in enumerate(LIT):
             if lit not in opcje:
                 continue
             op = opcje[lit]
-            tekst_op = op.get("tekst", lit).replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-            reakcja = op.get("reakcja", "").replace('"', "&quot;").replace("\\", "\\\\")
-
-            # runda2
-            runda2_data = op.get("runda2", {})
-            ma_r2 = bool(runda2_data and runda2_data.get("pytanie"))
-            r2_js = "true" if ma_r2 else "false"
-
-            bg, bc, col, oc, label_col = KOLORY[li]
-            styl_btn = f"{bg};{bc};{col};{oc}"
-            styl_label = f"color:{label_col}"
-
-            r2_html = ""
-            if ma_r2:
-                r2_pyt = runda2_data.get("pytanie", "").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-                r2_opcje = runda2_data.get("opcje", {})
-                r2_btns = ""
-                for li2, lit2 in enumerate(LIT):
-                    if lit2 not in r2_opcje:
-                        continue
-                    op2 = r2_opcje[lit2]
-                    tekst2 = op2.get("tekst", lit2).replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-                    bg2, bc2, col2, oc2, _ = KOLORY[li2]
-                    styl2 = f"{bg2};{bc2};{col2};{oc2}"
-                    r2_btns += (
-                        f'<div class="r2-col">'
-                        f'<button class="r2-btn" style="{styl2}" '
-                        f'onclick="wybierzR2({pi},\'{lit}\',\'{lit2}\',this)">'
-                        f'<div class="r2-tile-label">{lit}{lit2}</div>{tekst2}</button></div>\n'
-                    )
-                r2_html = f"""<div class="r2-block" id="r2-{pi}-{lit}">
-<div class="r2-question"><div class="r2-sub-label">RUNDA 2 &mdash; {lit}</div>{r2_pyt}</div>
-<div class="r2-cols">{r2_btns}</div>
-<div class="r2-hint">&#8679; wybierz aby przejść dalej</div>
-</div>"""
-
-            cols_html += f"""<div class="dg-col">
-<button class="opc-btn" style="{styl_btn}" onclick="wybierzR1({pi},'{lit}',this,{r2_js})">
-  <div class="opc-label" style="{styl_label}">{lit})</div>
-  <div class="opc-text">{tekst_op}</div>
-</button>
-<div class="reakcja" id="rea-{pi}-{lit}" data-tekst="{reakcja}"></div>
-{r2_html}
+            tekst_op = esc(op.get("tekst", lit))
+            bg, border, col = KOLORY_OPC[li]
+            opcje_html += f"""<div style="flex:1;background:{bg};border:1.5px solid {border};
+  border-radius:6px;padding:10px;font-family:Arial,sans-serif">
+  <div style="font-size:9px;font-weight:bold;letter-spacing:1px;color:{col};margin-bottom:4px">{lit})</div>
+  <div style="font-size:11px;color:{col};line-height:1.4">{tekst_op}</div>
 </div>
 """
 
-        sekcje_html += f"""<div id="sekcja-p{pi}"{hidden}>
-{strzalka}
-<div class="dg-question">
-  <div class="dg-q-label">PYTANIE {pi}</div>
-  <div class="dg-q-text">{tresc}</div>
+        pytania_html += f"""<div style="margin-bottom:18px">
+<div style="background:#EEEDFE;border:2px solid #534AB7;border-radius:8px;
+  padding:12px 18px;margin-bottom:8px;text-align:center;font-family:Arial,sans-serif">
+  <div style="font-size:10px;color:#534AB7;font-weight:bold;letter-spacing:2px;margin-bottom:4px">PYTANIE {pi}</div>
+  <div style="font-size:13px;color:#3C3489;font-weight:bold;line-height:1.4">{tresc}</div>
 </div>
-<div class="dg-cols" id="cols-p{pi}">
-{cols_html}
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+{opcje_html}
 </div>
 </div>
 """
 
-    # ── Złożony HTML ─────────────────────────────────────────────────────────
+    wyrok_tresc = esc(gra.get("wyrok", ""))
+    wyrok_html = f"""<div style="background:#3C3489;color:#F1EFE8;border-radius:8px;
+  padding:14px 18px;margin-top:8px;font-family:Arial,sans-serif;font-size:12px;line-height:1.6">
+  <div style="font-weight:bold;margin-bottom:6px;font-size:11px;letter-spacing:1px">&#9878; WYROK KO&#323;COWY</div>
+  {wyrok_tresc}
+</div>""" if wyrok_tresc else ""
+
     return f"""<!DOCTYPE html>
 <html lang="pl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Eryk Responder&#8482; &mdash; {sn}</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#FAF8F4;font-family:Arial,sans-serif;transition:background .4s,color .4s}}
-.dg-wrap{{padding:16px;max-width:980px;margin:0 auto}}
-.dg-header{{background:#2C2C2A;color:#F1EFE8;text-align:center;padding:10px 20px;
-  border-radius:8px;font-size:13px;font-weight:bold;margin-bottom:8px;letter-spacing:1px}}
-.pilne-badge{{display:inline-block;background:#CC0000;color:#fff;
-  font-size:10px;padding:2px 8px;border-radius:10px;margin-left:8px;
-  animation:blink 1s step-end infinite}}
-@keyframes blink{{50%{{opacity:0}}}}
-.drive-link-wrap{{text-align:center;margin:10px 0 14px}}
-.drive-link-wrap a{{display:inline-block;background:#1a1a2e;color:#e8d5b0;
-  padding:9px 22px;font-family:'Courier New',monospace;font-size:12px;
-  text-decoration:none;border:1px solid #8b6914;border-radius:4px}}
-.orig-email{{background:#f5f0e8;border-left:3px solid #8b6914;padding:10px 14px;
-  margin:0 0 14px;border-radius:0 4px 4px 0}}
-.orig-label{{font-size:10px;color:#8b6914;font-weight:bold;letter-spacing:1px;margin-bottom:5px}}
-.orig-text{{font-size:12px;color:#444;line-height:1.6;white-space:pre-wrap;word-break:break-word}}
-.style-switcher{{display:flex;gap:8px;justify-content:center;margin-bottom:12px;flex-wrap:wrap}}
-.style-btn{{border:1.5px solid #888;border-radius:20px;padding:4px 14px;
-  font-size:10px;cursor:pointer;background:transparent;font-family:inherit;transition:all .2s}}
-.style-btn.active{{background:#534AB7;color:#fff;border-color:#534AB7}}
-.progress-wrap{{margin:0 auto 12px;max-width:700px}}
-.progress-label{{font-size:10px;color:#888;margin-bottom:3px;text-align:center;
-  font-style:italic;min-height:16px}}
-.progress-bar-bg{{background:#E0DEDA;border-radius:4px;height:8px;overflow:hidden}}
-.progress-bar-fill{{background:linear-gradient(90deg,#534AB7,#8B7ED8);
-  height:100%;border-radius:4px;width:0%;transition:width .4s ease}}
-.path-tracker{{font-size:11px;color:#888;text-align:center;margin:6px 0;min-height:16px}}
-.dg-question{{background:#EEEDFE;border:2px solid #534AB7;border-radius:8px;
-  padding:12px 18px;margin:0 auto 8px;text-align:center}}
-.dg-q-label{{font-size:10px;color:#534AB7;font-weight:bold;letter-spacing:2px;margin-bottom:4px}}
-.dg-q-text{{font-size:13px;color:#3C3489;font-weight:bold;line-height:1.4}}
-.dg-cols{{display:flex;gap:10px;margin-bottom:8px}}
-.dg-col{{flex:1;display:flex;flex-direction:column;gap:6px}}
-.opc-btn{{border-radius:6px;padding:10px;cursor:pointer;border-width:1.5px;
-  border-style:solid;text-align:left;width:100%;font-family:inherit;
-  transition:filter .15s,transform .1s;background:inherit}}
-.opc-btn:hover{{filter:brightness(.93);transform:translateY(-1px)}}
-.opc-btn:active{{transform:translateY(0)}}
-.opc-btn.active{{outline:2px solid;outline-offset:2px}}
-.opc-label{{font-size:9px;font-weight:bold;letter-spacing:1px;margin-bottom:2px}}
-.opc-text{{font-size:11px;line-height:1.4}}
-.reakcja{{border-radius:4px;padding:8px;font-size:10px;font-style:italic;
-  border:1px dashed #C8A96A;background:#FFF8F0;color:#7A6040;
-  line-height:1.5;display:none;min-height:20px}}
-.reakcja-cursor{{display:inline-block;width:2px;height:11px;
-  background:#7A6040;margin-left:1px;animation:blink 0.7s step-end infinite;
-  vertical-align:text-bottom}}
-.r2-block{{margin-top:6px;display:none}}
-.r2-question{{background:#F0E6FA;border:1px solid #7A5FB7;border-radius:5px;
-  padding:8px;font-size:10px;color:#534AB7;font-weight:bold;
-  margin-bottom:6px;text-align:center}}
-.r2-sub-label{{font-size:9px;color:#7A5FB7;letter-spacing:1px;margin-bottom:3px}}
-.r2-cols{{display:flex;gap:4px}}
-.r2-col{{flex:1}}
-.r2-btn{{border-radius:4px;padding:6px 5px;font-size:9px;border-width:1px;
-  border-style:solid;text-align:center;line-height:1.4;cursor:pointer;
-  width:100%;font-family:inherit;background:inherit;transition:filter .15s,transform .1s}}
-.r2-btn:hover{{filter:brightness(.92);transform:translateY(-1px)}}
-.r2-btn.active{{outline:2px solid;outline-offset:1px}}
-.r2-tile-label{{font-weight:bold;margin-bottom:2px}}
-.r2-hint{{font-size:9px;color:#aaa;text-align:center;margin-top:2px;font-style:italic}}
-.section-hidden{{display:none}}
-.dg-arrow{{text-align:center;color:#888780;font-size:20px;margin:6px 0}}
-body.terminal{{background:#0D0D0D;color:#00FF41;font-family:'Courier New',monospace}}
-body.terminal .dg-header{{background:#001A00;color:#00FF41;border:1px solid #00FF41}}
-body.terminal .dg-question{{background:#001A00;border-color:#00FF41}}
-body.terminal .dg-q-label{{color:#00FF41}}
-body.terminal .dg-q-text{{color:#00FF41}}
-body.terminal .opc-btn{{background:#001A00 !important;border-color:#00FF41 !important;color:#00FF41 !important}}
-body.terminal .opc-label{{color:#00FF41 !important}}
-body.terminal .reakcja{{background:#001A00;border-color:#00FF41;color:#00FF41}}
-body.terminal .r2-question{{background:#001A00;border-color:#00FF41;color:#00FF41}}
-body.terminal .r2-btn{{background:#001A00 !important;border-color:#00FF41 !important;color:#00FF41 !important}}
-body.terminal .progress-bar-fill{{background:#00FF41}}
-body.terminal .style-btn{{color:#00FF41;border-color:#00FF41}}
-body.terminal .style-btn.active{{background:#00FF41;color:#000}}
-body.terminal .path-tracker{{color:#00AA2A}}
-body.terminal .progress-label{{color:#00AA2A}}
-body.terminal .orig-email{{background:#001A00;border-color:#00FF41}}
-body.terminal .orig-label{{color:#00FF41}}
-body.terminal .orig-text{{color:#00FF41}}
-body.kartka{{background:#F5EDB0;font-family:Georgia,serif}}
-body.kartka .dg-header{{background:#8B6914;font-family:Georgia,serif}}
-body.kartka .dg-question{{background:#FFFDE0;border-color:#8B6914}}
-body.kartka .dg-q-label{{color:#8B6914}}
-body.kartka .dg-q-text{{color:#5A3E00}}
-body.kartka .reakcja{{background:#FFFDE0;border-color:#8B6914;font-family:Georgia,serif}}
-@media (max-width:600px){{
-  .dg-cols{{flex-direction:column}}
-  .dg-col{{width:100%}}
-  .r2-cols{{flex-direction:column}}
-  .r2-col{{width:100%}}
-  .dg-wrap{{padding:8px;margin:0}}
-  .dg-question{{padding:8px 10px}}
-  .dg-q-text{{font-size:12px}}
-  .opc-btn{{padding:8px}}
-  .opc-text{{font-size:12px}}
-  .dg-header{{font-size:11px;padding:8px}}
-}}
-</style>
+<title>Eryk Responder&#8482; &mdash; {esc(sn)}</title>
 </head>
-<body>
-<div class="dg-wrap">
-<div class="dg-header">ERYK RESPONDER&#8482; &middot; Drzewo Dociekliwości &middot; {sn}{pilne_badge}</div>
-<div class="drive-link-wrap">
-  <a href="{{DRIVE_LINK_PLACEHOLDER}}" target="_blank">&#9654; Otwórz interaktywną grę Eryka (Drive)</a>
+<body style="background:#FAF8F4;font-family:Arial,sans-serif;margin:0;padding:0">
+<div style="padding:16px;max-width:900px;margin:0 auto">
+
+  <div style="background:#2C2C2A;color:#F1EFE8;text-align:center;padding:10px 20px;
+    border-radius:8px;font-size:13px;font-weight:bold;margin-bottom:12px;letter-spacing:1px">
+    ERYK RESPONDER&#8482; &middot; {pilne_badge}Drzewo Docieklivo&#347;ci &middot; {esc(sn)}
+  </div>
+
+  <!-- LINK DO DRIVE — podmieniony przez zwykly.py -->
+  <div style="text-align:center;margin:0 0 14px">
+    <a href="{{DRIVE_LINK_PLACEHOLDER}}" target="_blank"
+       style="display:inline-block;background:#1a1a2e;color:#e8d5b0;
+         padding:11px 28px;font-family:'Courier New',monospace;font-size:13px;
+         text-decoration:none;border:1px solid #8b6914;border-radius:4px;
+         font-weight:bold;letter-spacing:1px">
+      &#9654; Kliknij w link by otrzyma&#263; odpowied&#378;
+    </a>
+  </div>
+
+  <!-- INFO O ZAŁĄCZNIKU -->
+  <div style="background:#FFF8E7;border:1px solid #C8A96A;border-radius:6px;
+    padding:12px 16px;margin-bottom:16px;font-size:12px;color:#7A6040;line-height:1.6">
+    <strong>&#128206; Interaktywna gra Eryka</strong> dost&#281;pna jest w za&#322;&#261;czniku
+    <code style="background:#f0e8d8;padding:1px 5px;border-radius:3px">eryk_gra_interaktywna.txt</code>.<br>
+    Aby j&#261; uruchomi&#263;: <strong>&#347;ci&#261;gnij za&#322;&#261;cznik</strong>, nast&#281;pnie
+    <strong>zmie&#324; rozszerzenie</strong> pliku z <code>.txt</code> na <code>.html</code>
+    i otw&#243;rz w przegl&#261;darce.
+  </div>
+
+  {body_html}
+
+  <!-- STATYCZNY PODGLĄD PYTAŃ -->
+  <div style="background:#F0EEFE;border:1px solid #534AB7;border-radius:6px;
+    padding:10px 14px;margin-bottom:14px;font-size:11px;color:#534AB7;text-align:center;
+    font-style:italic">
+    Poni&#380;ej podgl&#261;d struktury pyta&#324; Eryka (wersja statyczna):
+  </div>
+
+  {pytania_html}
+  {wyrok_html}
+
+  <div style="font-size:10px;color:#aaa;text-align:center;padding:14px 8px">
+    Eryk Responder&#8482; &middot; Wygenerowano automatycznie &middot; Odpowied&#378; nast&#261;pi w odpowiednim czasie
+  </div>
+
 </div>
-<div class="style-switcher">
-  <button class="style-btn active" onclick="setStyl('klasyczny',this)">&#128196; Klasyczny</button>
-  <button class="style-btn" onclick="setStyl('terminal',this)">&#9608; Terminal</button>
-  <button class="style-btn" onclick="setStyl('kartka',this)">&#128195; Kartka</button>
-</div>
-<div class="progress-wrap">
-  <div class="progress-label" id="prog-label">Inicjalizacja systemu Eryka&hellip;</div>
-  <div class="progress-bar-bg"><div class="progress-bar-fill" id="prog-bar"></div></div>
-</div>
-<div class="path-tracker" id="path-tracker">Wybierz odpowiedź na Pytanie 1 &rarr;</div>
-{body_html}
-{sekcje_html}
-<div style="font-size:10px;color:#aaa;text-align:center;padding:12px 8px">
-  Eryk Responder&#8482; &middot; Wygenerowano automatycznie &middot; Odpowiedź nastąpi w odpowiednim czasie
-</div>
-</div>
-<script>
-const AUDIO_BASE = "https://legionowopawel.github.io/AutoResponder_AI_Text/audio/";
-const SND_R1    = ["beep.mp3","plink.mp3","bop.mp3"];
-const SND_R2    = ["bounce.mp3","bop.mp3","bubbles.mp3"];
-const SND_WYROK = ["eureka.mp3","wishgranted.mp3"];
-const SND_PILNE = ["nextlevel.mp3"];
-const PILNE     = {pilne_js};
-const N_PYTAN   = {n_pytan};
-
-function graj(lista) {{
-  var plik = lista[Math.floor(Math.random()*lista.length)];
-  var a = new Audio(AUDIO_BASE+plik);
-  a.preload='auto';
-  a.play().catch(function(){{}});
-}}
-
-var progVal=0,progTimer=null,progFaza=0;
-var PROG_LABELS=["Inicjalizacja systemu Eryka\u2026","Analiza merytoryczna odpowiedzi\u2026",
-  "Weryfikacja sp\u00f3jno\u015bci logicznej\u2026","Ocena intencji nadawcy\u2026",
-  "\u00a0 Wykryto nie\u015bcis\u0142o\u015b\u0107 w intencjach nadawcy",
-  "Ponowna analiza od 50%\u2026","Finalizacja wyroku\u2026","Wyrok gotowy."];
-
-function startProgress() {{
-  var bar=document.getElementById('prog-bar');
-  var lbl=document.getElementById('prog-label');
-  progVal=0;progFaza=0;
-  bar.style.width='0%';
-  lbl.textContent=PROG_LABELS[0];
-  if(progTimer) clearInterval(progTimer);
-  progTimer=setInterval(function() {{
-    if(progFaza===0){{progVal+=2;lbl.textContent=PROG_LABELS[Math.floor(progVal/30)%2];if(progVal>=70)progFaza=1;}}
-    else if(progFaza===1){{progVal+=3;lbl.textContent=PROG_LABELS[2+Math.floor((progVal-70)/10)%2];if(progVal>=99){{progFaza=2;lbl.textContent=PROG_LABELS[4];}}}}
-    else if(progFaza===2){{progVal-=5;if(progVal<=50){{progFaza=3;lbl.textContent=PROG_LABELS[5];}}}}
-    else if(progFaza===3){{progVal+=1;if(progVal>=95)lbl.textContent=PROG_LABELS[6];if(progVal>=100){{progVal=100;lbl.textContent=PROG_LABELS[7];clearInterval(progTimer);}}}}
-    bar.style.width=Math.min(100,Math.max(0,progVal))+'%';
-  }},60);
-}}
-
-var twTimers={{}};
-function typewriter(elId,tekst,speed) {{
-  speed=speed||28;
-  var el=document.getElementById(elId);
-  if(!el) return;
-  el.style.display='block';
-  el.innerHTML='';
-  if(twTimers[elId]) clearInterval(twTimers[elId]);
-  var i=0;
-  var cursor='<span class="reakcja-cursor"></span>';
-  twTimers[elId]=setInterval(function() {{
-    el.innerHTML='Eryk: \u201e'+tekst.substring(0,i)+'\u201d'+(i<tekst.length?cursor:'');
-    i++;
-    if(i>tekst.length) {{clearInterval(twTimers[elId]);el.innerHTML='Eryk: \u201e'+tekst+'\u201d';}}
-  }},speed);
-}}
-
-function setStyl(styl,btn) {{
-  document.body.className=styl==='klasyczny'?'':styl;
-  document.querySelectorAll('.style-btn').forEach(function(b){{b.classList.remove('active');}});
-  btn.classList.add('active');
-}}
-
-var sciezka={{}};
-for(var _p=1;_p<=N_PYTAN;_p++) sciezka[_p]=null;
-
-function updateTracker() {{
-  var parts=[];
-  for(var p=1;p<=N_PYTAN;p++) {{
-    if(sciezka[p]) parts.push('P'+p+':'+sciezka[p]);
-    else break;
-  }}
-  var t=document.getElementById('path-tracker');
-  if(parts.length===0) t.textContent='Wybierz odpowied\u017a na Pytanie 1 \u2192';
-  else if(parts.length<N_PYTAN) t.textContent='Ście\u017cka: '+parts.join(' \u2192 ')+' \u2192 ?';
-  else t.textContent='Ście\u017cka: '+Object.values(sciezka).join(' \u2192 ');
-}}
-
-function resetSekcja(pyt) {{
-  var cols=document.getElementById('cols-p'+pyt);
-  if(!cols) return;
-  cols.querySelectorAll('.opc-btn').forEach(function(b){{b.classList.remove('active');}});
-  cols.querySelectorAll('.reakcja').forEach(function(r){{r.style.display='none';r.innerHTML='';}});
-  cols.querySelectorAll('.r2-block').forEach(function(r){{r.style.display='none';}});
-  cols.querySelectorAll('.r2-btn').forEach(function(b){{b.classList.remove('active');}});
-  sciezka[pyt]=null;
-}}
-
-function odkryjNastepne(pyt) {{
-  var nastepna=pyt+1;
-  var sek=document.getElementById('sekcja-p'+nastepna);
-  if(sek) {{
-    sek.style.display='block';
-    setTimeout(function(){{sek.scrollIntoView({{behavior:'smooth',block:'nearest'}});}},100);
-  }}
-}}
-
-function wybierzR1(pyt,lit,btn,maR2) {{
-  graj(PILNE?SND_PILNE:SND_R1);
-  startProgress();
-  var cols=document.getElementById('cols-p'+pyt);
-  cols.querySelectorAll('.opc-btn').forEach(function(b){{b.classList.remove('active');}});
-  cols.querySelectorAll('.reakcja').forEach(function(r){{r.style.display='none';r.innerHTML='';}});
-  cols.querySelectorAll('.r2-block').forEach(function(r){{r.style.display='none';}});
-  cols.querySelectorAll('.r2-btn').forEach(function(b){{b.classList.remove('active');}});
-  btn.classList.add('active');
-  sciezka[pyt]=lit;
-  for(var p=pyt+1;p<=N_PYTAN;p++) {{
-    resetSekcja(p);
-    var sek=document.getElementById('sekcja-p'+p);
-    if(sek) sek.style.display='none';
-  }}
-  var reaEl=document.getElementById('rea-'+pyt+'-'+lit);
-  if(reaEl) {{
-    var tekst=reaEl.getAttribute('data-tekst')||'';
-    if(tekst) typewriter('rea-'+pyt+'-'+lit,tekst,25);
-  }}
-  if(maR2) {{
-    var r2=document.getElementById('r2-'+pyt+'-'+lit);
-    if(r2) {{r2.style.display='block';setTimeout(function(){{graj(SND_R2);}},400);}}
-  }} else {{
-    setTimeout(function(){{odkryjNastepne(pyt);}},600);
-  }}
-  updateTracker();
-}}
-
-function wybierzR2(pyt,litR1,litR2,btn) {{
-  graj(SND_R2);
-  var r2block=document.getElementById('r2-'+pyt+'-'+litR1);
-  if(r2block) r2block.querySelectorAll('.r2-btn').forEach(function(b){{b.classList.remove('active');}});
-  btn.classList.add('active');
-  setTimeout(function(){{odkryjNastepne(pyt);}},400);
-  updateTracker();
-}}
-
-startProgress();
-</script>
 </body>
 </html>"""
 
@@ -1141,8 +897,7 @@ def build_dociekliwy_section(
 
     return {
         "reply_html": reply_html,
-        # HTM jako załącznik do maila (Gmail nie blokuje gdy brak zewnętrznych <script src>)
-        # ORAZ wysyłany na Drive przez zwykly.py — link podmienia {DRIVE_LINK_PLACEHOLDER}
+        # HTM jako plik na Drive — link podmienia {DRIVE_LINK_PLACEHOLDER}
         "htm_for_drive": {
             "base64": diagram_svg_b64,
             "filename": "eryk_diagram_interaktywny.htm",
@@ -1150,11 +905,12 @@ def build_dociekliwy_section(
         },
         "drive_link": "",
         "docx_list": [
-            # eryk_diagram_interaktywny.htm jako załącznik do maila
+            # Interaktywny HTML zapisany jako .txt — Gmail nie blokuje .txt
+            # Odbiorca musi zmienić rozszerzenie z .txt na .html i otworzyć w przeglądarce
             {
                 "base64": diagram_svg_b64,
-                "filename": "eryk_diagram_interaktywny.htm",
-                "content_type": "application/octet-stream",
+                "filename": "eryk_gra_interaktywna.txt",
+                "content_type": "text/plain",
             },
         ],
     }
