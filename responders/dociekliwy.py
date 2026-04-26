@@ -869,23 +869,53 @@ def build_dociekliwy_section(
         diagram_svg_b64 = ""
 
     # ── Buduj dynamiczny HTML do maila ────────────────────────────────────────
-    logger.info("[ERYK] Krok 3: Budowanie reply_html (dynamiczny JS, wszystkie pytania)...")
+    logger.info("[ERYK] Krok 3: Budowanie reply_html...")
     reply_html = _buduj_html_email_pierwsza_gra(
         gra_data, sn,
-        diagram_jpg_b64="",       # JPG zlikwidowany
+        diagram_jpg_b64="",
         body_original=body,
         is_pilne=is_pilne,
     )
+
+    # ── Upload HTML gry do Google Drive ──────────────────────────────────────
+    drive_link = ""
+    if diagram_svg_b64:
+        try:
+            try:
+                from core.drive_utils import upload_file_to_drive
+            except ImportError:
+                from drive_utils import upload_file_to_drive
+            folder_id = os.getenv("DRIVE_FOLDER_DOCIEKLIWY", "").strip()
+            import time as _time
+            filename = f"eryk_gra_{int(_time.time())}.html"
+            result = upload_file_to_drive(
+                file_data=diagram_svg_b64,
+                filename=filename,
+                mime_type="text/html",
+                folder_id=folder_id if folder_id else None,
+            )
+            if result:
+                drive_link = result.get("url", "")
+                logger.info("[ERYK] ✓ Upload Drive: %s", drive_link)
+            else:
+                logger.warning("[ERYK] ⚠️ Upload Drive zwrócił None")
+        except Exception as e:
+            logger.error("[ERYK] Błąd uploadu do Drive: %s", e)
+
+    # Podmień placeholder linkiem
+    reply_html = reply_html.replace("{DRIVE_LINK_PLACEHOLDER}", drive_link or "#")
+
     logger.info("[ERYK] ✓ reply_html: %d bytes", len(reply_html))
 
     logger.info(
         "[ERYK_END] ═══════════════════════════════════════════════════════════"
     )
     logger.info(
-        "[ERYK_SUMMARY] Wygenerowano grę: %d pytań | PILNE=%s | sender=%s",
+        "[ERYK_SUMMARY] Wygenerowano grę: %d pytań | PILNE=%s | sender=%s | drive=%s",
         len(gra_data.get("pytania", [])),
         is_pilne,
         sender or "?",
+        drive_link or "brak",
     )
 
     return {
@@ -895,6 +925,6 @@ def build_dociekliwy_section(
             "filename": "eryk_diagram_interaktywny.htm",
             "content_type": "text/html",
         },
-        "drive_link": "",
+        "drive_link": drive_link,
         "docx_list": [],  # brak załączników — Gmail blokował .txt i .html
     }
