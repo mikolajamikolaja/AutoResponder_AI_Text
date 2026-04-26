@@ -485,253 +485,571 @@ def generate_thumbnail_jpg(
 
 def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") -> str:
     """
-    Generuje samodzielny plik HTML z SVG drzewa decyzyjnego.
-    Obsługuje nową strukturę drzewiastą (pytania → opcje A/B/C → runda2)
-    oraz starą sekwencyjną (kroki) dla kompatybilności wstecznej.
+    Generuje samodzielny plik HTML z interaktywnym drzewem decyzyjnym Eryka.
 
-    Nowa struktura: każde pytanie rozgałęzia się na A/B/C,
-    każda gałąź ma reakcję Eryka i opcjonalnie runda2 z kolejnymi A/B/C.
+    Funkcje:
+    - Sekwencyjne odkrywanie pytań (P2, P3... ukryte do czasu wyboru w P1)
+    - R2 (AA/AB/AC) ukryte do czasu kliknięcia opcji R1
+    - Jeśli opcja ma R2 → następne pytanie odkrywa się dopiero po wyborze w R2
+    - 27 (lub więcej) unikalnych wyroków końcowych zależnych od ścieżki
+    - Tryb PILNE: 5 pytań zamiast 3 gdy mail zawierał słowo PILNE
+    - Pasek postępu który kłamie (cofa się do 50% przy 99%)
+    - Efekt maszyny do pisania dla komentarzy Eryka
+    - Dźwięki z GitHub Pages (beep/plink przy R1, bounce/bop przy R2, eureka przy wyroku)
+    - Przełącznik stylu: retro terminal (zielone na czarnym) / żółta kartka
+    - Media query: flex-direction:column na ekranach < 600px
+    - Kompatybilność wsteczna ze starą strukturą (kroki)
     """
     pytania = gra.get("pytania", [])
     kroki_legacy = gra.get("kroki", [])
-    wyrok = gra.get("wyrok", "Brak wyroku.")
+    wyroki_dict = gra.get("wyroki", {})   # słownik "ABC" → tekst wyroku
+    wyrok_domyslny = gra.get("wyrok", "Brak wyroku.")
+    pilne = bool(gra.get("pilne", False))
     sn = escape(sender_name or "Anonim")
 
     # ── Stara struktura — zachowaj kompatybilność ─────────────────────────────
     if not pytania and kroki_legacy:
         _log("Używam starej struktury (kroki) dla SVG diagramu")
-        return _generate_svg_legacy(kroki_legacy, wyrok, sn)
+        return _generate_svg_legacy(kroki_legacy, wyrok_domyslny, sn)
 
     if not pytania:
         _log("Brak danych do diagramu SVG")
         return "<p>Brak danych do diagramu.</p>"
 
-    _log(f"Generuję SVG dla nowej struktury drzewiastej: {len(pytania)} pytań")
+    n_pytan = len(pytania)
+    _log(f"Generuję HTML (nowa struktura): {n_pytan} pytań, pilne={pilne}, wyroki={len(wyroki_dict)}")
 
-    # ── Stałe layoutu ─────────────────────────────────────────────────────────
-    # Szerokość SVG: 3 kolumny na opcje + marginesy
-    W = 2000
-    # Wysokości wierszy
-    ROW_ROOT   = 70   # korzeń pytania
-    ROW_GAP    = 40   # odstęp między poziomami
-    ROW_OPC    = 80   # kafelek opcji 1. rundy
-    ROW_REAKC  = 44   # kafelek reakcji
-    ROW_R2_PYT = 36   # pytanie rundy 2
-    ROW_OPC2   = 60   # kafelek opcji 2. rundy
-    ROW_REAKC2 = 36   # reakcja rundy 2
-    BLOCK_H = ROW_GAP + ROW_OPC + ROW_REAKC + ROW_R2_PYT + ROW_OPC2 + ROW_REAKC2 + 30
+    AUDIO_BASE = "https://legionowopawel.github.io/AutoResponder_AI_Text/audio/"
+    # Dźwięki per zdarzenie
+    SND_R1   = ["beep.mp3", "plink.mp3", "bop.mp3"]
+    SND_R2   = ["bounce.mp3", "bop.mp3", "bubbles.mp3"]
+    SND_WYROK = ["eureka.mp3", "wishgranted.mp3"]
+    SND_PILNE = ["nextlevel.mp3"]
 
-    # X środków 3 kolumn opcji
-    COL_X = [340, W // 2, W - 340]
-    OPC_W  = 520   # szerokość kafelka opcji rundy 1
-    OPC2_W = 340   # szerokość kafelka opcji rundy 2
-    ROOT_W = 900
+    # Serializuj listy dźwięków do JSON (bezpieczne do wklejenia w JS)
+    import json as _json
+    snd_r1_js    = _json.dumps(SND_R1)
+    snd_r2_js    = _json.dumps(SND_R2)
+    snd_wyrok_js = _json.dumps(SND_WYROK)
+    snd_pilne_js = _json.dumps(SND_PILNE)
+    pilne_js     = "true" if pilne else "false"
+    audio_base_js = _json.dumps(AUDIO_BASE)
 
-    COLORS = {
-        "A": {"fill": "#E6F1FB", "stroke": "#185FA5", "text": "#0C447C", "line": "#185FA5"},
-        "B": {"fill": "#E1F5EE", "stroke": "#0F6E56", "text": "#085041", "line": "#0F6E56"},
-        "C": {"fill": "#FAEEDA", "stroke": "#854F0B", "text": "#633806", "line": "#854F0B"},
-    }
-    ROOT_FILL   = "#EEEDFE"
-    ROOT_STROKE = "#534AB7"
-    ROOT_TEXT   = "#3C3489"
-    REAKC_FILL  = "#FFF8F0"
-    REAKC_STROKE= "#C8A96A"
-    WYROK_FILL  = "#2C2C2A"
+    # Serializuj słownik wyroków do JSON
+    wyroki_js = _json.dumps(wyroki_dict, ensure_ascii=False)
 
-    # Całkowita wysokość SVG
-    total_height = 80 + len(pytania) * (ROW_ROOT + BLOCK_H + 60) + 120
-    svg = []
+    # ── CSS ───────────────────────────────────────────────────────────────────
+    css = """
+/* ===== RESET ===== */
+*{box-sizing:border-box;margin:0;padding:0}
 
-    # ── Nagłówek SVG ──────────────────────────────────────────────────────────
-    svg.append(f'<?xml version="1.0" encoding="UTF-8"?>')
-    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{total_height}" '
-               f'viewBox="0 0 {W} {total_height}" font-family="Arial, sans-serif">')
-    svg.append(f'<rect width="{W}" height="{total_height}" fill="#FAF8F4"/>')
+/* ===== STYLE BAZOWY (domyślny: klasyczny) ===== */
+body{background:#FAF8F4;font-family:Arial,sans-serif;transition:background .4s,color .4s}
+.dg-wrap{padding:16px;max-width:980px;margin:0 auto}
 
-    # Tytuł
-    svg.append(f'<rect x="{W//2 - 500}" y="14" width="1000" height="44" rx="12" fill="{WYROK_FILL}"/>')
-    svg.append(f'<text x="{W//2}" y="41" text-anchor="middle" font-size="15" '
-               f'fill="#F1EFE8" font-weight="bold">ERYK RESPONDER™ · Drzewo decyzyjne · {sn}</text>')
+/* NAGŁÓWEK */
+.dg-header{background:#2C2C2A;color:#F1EFE8;text-align:center;padding:10px 20px;
+  border-radius:8px;font-size:13px;font-weight:bold;margin-bottom:8px;letter-spacing:1px}
+.pilne-badge{display:inline-block;background:#CC0000;color:#fff;
+  font-size:10px;padding:2px 8px;border-radius:10px;margin-left:8px;
+  animation:blink 1s step-end infinite}
+@keyframes blink{50%{opacity:0}}
 
-    y = 80  # bieżąca pozycja Y
+/* PRZEŁĄCZNIK STYLU */
+.style-switcher{display:flex;gap:8px;justify-content:center;margin-bottom:12px;flex-wrap:wrap}
+.style-btn{border:1.5px solid #888;border-radius:20px;padding:4px 14px;
+  font-size:10px;cursor:pointer;background:transparent;font-family:inherit;
+  transition:all .2s}
+.style-btn.active{background:#534AB7;color:#fff;border-color:#534AB7}
 
+/* PASEK POSTĘPU */
+.progress-wrap{margin:0 auto 12px;max-width:700px}
+.progress-label{font-size:10px;color:#888;margin-bottom:3px;text-align:center;
+  font-style:italic;min-height:16px}
+.progress-bar-bg{background:#E0DEDA;border-radius:4px;height:8px;overflow:hidden}
+.progress-bar-fill{background:linear-gradient(90deg,#534AB7,#8B7ED8);
+  height:100%;border-radius:4px;width:0%;transition:width .4s ease}
+
+/* TRACKER ŚCIEŻKI */
+.path-tracker{font-size:11px;color:#888;text-align:center;margin:6px 0;min-height:16px}
+
+/* PYTANIE */
+.dg-question{background:#EEEDFE;border:2px solid #534AB7;border-radius:8px;
+  padding:12px 18px;margin:0 auto 8px;text-align:center}
+.dg-q-label{font-size:10px;color:#534AB7;font-weight:bold;letter-spacing:2px;margin-bottom:4px}
+.dg-q-text{font-size:13px;color:#3C3489;font-weight:bold;line-height:1.4}
+
+/* KOLUMNY OPCJI */
+.dg-cols{display:flex;gap:10px;margin-bottom:8px}
+.dg-col{flex:1;display:flex;flex-direction:column;gap:6px}
+
+/* PRZYCISKI OPCJI R1 */
+.opc-btn{border-radius:6px;padding:10px;cursor:pointer;border-width:1.5px;
+  border-style:solid;text-align:left;width:100%;font-family:inherit;
+  transition:filter .15s,transform .1s;background:inherit}
+.opc-btn:hover{filter:brightness(.93);transform:translateY(-1px)}
+.opc-btn:active{transform:translateY(0)}
+.opc-btn.active{outline:2px solid;outline-offset:2px}
+.opc-label{font-size:9px;font-weight:bold;letter-spacing:1px;margin-bottom:2px}
+.opc-text{font-size:11px;line-height:1.4}
+
+/* REAKCJA ERYKA — efekt maszyny do pisania */
+.reakcja{border-radius:4px;padding:8px;font-size:10px;font-style:italic;
+  border:1px dashed #C8A96A;background:#FFF8F0;color:#7A6040;
+  line-height:1.5;display:none;min-height:20px}
+.reakcja-cursor{display:inline-block;width:2px;height:11px;
+  background:#7A6040;margin-left:1px;animation:blink 0.7s step-end infinite;
+  vertical-align:text-bottom}
+
+/* R2 */
+.r2-block{margin-top:6px;display:none}
+.r2-question{background:#F0E6FA;border:1px solid #7A5FB7;border-radius:5px;
+  padding:8px;font-size:10px;color:#534AB7;font-weight:bold;
+  margin-bottom:6px;text-align:center}
+.r2-sub-label{font-size:9px;color:#7A5FB7;letter-spacing:1px;margin-bottom:3px}
+.r2-cols{display:flex;gap:4px}
+.r2-col{flex:1}
+.r2-btn{border-radius:4px;padding:6px 5px;font-size:9px;border-width:1px;
+  border-style:solid;text-align:center;line-height:1.4;cursor:pointer;
+  width:100%;font-family:inherit;background:inherit;
+  transition:filter .15s,transform .1s}
+.r2-btn:hover{filter:brightness(.92);transform:translateY(-1px)}
+.r2-btn.active{outline:2px solid;outline-offset:1px}
+.r2-tile-label{font-weight:bold;margin-bottom:2px}
+.r2-hint{font-size:9px;color:#aaa;text-align:center;margin-top:2px;font-style:italic}
+
+/* SEKCJE UKRYTE */
+.section-hidden{display:none}
+.dg-arrow{text-align:center;color:#888780;font-size:20px;margin:6px 0}
+
+/* WYROKI */
+.wyrok{background:#2C2C2A;color:#E8D5B0;border-radius:8px;padding:16px;
+  text-align:center;margin:0 auto;border:2px solid #8B6914;display:none}
+.wyrok-label{font-size:10px;color:#8B6914;font-weight:bold;
+  letter-spacing:2px;margin-bottom:8px}
+.wyrok-sciezka{font-size:9px;color:#aaa;margin-bottom:8px;font-style:italic}
+.wyrok-text{font-size:12px;line-height:1.6}
+
+/* ===== STYL: RETRO TERMINAL ===== */
+body.terminal{background:#0D0D0D;color:#00FF41;font-family:'Courier New',monospace}
+body.terminal .dg-header{background:#001A00;color:#00FF41;border:1px solid #00FF41}
+body.terminal .dg-question{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .dg-q-label{color:#00FF41}
+body.terminal .dg-q-text{color:#00FF41}
+body.terminal .opc-btn{background:#001A00 !important;border-color:#00FF41 !important;
+  color:#00FF41 !important}
+body.terminal .opc-label{color:#00FF41 !important}
+body.terminal .reakcja{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .r2-question{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .r2-btn{background:#001A00 !important;border-color:#00FF41 !important;
+  color:#00FF41 !important}
+body.terminal .wyrok{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .wyrok-label{color:#00FF41}
+body.terminal .wyrok-sciezka{color:#00AA2A}
+body.terminal .progress-bar-fill{background:#00FF41}
+body.terminal .style-btn{color:#00FF41;border-color:#00FF41}
+body.terminal .style-btn.active{background:#00FF41;color:#000}
+body.terminal .path-tracker{color:#00AA2A}
+body.terminal .progress-label{color:#00AA2A}
+
+/* ===== STYL: ŻÓŁTA KARTKA ===== */
+body.kartka{background:#F5EDB0;font-family:Georgia,serif}
+body.kartka .dg-wrap{background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%23F0E4A0'/%3E%3Ccircle cx='1' cy='1' r='0.5' fill='%23E8D880' opacity='0.5'/%3E%3C/svg%3E");
+  box-shadow:3px 3px 12px rgba(0,0,0,.3);padding:24px;
+  transform:rotate(-0.3deg);border:1px solid #C8A820}
+body.kartka .dg-header{background:#8B6914;font-family:Georgia,serif}
+body.kartka .dg-question{background:#FFFDE0;border-color:#8B6914}
+body.kartka .dg-q-label{color:#8B6914}
+body.kartka .dg-q-text{color:#5A3E00}
+body.kartka .opc-btn{font-family:Georgia,serif}
+body.kartka .reakcja{background:#FFFDE0;border-color:#8B6914;font-family:Georgia,serif}
+body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
+
+/* ===== MEDIA QUERY — TELEFON ===== */
+@media (max-width:600px){
+  .dg-cols{flex-direction:column}
+  .dg-col{width:100%}
+  .r2-cols{flex-direction:column}
+  .r2-col{width:100%}
+  .dg-wrap{padding:8px;margin:0}
+  .dg-question{padding:8px 10px}
+  .dg-q-text{font-size:12px}
+  .opc-btn{padding:8px}
+  .opc-text{font-size:12px}
+  .dg-header{font-size:11px;padding:8px}
+  .wyrok-text{font-size:11px}
+}
+"""
+
+    # ── Buduj HTML treść pytań ────────────────────────────────────────────────
+    def esc(s): return escape(str(s)) if s else ""
+
+    body_parts = []
+    body_parts.append(f'<div class="dg-header">ERYK RESPONDER&#8482; &middot; Drzewo dociekliwo&#347;ci &middot; {sn}')
+    if pilne:
+        body_parts.append('<span class="pilne-badge">&#9888; PILNE</span>')
+    body_parts.append('</div>')
+
+    # Przełącznik stylu
+    body_parts.append('''<div class="style-switcher">
+  <button class="style-btn active" onclick="setStyl('klasyczny',this)">&#128196; Klasyczny</button>
+  <button class="style-btn" onclick="setStyl('terminal',this)">&#9608; Terminal</button>
+  <button class="style-btn" onclick="setStyl('kartka',this)">&#128195; Kartka</button>
+</div>''')
+
+    # Pasek postępu
+    body_parts.append('''<div class="progress-wrap">
+  <div class="progress-label" id="prog-label">Inicjalizacja systemu Eryka&hellip;</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill" id="prog-bar"></div></div>
+</div>''')
+
+    # Tracker ścieżki
+    body_parts.append('<div class="path-tracker" id="path-tracker">Wybierz odpowied&#378; na Pytanie 1 &rarr;</div>')
+
+    # Generuj sekcje pytań
     for p_idx, pytanie in enumerate(pytania):
-        tresc = pytanie.get("tresc", f"Pytanie {p_idx+1}")
+        tresc = esc(pytanie.get("tresc", f"Pytanie {p_idx+1}"))
         opcje = pytanie.get("opcje", {})
         p_num = p_idx + 1
+        hidden_cls = ' class="section-hidden"' if p_idx > 0 else ''
 
-        # ── Korzeń pytania ────────────────────────────────────────────────────
-        root_x = W // 2 - ROOT_W // 2
-        root_lines = _wrap_svg_text(tresc, 70)
-        root_h = max(ROW_ROOT, 28 + len(root_lines) * 18)
+        if p_idx > 0:
+            body_parts.append(f'<div id="sekcja-p{p_num}" class="section-hidden">')
+            body_parts.append('<div class="dg-arrow">&#8595;</div>')
+        else:
+            body_parts.append(f'<div id="sekcja-p{p_num}">')
 
-        svg.append(f'<rect x="{root_x}" y="{y}" width="{ROOT_W}" height="{root_h}" '
-                   f'rx="8" fill="{ROOT_FILL}" stroke="{ROOT_STROKE}" stroke-width="2"/>')
-        svg.append(f'<text x="{W//2}" y="{y + 16}" text-anchor="middle" font-size="11" '
-                   f'fill="{ROOT_STROKE}" font-weight="bold" letter-spacing="2">PYTANIE {p_num}</text>')
-        svg.append(_svg_text_block(root_lines, W//2, y + 32, font_size=13,
-                                   fill=ROOT_TEXT, font_weight="bold"))
+        body_parts.append(f'''<div class="dg-question">
+  <div class="dg-q-label">PYTANIE {p_num}</div>
+  <div class="dg-q-text">{tresc}</div>
+</div>''')
 
-        y_root_bottom = y + root_h
-        y_opc = y_root_bottom + ROW_GAP
+        body_parts.append(f'<div class="dg-cols" id="cols-p{p_num}">')
 
-        # ── Trzy kolumny opcji (A, B, C) ─────────────────────────────────────
-        for col_idx, lit in enumerate(["A", "B", "C"]):
-            cx = COL_X[col_idx]
-            c = COLORS.get(lit, COLORS["A"])
-            opcja = opcje.get(lit, {})
-            tekst_opc = opcja.get("tekst", f"Opcja {lit}")
+        for lit in ["A", "B", "C"]:
+            opcja     = opcje.get(lit, {})
+            tekst_opc = esc(opcja.get("tekst", f"Opcja {lit}"))
             reakcja   = opcja.get("reakcja", "")
             runda2    = opcja.get("runda2", {})
-            r2_pytanie = runda2.get("pytanie", "")
-            r2_opcje   = runda2.get("opcje", {})
+            r2_pyt    = runda2.get("pytanie", "")
+            r2_opcje  = runda2.get("opcje", {})
+            has_r2    = bool(r2_pyt and r2_opcje)
+            has_r2_js = "true" if has_r2 else "false"
 
-            # Linia korzeń → opcja
-            svg.append(f'<line x1="{W//2}" y1="{y_root_bottom}" x2="{cx}" y2="{y_opc}" '
-                       f'stroke="{c["line"]}" stroke-width="1.5" stroke-dasharray="5,3"/>')
-            # Etykieta litery na linii
-            lbl_x = (W//2 + cx) // 2
-            lbl_y = (y_root_bottom + y_opc) // 2
-            svg.append(f'<circle cx="{lbl_x}" cy="{lbl_y}" r="11" fill="{c["stroke"]}"/>')
-            svg.append(f'<text x="{lbl_x}" y="{lbl_y + 4}" text-anchor="middle" '
-                       f'font-size="11" font-weight="bold" fill="white">{lit}</text>')
+            COLORS = {
+                "A": {"fill":"#E6F1FB","stroke":"#185FA5","text":"#0C447C"},
+                "B": {"fill":"#E1F5EE","stroke":"#0F6E56","text":"#085041"},
+                "C": {"fill":"#FAEEDA","stroke":"#854F0B","text":"#633806"},
+            }
+            c = COLORS[lit]
+            btn_style = f'background:{c["fill"]};border-color:{c["stroke"]};color:{c["text"]};outline-color:{c["stroke"]}'
 
-            # Kafelek opcji R1
-            opc_lines = _wrap_svg_text(tekst_opc, 42)
-            opc_h = max(ROW_OPC, 20 + len(opc_lines) * 18)
-            svg.append(f'<rect x="{cx - OPC_W//2}" y="{y_opc}" width="{OPC_W}" height="{opc_h}" '
-                       f'rx="6" fill="{c["fill"]}" stroke="{c["stroke"]}" stroke-width="1.5"/>')
-            svg.append(f'<text x="{cx}" y="{y_opc + 14}" text-anchor="middle" '
-                       f'font-size="10" fill="{c["stroke"]}" font-weight="bold" letter-spacing="1">{lit})</text>')
-            svg.append(_svg_text_block(opc_lines, cx, y_opc + 28,
-                                       font_size=11, fill=c["text"], font_weight="normal"))
+            body_parts.append('<div class="dg-col">')
+            body_parts.append(
+                f'<button class="opc-btn" style="{btn_style}" '
+                f'onclick="wybierzR1({p_num},\'{lit}\',this,{has_r2_js})">'
+                f'<div class="opc-label" style="color:{c["stroke"]}">{lit})</div>'
+                f'<div class="opc-text">{tekst_opc}</div>'
+                f'</button>'
+            )
 
-            y_reakc = y_opc + opc_h + 8
+            # Reakcja Eryka (typewriter)
+            rea_id = f"rea-{p_num}-{lit}"
+            body_parts.append(f'<div class="reakcja" id="{rea_id}" data-tekst="{esc(reakcja)}"></div>')
 
-            # Kafelek reakcji Eryka
-            if reakcja:
-                reakc_lines = _wrap_svg_text(f'Eryk: „{reakcja}"', 50)
-                reakc_h = max(ROW_REAKC, 16 + len(reakc_lines) * 16)
-                svg.append(f'<rect x="{cx - OPC_W//2}" y="{y_reakc}" width="{OPC_W}" height="{reakc_h}" '
-                           f'rx="4" fill="{REAKC_FILL}" stroke="{REAKC_STROKE}" stroke-width="1" '
-                           f'stroke-dasharray="4,2"/>')
-                svg.append(_svg_text_block(reakc_lines, cx, y_reakc + 14,
-                                           font_size=10, fill="#5A4A2A",
-                                           font_weight="normal"))
-                y_r2 = y_reakc + reakc_h + 12
-            else:
-                y_r2 = y_reakc + 8
+            # R2
+            if has_r2:
+                r2_id = f"r2-{p_num}-{lit}"
+                body_parts.append(f'<div class="r2-block" id="{r2_id}">')
+                body_parts.append(
+                    f'<div class="r2-question">'
+                    f'<div class="r2-sub-label">RUNDA 2 &mdash; {lit}</div>'
+                    f'{esc(r2_pyt)}</div>'
+                )
+                body_parts.append('<div class="r2-cols">')
 
-            # ── Runda 2 ───────────────────────────────────────────────────────
-            if r2_pytanie and r2_opcje:
-                # Pytanie rundy 2
-                r2_pyt_lines = _wrap_svg_text(r2_pytanie, 44)
-                r2_pyt_h = max(ROW_R2_PYT, 14 + len(r2_pyt_lines) * 16)
-                svg.append(f'<rect x="{cx - OPC_W//2}" y="{y_r2}" width="{OPC_W}" height="{r2_pyt_h}" '
-                           f'rx="4" fill="{ROOT_FILL}" stroke="{ROOT_STROKE}" stroke-width="1"/>')
-                svg.append(f'<text x="{cx}" y="{y_r2 + 12}" text-anchor="middle" '
-                           f'font-size="9" fill="{ROOT_STROKE}" font-weight="bold" letter-spacing="1">'
-                           f'RUNDA 2 — {lit}</text>')
-                svg.append(_svg_text_block(r2_pyt_lines, cx, y_r2 + 24,
-                                           font_size=10, fill=ROOT_TEXT, font_weight="normal"))
-
-                y_r2_opc = y_r2 + r2_pyt_h + 8
-
-                # 3 opcje rundy 2 — w wierszu obok siebie
-                r2_step = OPC_W // 3
-                for r2_idx, r2_lit in enumerate(["A", "B", "C"]):
+                R2_COLORS = [
+                    {"fill":"#E6F1FB","stroke":"#185FA5","text":"#0C447C"},
+                    {"fill":"#E1F5EE","stroke":"#0F6E56","text":"#085041"},
+                    {"fill":"#FAEEDA","stroke":"#854F0B","text":"#633806"},
+                ]
+                for r2_idx, r2_lit in enumerate(["A","B","C"]):
                     r2_opcja = r2_opcje.get(r2_lit, {})
-                    r2_tekst  = r2_opcja.get("tekst", f"Opcja {r2_lit}")
-                    r2_reakc  = r2_opcja.get("reakcja", "")
-                    r2_c = COLORS.get(r2_lit, COLORS["A"])
+                    r2_tekst = esc(r2_opcja.get("tekst", f"Opcja {r2_lit}"))
+                    r2c = R2_COLORS[r2_idx]
+                    r2_label = f"{lit}{r2_lit}"
+                    r2_style = f'background:{r2c["fill"]};border-color:{r2c["stroke"]};color:{r2c["text"]};outline-color:{r2c["stroke"]}'
+                    body_parts.append(
+                        f'<div class="r2-col">'
+                        f'<button class="r2-btn" style="{r2_style}" '
+                        f'onclick="wybierzR2({p_num},\'{lit}\',\'{r2_lit}\',this)">'
+                        f'<div class="r2-tile-label">{r2_label}</div>{r2_tekst}'
+                        f'</button></div>'
+                    )
 
-                    r2x = cx - OPC_W//2 + r2_idx * r2_step
-                    r2_lines = _wrap_svg_text(r2_tekst, 22)
-                    r2_h = max(ROW_OPC2, 18 + len(r2_lines) * 15)
+                body_parts.append('</div>')  # r2-cols
+                body_parts.append('<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>')
+                body_parts.append('</div>')  # r2-block
 
-                    # Linia r2_pytanie → r2_opcja
-                    svg.append(f'<line x1="{cx}" y1="{y_r2 + r2_pyt_h}" '
-                               f'x2="{r2x + OPC2_W//3}" y2="{y_r2_opc}" '
-                               f'stroke="{r2_c["line"]}" stroke-width="1" stroke-dasharray="3,2" opacity="0.7"/>')
+            body_parts.append('</div>')  # dg-col
 
-                    svg.append(f'<rect x="{r2x}" y="{y_r2_opc}" width="{r2_step - 4}" height="{r2_h}" '
-                               f'rx="3" fill="{r2_c["fill"]}" stroke="{r2_c["stroke"]}" stroke-width="1"/>')
-                    svg.append(f'<text x="{r2x + (r2_step-4)//2}" y="{y_r2_opc + 12}" text-anchor="middle" '
-                               f'font-size="9" fill="{r2_c["stroke"]}" font-weight="bold">'
-                               f'{lit}{r2_lit}</text>')
-                    svg.append(_svg_text_block(r2_lines, r2x + (r2_step-4)//2,
-                                               y_r2_opc + 22, font_size=9,
-                                               fill=r2_c["text"], font_weight="normal"))
+        body_parts.append('</div>')  # dg-cols
+        body_parts.append('</div>')  # sekcja-pN
 
-                    # Reakcja rundy 2 (tylko 1 linia, pod kafelkiem)
-                    if r2_reakc:
-                        reakc2_y = y_r2_opc + r2_h + 2
-                        reakc2_short = _wrap_svg_text(r2_reakc, 22)[0] if r2_reakc else ""
-                        svg.append(f'<text x="{r2x + (r2_step-4)//2}" y="{reakc2_y + 10}" '
-                                   f'text-anchor="middle" font-size="8" fill="#7A6040" '
-                                   f'font-style="italic">{escape(reakc2_short[:30])}…</text>')
+    # Sekcja wyroku (wszystkie wyroki ukryte — JS pokaże właściwy)
+    body_parts.append('<div id="sekcja-wyrok" class="section-hidden"><div class="dg-arrow">&#8595;</div>')
 
-        # Oblicz Y dla następnego pytania — max dna wszystkich 3 kolumn
-        y_next_pytanie = y_opc
-        for lit in ["A", "B", "C"]:
-            opcja  = opcje.get(lit, {})
-            opc_h  = max(ROW_OPC, 20 + len(_wrap_svg_text(opcja.get("tekst",""), 42)) * 18)
-            reakc_h = max(ROW_REAKC, 16 + len(_wrap_svg_text(opcja.get("reakcja",""), 50)) * 16) if opcja.get("reakcja") else 0
-            runda2 = opcja.get("runda2", {})
-            if runda2.get("pytanie") and runda2.get("opcje"):
-                r2_pyt_h = max(ROW_R2_PYT, 14 + len(_wrap_svg_text(runda2.get("pytanie",""), 44)) * 16)
-                r2_opc_h = max(ROW_OPC2, 18 + 2 * 15)
-                col_bottom = y_opc + opc_h + 8 + reakc_h + 12 + r2_pyt_h + 8 + r2_opc_h + 20
-            else:
-                col_bottom = y_opc + opc_h + 8 + reakc_h + 20
-            y_next_pytanie = max(y_next_pytanie, col_bottom)
+    if wyroki_dict:
+        for klucz, tekst_wyroku in wyroki_dict.items():
+            wyrok_id = f"wyrok-{klucz}"
+            body_parts.append(
+                f'<div id="{wyrok_id}" class="wyrok">'
+                f'<div class="wyrok-label">&#9878; WYROK KO&#323;COWY</div>'
+                f'<div class="wyrok-sciezka">&#346;cie&#380;ka: {" &rarr; ".join(list(klucz))}</div>'
+                f'<div class="wyrok-text">{esc(tekst_wyroku)}</div>'
+                f'</div>'
+            )
+    else:
+        # Fallback: jeden wyrok dla wszystkich ścieżek
+        body_parts.append(
+            f'<div id="wyrok-fallback" class="wyrok">'
+            f'<div class="wyrok-label">&#9878; WYROK KO&#323;COWY</div>'
+            f'<div class="wyrok-text">{esc(wyrok_domyslny)}</div>'
+            f'</div>'
+        )
 
-        # Strzałka do następnego pytania lub wyroku
-        y_arrow_end = y_next_pytanie + 40
-        svg.append(f'<line x1="{W//2}" y1="{y_next_pytanie}" x2="{W//2}" y2="{y_arrow_end}" '
-                   f'stroke="#888780" stroke-width="2" '
-                   f'marker-end="url(#arr-m)"/>')
-        y = y_arrow_end + 10
+    body_parts.append('</div>')  # sekcja-wyrok
 
-    # ── Wyrok końcowy ─────────────────────────────────────────────────────────
-    wyrok_lines = _wrap_svg_text(wyrok, 70)
-    wyrok_h = max(80, 30 + len(wyrok_lines) * 18)
-    svg.append(f'<rect x="{W//2 - 550}" y="{y}" width="1100" height="{wyrok_h}" '
-               f'rx="10" fill="{WYROK_FILL}" stroke="#8B6914" stroke-width="2"/>')
-    svg.append(f'<text x="{W//2}" y="{y + 22}" text-anchor="middle" font-size="13" '
-               f'fill="#8B6914" font-weight="bold" letter-spacing="2">⚖ WYROK KOŃCOWY</text>')
-    svg.append(_svg_text_block(wyrok_lines, W//2, y + 42,
-                               font_size=11, fill="#E8D5B0", font_weight="normal"))
-    y += wyrok_h
+    content_html = "\n".join(body_parts)
 
-    # Markery strzałek (defs)
-    svg.insert(2, '<defs>'
-        '<marker id="arr-m" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">'
-        '<path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round"/>'
-        '</marker></defs>')
+    # ── JavaScript ────────────────────────────────────────────────────────────
+    js = f"""
+const AUDIO_BASE = {audio_base_js};
+const SND_R1     = {snd_r1_js};
+const SND_R2     = {snd_r2_js};
+const SND_WYROK  = {snd_wyrok_js};
+const SND_PILNE  = {snd_pilne_js};
+const PILNE      = {pilne_js};
+const WYROKI     = {wyroki_js};
+const N_PYTAN    = {n_pytan};
 
-    svg.append('</svg>')
+// ── Audio ─────────────────────────────────────────────────────────────────
+function graj(lista) {{
+  var plik = lista[Math.floor(Math.random() * lista.length)];
+  var a = new Audio(AUDIO_BASE + plik);
+  a.preload = 'auto';
+  a.play().catch(function(){{}});
+}}
 
-    # Opakuj w HTML z auto-scroll
-    svg_content = "\n".join(svg)
+// ── Pasek postępu ─────────────────────────────────────────────────────────
+var progVal = 0;
+var progTimer = null;
+var progFaza = 0;  // 0=wolny start, 1=przyspieszenie, 2=cofnięcie, 3=zatrzymanie
+var PROG_LABELS = [
+  "Inicjalizacja systemu Eryka\u2026",
+  "Analiza merytoryczna odpowiedzi\u2026",
+  "Weryfikacja sp\u00f3jno\u015bci logicznej\u2026",
+  "Ocena intencji nadawcy\u2026",
+  "\u26a0\ufe0f Wykryto nie\u015bcis\u0142o\u015b\u0107 w intencjach nadawcy",
+  "Ponowna analiza od 50%\u2026",
+  "Finalizacja wyroku\u2026",
+  "Wyrok gotowy."
+];
+
+function startProgress() {{
+  var bar = document.getElementById('prog-bar');
+  var lbl = document.getElementById('prog-label');
+  progVal = 0; progFaza = 0;
+  bar.style.width = '0%';
+  lbl.textContent = PROG_LABELS[0];
+  if(progTimer) clearInterval(progTimer);
+  progTimer = setInterval(function() {{
+    if(progFaza === 0) {{
+      progVal += 2;
+      lbl.textContent = PROG_LABELS[Math.floor(progVal/30) % 2];
+      if(progVal >= 70) {{ progFaza = 1; }}
+    }} else if(progFaza === 1) {{
+      progVal += 3;
+      lbl.textContent = PROG_LABELS[2 + Math.floor((progVal-70)/10) % 2];
+      if(progVal >= 99) {{ progFaza = 2; lbl.textContent = PROG_LABELS[4]; }}
+    }} else if(progFaza === 2) {{
+      // Cofa się dramatycznie do 50%
+      progVal -= 5;
+      if(progVal <= 50) {{ progFaza = 3; lbl.textContent = PROG_LABELS[5]; }}
+    }} else if(progFaza === 3) {{
+      progVal += 1;
+      if(progVal >= 95) {{ lbl.textContent = PROG_LABELS[6]; }}
+      if(progVal >= 100) {{
+        progVal = 100;
+        lbl.textContent = PROG_LABELS[7];
+        clearInterval(progTimer);
+      }}
+    }}
+    bar.style.width = Math.min(100, Math.max(0, progVal)) + '%';
+  }}, 60);
+}}
+
+// ── Typewriter ────────────────────────────────────────────────────────────
+var twTimers = {{}};
+function typewriter(elId, tekst, speed) {{
+  speed = speed || 28;
+  var el = document.getElementById(elId);
+  if(!el) return;
+  el.style.display = 'block';
+  el.innerHTML = '';
+  if(twTimers[elId]) clearInterval(twTimers[elId]);
+  var i = 0;
+  var cursor = '<span class="reakcja-cursor"></span>';
+  twTimers[elId] = setInterval(function() {{
+    el.innerHTML = 'Eryk: \u201e' + tekst.substring(0, i) + '\u201d' + (i < tekst.length ? cursor : '');
+    i++;
+    if(i > tekst.length) {{
+      clearInterval(twTimers[elId]);
+      el.innerHTML = 'Eryk: \u201e' + tekst + '\u201d';
+    }}
+  }}, speed);
+}}
+
+// ── Styl (terminal / kartka / klasyczny) ──────────────────────────────────
+function setStyl(styl, btn) {{
+  document.body.className = styl === 'klasyczny' ? '' : styl;
+  document.querySelectorAll('.style-btn').forEach(function(b){{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+}}
+
+// ── Ścieżka użytkownika ───────────────────────────────────────────────────
+var sciezka = {{}};
+for(var _p=1; _p<=N_PYTAN; _p++) sciezka[_p] = null;
+
+function updateTracker() {{
+  var parts = [];
+  for(var p=1; p<=N_PYTAN; p++) {{
+    if(sciezka[p]) parts.push('P' + p + ':' + sciezka[p]);
+    else break;
+  }}
+  var t = document.getElementById('path-tracker');
+  if(parts.length === 0) t.textContent = 'Wybierz odpowied\u017a na Pytanie 1 \u2192';
+  else if(parts.length < N_PYTAN) t.textContent = '\u015acie\u017cka: ' + parts.join(' \u2192 ') + ' \u2192 ?';
+  else t.textContent = '\u015acie\u017cka: ' + Object.values(sciezka).join(' \u2192 ');
+}}
+
+// ── Reset sekcji ──────────────────────────────────────────────────────────
+function resetSekcja(pyt) {{
+  var cols = document.getElementById('cols-p' + pyt);
+  if(!cols) return;
+  cols.querySelectorAll('.opc-btn').forEach(function(b){{ b.classList.remove('active'); }});
+  cols.querySelectorAll('.reakcja').forEach(function(r){{ r.style.display='none'; r.innerHTML=''; }});
+  cols.querySelectorAll('.r2-block').forEach(function(r){{ r.style.display='none'; }});
+  cols.querySelectorAll('.r2-btn').forEach(function(b){{ b.classList.remove('active'); }});
+  sciezka[pyt] = null;
+}}
+
+function odkryjNastepne(pyt) {{
+  var nastepna = pyt + 1;
+  var sek = document.getElementById('sekcja-p' + nastepna);
+  if(sek) {{
+    sek.style.display = 'block';
+    setTimeout(function(){{ sek.scrollIntoView({{behavior:'smooth',block:'nearest'}}); }}, 100);
+  }} else {{
+    pokazWyrok();
+  }}
+}}
+
+// ── Wybór opcji R1 ────────────────────────────────────────────────────────
+function wybierzR1(pyt, lit, btn, maR2) {{
+  graj(PILNE ? SND_PILNE : SND_R1);
+  startProgress();
+
+  var cols = document.getElementById('cols-p' + pyt);
+  cols.querySelectorAll('.opc-btn').forEach(function(b){{ b.classList.remove('active'); }});
+  cols.querySelectorAll('.reakcja').forEach(function(r){{ r.style.display='none'; r.innerHTML=''; }});
+  cols.querySelectorAll('.r2-block').forEach(function(r){{ r.style.display='none'; }});
+  cols.querySelectorAll('.r2-btn').forEach(function(b){{ b.classList.remove('active'); }});
+
+  btn.classList.add('active');
+  sciezka[pyt] = lit;
+
+  // Reset kolejnych pytań
+  for(var p = pyt+1; p <= N_PYTAN; p++) {{
+    resetSekcja(p);
+    var sek = document.getElementById('sekcja-p' + p);
+    if(sek) sek.style.display = 'none';
+  }}
+  document.getElementById('sekcja-wyrok').style.display = 'none';
+
+  // Typewriter dla reakcji
+  var reaEl = document.getElementById('rea-' + pyt + '-' + lit);
+  if(reaEl) {{
+    var tekst = reaEl.getAttribute('data-tekst') || '';
+    if(tekst) typewriter('rea-' + pyt + '-' + lit, tekst, 25);
+  }}
+
+  if(maR2) {{
+    // Pokaż R2 — czekaj na wybór przed odkryciem następnego pytania
+    var r2 = document.getElementById('r2-' + pyt + '-' + lit);
+    if(r2) {{ r2.style.display = 'block'; setTimeout(function(){{ graj(SND_R2); }}, 400); }}
+  }} else {{
+    // Brak R2 — od razu odkryj następne
+    setTimeout(function(){{ odkryjNastepne(pyt); }}, 600);
+  }}
+
+  updateTracker();
+}}
+
+// ── Wybór opcji R2 ────────────────────────────────────────────────────────
+function wybierzR2(pyt, litR1, litR2, btn) {{
+  graj(SND_R2);
+  var r2block = document.getElementById('r2-' + pyt + '-' + litR1);
+  if(r2block) r2block.querySelectorAll('.r2-btn').forEach(function(b){{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  setTimeout(function(){{ odkryjNastepne(pyt); }}, 400);
+  updateTracker();
+}}
+
+// ── Pokaż wyrok końcowy ───────────────────────────────────────────────────
+function pokazWyrok() {{
+  graj(SND_WYROK);
+  // Ukryj wszystkie wyroki
+  document.querySelectorAll('.wyrok').forEach(function(w){{ w.style.display='none'; }});
+
+  // Zbuduj klucz ze ścieżki
+  var klucz = '';
+  for(var p=1; p<=N_PYTAN; p++) klucz += (sciezka[p] || 'X');
+
+  var w = document.getElementById('wyrok-' + klucz);
+  if(!w) w = document.getElementById('wyrok-fallback');
+  if(w) w.style.display = 'block';
+
+  var sek = document.getElementById('sekcja-wyrok');
+  sek.style.display = 'block';
+  setTimeout(function(){{ sek.scrollIntoView({{behavior:'smooth',block:'nearest'}}); }}, 100);
+  updateTracker();
+}}
+
+// ── Start ─────────────────────────────────────────────────────────────────
+startProgress();
+"""
+
     return f"""<!DOCTYPE html>
 <html lang="pl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Eryk Responder™ — Drzewo decyzyjne</title>
+<title>Eryk Responder&#8482; &mdash; {sn}</title>
 <style>
-  body {{ margin: 0; background: #FAF8F4; font-family: Arial, sans-serif; }}
-  .wrap {{ overflow-x: auto; padding: 16px; }}
-  .info {{ font-size: 11px; color: #888; text-align: center; padding: 8px; }}
+{css}
 </style>
 </head>
 <body>
-<div class="wrap">
-{svg_content}
+<div class="dg-wrap">
+{content_html}
 </div>
-<div class="info">Eryk Responder™ · Drzewo decyzyjne · Wygenerowano automatycznie</div>
+<div style="font-size:10px;color:#aaa;text-align:center;padding:12px 8px">
+  Eryk Responder&#8482; &middot; Wygenerowano automatycznie &middot; Odpowied&#378; nast&#261;pi w odpowiednim czasie
+</div>
+<script>
+{js}
+</script>
 </body>
 </html>"""
 
