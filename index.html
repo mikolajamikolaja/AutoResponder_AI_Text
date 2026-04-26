@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoResponder AI — Project Hub</title>
+    <title>System Autoresponderów</title>
     <style>
         :root {
             --primary: #534AB7;
@@ -27,6 +27,8 @@
         header { text-align: center; margin-bottom: 50px; }
         h1 { font-size: 2.2rem; color: var(--secondary); letter-spacing: 2px; text-transform: uppercase; }
         .subtitle { color: #888; font-size: 0.9rem; }
+        .subtitle a { color: var(--secondary); text-decoration: none; font-weight: bold; }
+        .subtitle a:hover { text-decoration: underline; }
 
         /* PIPELINE NAVIGATION */
         .pipeline {
@@ -34,30 +36,34 @@
             justify-content: space-between;
             align-items: center;
             background: var(--card-bg);
-            padding: 25px;
+            padding: 20px;
             border-radius: 12px;
             border: 1px solid #333;
             margin-bottom: 50px;
         }
-        .step-link { text-decoration: none; color: inherit; flex: 1; text-align: center; transition: transform 0.2s; }
-        .step-link:hover { transform: translateY(-3px); }
+        .step-link { text-decoration: none; color: inherit; flex: 1; text-align: center; transition: 0.3s; }
+        
+        /* Efekt hover tylko dla aktywnych linków (nie prowadzących do #) */
+        .step-link:not([href="#"]):hover { transform: translateY(-5px); }
+        .step-link[href="#"] { cursor: default; }
+
         .step-icon {
-            width: 60px; height: 60px;
+            width: 50px; height: 50px;
             background: #222;
             border: 2px solid var(--primary);
             border-radius: 50%;
             display: flex; align-items: center; justify-content: center;
             margin: 0 auto 10px;
-            font-size: 24px;
+            font-size: 20px;
         }
-        .step-link:hover .step-icon { border-color: var(--secondary); box-shadow: 0 0 15px rgba(0, 255, 65, 0.3); }
-        .step-label { font-size: 11px; font-weight: bold; color: var(--primary); text-transform: uppercase; }
-        .arrow { color: #444; font-size: 20px; }
-
-        /* SEKCJE PORTFOLIO */
-        h2 { font-size: 1.2rem; margin-bottom: 20px; color: var(--secondary); border-left: 4px solid var(--primary); padding-left: 15px; }
+        .step-label { font-size: 10px; font-weight: bold; color: var(--primary); text-transform: uppercase; }
+        .step-desc { font-size: 9px; color: #666; display: block; margin-top: 4px; line-height: 1.2; padding: 0 5px; }
         
-        /* GŁÓWNE PROJEKTY */
+        .arrow { color: #444; font-size: 18px; margin-bottom: 20px; }
+
+        /* PORTFOLIO GRID */
+        h2 { font-size: 1.2rem; margin-bottom: 20px; color: var(--secondary); border-left: 3px solid var(--primary); padding-left: 10px; }
+        
         .grid-main { 
             display: grid; 
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
@@ -65,21 +71,19 @@
             margin-bottom: 40px;
         }
         .card-main {
-            background: linear-gradient(145deg, #1e1e1e, #141414);
+            background: var(--card-bg);
             border: 1px solid #333;
             border-radius: 12px;
             padding: 25px;
             text-decoration: none;
             color: inherit;
-            transition: all 0.3s;
+            transition: 0.3s;
             position: relative;
-            overflow: hidden;
         }
         .card-main:hover { border-color: var(--secondary); transform: scale(1.02); }
-        .card-main h3 { color: var(--accent); margin-bottom: 10px; font-size: 1.4rem; }
-        .card-main p { font-size: 0.95rem; color: #ccc; }
+        .card-main h3 { color: var(--accent); margin-bottom: 10px; }
+        .card-main p { font-size: 0.9rem; color: #bbb; }
 
-        /* MNIEJSZE PROJEKTY */
         .grid-sub { 
             display: grid; 
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
@@ -92,27 +96,26 @@
             padding: 15px;
             text-decoration: none;
             color: inherit;
-            transition: all 0.2s;
+            transition: 0.2s;
         }
         .card-sub:hover { background: #222; border-color: var(--primary); }
         .card-sub h4 { font-size: 0.9rem; color: var(--primary); margin-bottom: 5px; }
         .card-sub p { font-size: 0.8rem; color: #888; }
 
-        /* TERMINAL */
         .terminal-box {
             background: #000;
-            font-family: 'Courier New', monospace;
+            font-family: monospace;
             padding: 15px;
             border-radius: 5px;
-            margin-top: 50px;
+            margin-top: 40px;
             font-size: 12px;
-            border-left: 4px solid var(--secondary);
-            color: #00FF41;
+            border-left: 3px solid var(--secondary);
         }
 
-        @media (max-width: 768px) {
-            .pipeline { flex-direction: column; gap: 20px; }
+        @media (max-width: 600px) {
+            .pipeline { flex-wrap: wrap; gap: 10px; }
             .arrow { display: none; }
+            .step-link { flex: 1 1 40%; }
         }
     </style>
 </head>
@@ -120,66 +123,72 @@
 
 <div class="container">
     <header>
-        <h1>AutoResponder AI Pipeline</h1>
-        <p class="subtitle">Ekosystem inteligentnych responderów i automatyzacji poczty</p>
+        <h1>System Autoresponderów</h1>
+        <p class="subtitle">autorem jest <a href="https://github.com/legionowopawel?tab=repositories" target="_blank">Paweł</a></p>
     </header>
 
     <nav class="pipeline">
-        <a href="https://script.google.com/home/projects/1orICjVuo81DWXZt25TeKVuNIwRfjcfzl_bKVLTSVqsG9utUbtYTu9ZVt/edit" class="step-link" target="_blank">
-            <div class="step-icon">☁️</div>
-            <div class="step-label">GAS Interface</div>
+        <a href="example/01_script_gas/1.html" class="step-link">
+            <div class="step-icon">⚙️</div>
+            <div class="step-label">1. GAS</div>
+            <span class="step-desc">Pobieranie maili i wyzwalacz</span>
         </a>
         <div class="arrow">➔</div>
         <a href="https://autoresponder-tresc-obrazek-zalacznik.onrender.com" class="step-link" target="_blank">
             <div class="step-icon">🐍</div>
-            <div class="step-label">Flask Backend</div>
+            <div class="step-label">2. Flask</div>
+            <span class="step-desc">Logika serwerowa i routing</span>
         </a>
         <div class="arrow">➔</div>
-        <a href="#portfolio" class="step-link">
+        <a href="example/02_AI/1.html" class="step-link">
             <div class="step-icon">🤖</div>
-            <div class="step-label">AI Analysis</div>
+            <div class="step-label">3. AI Analysis</div>
+            <span class="step-desc">DeepSeek i analiza obrazów</span>
         </a>
         <div class="arrow">➔</div>
-        <a href="#portfolio" class="step-link">
+        <a href="example/03_Response/1.html" class="step-link">
             <div class="step-icon">✉️</div>
-            <div class="step-label">Final Response</div>
+            <div class="step-label">4. Response</div>
+            <span class="step-desc">Wysyłka gotowej odpowiedzi</span>
         </a>
     </nav>
 
     <div id="portfolio">
-        <h2>Główne Moduły Systemu</h2>
+        <h2>Główne Moduły</h2>
         <div class="grid-main">
             <a href="example/zwykly/1.html" class="card-main">
-                <h3>Odpowiedź Tylera</h3>
-                <p>Standardowy, szybki responder (zwykly.py). Klasyczna elegancja i efektywność w codziennej komunikacji.</p>
+                <h3>Tyler Durden</h3>
+                <p>Bezpośredni, konkretny styl komunikacji. Zero zbędnych uprzejmości, sama esencja problemu.</p>
             </a>
+
             <a href="example/dociekliwy/1.html" class="card-main">
-                <h3>Eryk Responder™</h3>
-                <p>Zaawansowane drzewo dociekliwości. Analizuje każdy aspekt wiadomości, od waluty po intencje nadawcy.</p>
+                <h3>Eryk Dociekliwy</h3>
+                <p>Zadaje trafne pytania pomocnicze przed udzieleniem odpowiedzi. Analizuje intencje nadawcy.</p>
             </a>
+
             <a href="example/smierc/1.html" class="card-main">
                 <h3>Requiem</h3>
-                <p>Moduł głębokiej analizy (smierc.py). Egzystencjalne podejście do automatyzacji i pożegnań procesowych.</p>
+                <p>Moduł ostateczny. Dokumentacja procesu i architektury systemu w klimacie kosmicznym.</p>
             </a>
         </div>
 
-        <h2>Moduły Specjalistyczne</h2>
+        <h2>Moduły tematyczne</h2>
         <div class="grid-sub">
             <a href="example/nawiazanie/1.html" class="card-sub">
                 <h4>Nawiązanie</h4>
-                <p>Budowanie kontekstu na podstawie historii.</p>
+                <p>Analiza historii wątku mailowego</p>
             </a>
             <a href="example/scrabble/1.html" class="card-sub">
                 <h4>Scrabble</h4>
-                <p>Kreatywny generator słowny AI.</p>
+                <p>Kreatywny generator słowny AI</p>
             </a>
             <a href="example/biznes/1.html" class="card-sub">
-                <h4>Biznes</h4>
-                <p>Formalne szablony i analiza ofert.</p>
+                <h4>Notariusz</h4>
+                <p>Responder kancelarii notarialnej</p>
             </a>
             <a href="example/emocje/1.html" class="card-sub">
                 <h4>Emocje</h4>
-                <p>Analiza sentymentu i tonu wypowiedzi.</p>
+                <p>Wspierająca wiadomość do nadawcy</p>
             </a>
         </div>
     </div>
@@ -187,7 +196,6 @@
     <div class="terminal-box">
         <div id="logs">
             [SYS] System zainicjalizowany pomyślnie.<br>
-            [IO] Wykryto strukturę katalogów /example/...<br>
             [READY] Portfolio gotowe do przeglądania.<br>
         </div>
         <span style="color: var(--secondary);">></span> <span class="cursor"></span>
@@ -197,11 +205,9 @@
 <script>
     const logs = document.getElementById('logs');
     const messages = [
-        "[INFO] Ładowanie modułu: Tyler (zwykly/1.html)...",
-        "[INFO] Ładowanie modułu: Eryk (dociekliwy/1.html)...",
-        "[INFO] Ładowanie modułu: Requiem (smierc/1.html)...",
+        "[INFO] Moduł AI: DeepSeek gotowy do analizy...",
         "[NET] Połączenie z Render.com aktywne.",
-        "[AI] Analiza sentymentu: STATUS OK."
+        "[GAS] Skrypt Google Apps Script działa poprawnie."
     ];
     
     setInterval(() => {
@@ -210,7 +216,7 @@
         line.innerHTML = `[${new Date().toLocaleTimeString()}] ${msg}`;
         logs.appendChild(line);
         if (logs.childNodes.length > 8) logs.removeChild(logs.firstChild);
-    }, 5000);
+    }, 4000);
 </script>
 
 </body>

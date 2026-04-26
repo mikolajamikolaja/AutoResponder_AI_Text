@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SCRABBLE RESPONDER · Dokumentacja Modułu</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#060F08;color:#D0E8D5;font-family:Arial,sans-serif;min-height:100vh}
+
+/* ── BACKGROUND ── */
+body::before{
+  content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse at 20% 20%,rgba(40,160,80,.15) 0%,transparent 60%),
+             radial-gradient(ellipse at 80% 70%,rgba(20,160,100,.12) 0%,transparent 60%);
+  pointer-events:none;z-index:0
+}
+
+/* ── HEADER IMAGE ── */
+.top-image-container {
+    width: 100%;
+    text-align: center;
+    background: #000;
+    padding: 10px 0;
+    border-bottom: 2px solid #1A6A3A;
+    position: relative;
+    z-index: 2;
+}
+.top-image-container img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+}
+
+/* ── TOP BANNER ── */
+.hero{
+  position:relative;z-index:1;
+  background:linear-gradient(180deg,#0A1A0D 0%,#0D2011 100%);
+  border-bottom:2px solid #1A6A3A;
+  padding:25px;text-align:center
+}
+.hero-title{
+  font-size:28px;font-weight:900;letter-spacing:4px;
+  background:linear-gradient(90deg,#6ADA8A,#A9FFC8,#6ADA8A);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;margin-bottom:6px;text-transform: uppercase;
+}
+.hero-sub{font-size:12px;color:#6ADA8A;letter-spacing:3px;margin-bottom:10px}
+.hero-desc{
+  font-size:13px;color:#90C8A0;line-height:1.7;max-width:750px;margin:0 auto;
+  border:1px solid #1A6A3A;border-radius:8px;padding:15px 20px;
+  background:rgba(10,80,30,.25)
+}
+.hero-desc strong{color:#A9FFC8}
+
+/* ── MAIN WRAP ── */
+.wrap{max-width:1000px;margin:0 auto;padding:20px;position:relative;z-index:1}
+
+/* ── SECTION HEADER ── */
+.sec-head{
+  display:flex;align-items:center;gap:12px;
+  background:rgba(10,50,20,.6);border:1px solid #1A6A3A;border-left:4px solid #6ADA8A;
+  border-radius:7px;padding:12px 18px;margin:25px 0 15px
+}
+.sec-head .ico{font-size:22px}
+.sec-head .title{font-size:12px;font-weight:bold;letter-spacing:2px;color:#A9FFC8;text-transform:uppercase}
+
+/* ── PIPELINE CARDS ── */
+.step-card{
+  background:rgba(5,25,10,.8);border:1.5px solid #10301A;border-radius:8px;
+  margin-bottom:10px;overflow:hidden;transition:border-color .2s
+}
+.step-card.active{border-color:#4A9A60}
+.step-card.done{border-color:#2A7A4A}
+
+.step-header{display:flex;align-items:center;gap:12px;padding:15px 20px;cursor:pointer;user-select:none}
+.step-num{
+  background:rgba(15,80,30,.6);color:#A9FFC8;font-size:10px;font-weight:bold;
+  padding:4px 10px;border-radius:4px;min-width:40px;text-align:center;border:1px solid #2A7A4A
+}
+.step-name{font-size:13px;font-weight:bold;color:#D0E8D5;flex:1}
+.step-status{font-size:10px;color:#3A7A4A;font-weight:bold}
+.step-status.ok{color:#2ecc71}
+
+.step-body{display:none;padding:0 20px 20px;border-top:1px solid #10301A}
+.step-card.open .step-body{display:block}
+
+/* ── EXPLAIN ── */
+.explain{
+  background:rgba(10,50,20,.4);border:1px solid #1A6A3A;border-radius:6px;
+  padding:12px 16px;margin:12px 0;font-size:12px;color:#A0D0B0;line-height:1.7
+}
+.explain strong{color:#A9FFC8}
+.tag{
+  display:inline-block;background:rgba(15,80,30,.7);border:1px solid #2A7A4A;
+  color:#A9FFC8;font-size:9px;padding:2px 7px;border-radius:3px;margin:2px 4px 2px 0;
+  font-weight:bold;text-transform:uppercase
+}
+
+/* ── CODE ── */
+.code{
+  background:#030A05;border:1px solid #10301A;border-radius:5px;
+  padding:12px;font-family:monospace;font-size:11px;color:#8AE8A8;
+  line-height:1.6;margin:10px 0;overflow-x:auto
+}
+.code .kw{color:#BF80FF}
+.code .fn{color:#80BFFF}
+.code .str{color:#8AE8A8}
+.code .num{color:#FFA07A}
+
+/* ── COLORS VISUAL ── */
+.color-row{display:flex;gap:10px;margin-top:10px}
+.color-box{display:flex;align-items:center;gap:6px;font-size:10px;color:#888}
+.swatch{width:16px;height:16px;border-radius:3px;border:1px solid #333}
+
+/* ── NEXT BUTTON ── */
+.next-btn{
+  background:linear-gradient(135deg,#1A5A2A,#2A7A4A);border:none;color:#E0F8E8;
+  padding:12px 24px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:bold;
+  letter-spacing:1px;margin-top:15px;display:block;transition: 0.2s;
+}
+.next-btn:hover{filter: brightness(1.2); transform: translateY(-2px);}
+
+/* ── PROGRESS ── */
+.prog-bar{background:#0A2010;border-radius:4px;height:6px;margin:15px 0;overflow:hidden;border:1px solid #10301A}
+.prog-fill{height:100%;background:linear-gradient(90deg,#1A5A2A,#6ADA8A);width:0;transition:width .5s ease}
+
+</style>
+</head>
+<body>
+
+<div class="top-image-container">
+    <img src="1.png" alt="Scrabble Header">
+</div>
+
+<div class="hero">
+  <div class="hero-title">Scrabble Responder</div>
+  <div class="hero-sub">INTELIGENTNY GENERATOR PLANSZ · MODUŁ SCRABBLE.PY</div>
+  <div class="hero-desc">
+    Moduł <strong>Scrabble</strong> to kreatywny responder, który nie tylko pisze tekstową odpowiedź, ale zamienia ją w 
+    <strong>wizualną planszę Scrabble</strong>. System analizuje wiadomość, dobiera litery i renderuje obrazek PNG 
+    z zachowaniem oficjalnej punktacji dla polskiego alfabetu.
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="sec-head">
+    <span class="ico">🧩</span>
+    <div class="title">Proces generowania planszy</div>
+  </div>
+
+  <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
+
+  <div class="step-card active open" id="step-1">
+    <div class="step-header" onclick="toggleStep(1)">
+      <span class="step-num">KROK 1</span>
+      <span class="step-name">Analiza AI i Model Tyler</span>
+      <span class="step-status" id="st1">▶ AKTYWNY</span>
+    </div>
+    <div class="step-body">
+      <div class="explain">
+        System przesyła treść wiadomości użytkownika do modelu <strong>DeepSeek (MODEL_TYLER)</strong>. 
+        Wykorzystuje dedykowany prompt <code>prompt_scrabble.txt</code>, który instruuje AI do tworzenia krótkich, 
+        błyskotliwych wypowiedzi pasujących do limitów planszy.
+      </div>
+      <div class="code">
+<span class="kw">res_raw</span> = call_deepseek(prompt_for_model, <span class="str">""</span>, MODEL_TYLER)
+<span class="kw">res_clean</span> = sanitize_model_output(res_raw)
+      </div>
+      <button class="next-btn" onclick="nextStep(1)">Krok 2: Walidacja znaków →</button>
+    </div>
+  </div>
+
+  <div class="step-card" id="step-2" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(2)">
+      <span class="step-num">KROK 2</span>
+      <span class="step-name">Formatowanie pod siatkę 15x15</span>
+      <span class="step-status" id="st2">ZABLOKOWANY</span>
+    </div>
+    <div class="step-body">
+      <div class="explain">
+        Standardowa plansza Scrabble ma wymiary <strong>15x15 pól</strong>. Oznacza to twardy limit 
+        <strong>225 znaków</strong>. System usuwa zbędne formatowanie i przygotowuje tekst do rozmieszczenia na płytkach.
+      </div>
+      <div class="explain">
+        <span class="tag">Limit: 225 znaków</span>
+        <span class="tag">Grid: 15x15</span>
+        <span class="tag">Język: Polski (z ogonkami)</span>
+      </div>
+      <button class="next-btn" onclick="nextStep(2)">Krok 3: Renderowanie PNG →</button>
+    </div>
+  </div>
+
+  <div class="step-card" id="step-3" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(3)">
+      <span class="step-num">KROK 3</span>
+      <span class="step-name">Renderowanie silnikiem Pillow</span>
+      <span class="step-status" id="st3">ZABLOKOWANY</span>
+    </div>
+    <div class="step-body">
+      <div class="explain">
+        Finalny obrazek jest generowany przez bibliotekę <strong>Pillow</strong>. Każda litera otrzymuje swoją płytkę 
+        oraz małą cyfrę oznaczającą punkty (zgodnie z polską wersją gry).
+      </div>
+      
+      <div class="explain">
+        <strong>Paleta barw z pliku scrabble.py:</strong>
+        <div class="color-row">
+          <div class="color-box"><div class="swatch" style="background:#228B22"></div> Plansza (34,139,34)</div>
+          <div class="color-box"><div class="swatch" style="background:#F5DEB3"></div> Płytka (245,222,179)</div>
+          <div class="color-box"><div class="swatch" style="background:#282828"></div> Tekst (40,40,40)</div>
+        </div>
+      </div>
+
+      <div class="code">
+<span class="kw">LETTERS_PTS</span> = {
+    <span class="str">'A'</span>: <span class="num">1</span>, <span class="str">'Ą'</span>: <span class="num">5</span>, <span class="str">'B'</span>: <span class="num">3</span>, <span class="str">'C'</span>: <span class="num">2</span>, <span class="str">'Ć'</span>: <span class="num">6</span>,
+    <span class="str">'E'</span>: <span class="num">1</span>, <span class="str">'Ę'</span>: <span class="num">5</span>, <span class="str">'F'</span>: <span class="num">5</span>, <span class="str">'G'</span>: <span class="num">3</span>, <span class="str">'H'</span>: <span class="num">3</span>...
+}
+      </div>
+      <div class="explain">
+        Gotowy obrazek jest konwertowany do <strong>Base64</strong> i dołączany do odpowiedzi jako załącznik PNG.
+      </div>
+      <button class="next-btn" onclick="finish()">Zakończ analizę ✓</button>
+    </div>
+  </div>
+
+  <div style="height:60px"></div>
+</div>
+
+<script>
+var totalSteps = 3;
+
+function toggleStep(n){
+  var card = document.getElementById('step-'+n);
+  if(card.style.opacity === '0.35') return;
+  card.classList.toggle('open');
+}
+
+function nextStep(n){
+  var currentCard = document.getElementById('step-'+n);
+  currentCard.classList.remove('open');
+  currentCard.classList.add('done');
+  document.getElementById('st'+n).textContent = '✓ UKOŃCZONO';
+  document.getElementById('st'+n).classList.add('ok');
+
+  var next = n + 1;
+  var nextCard = document.getElementById('step-'+next);
+  if(nextCard){
+    nextCard.style.opacity = '1';
+    nextCard.style.pointerEvents = 'auto';
+    nextCard.classList.add('active', 'open');
+    document.getElementById('st'+next).textContent = '▶ AKTYWNY';
+    document.getElementById('prog-fill').style.width = (n/totalSteps*100)+'%';
+    nextCard.scrollIntoView({behavior:'smooth', block:'center'});
+  }
+}
+
+function finish(){
+  document.getElementById('step-3').classList.remove('open');
+  document.getElementById('step-3').classList.add('done');
+  document.getElementById('st3').textContent = '✓ UKOŃCZONO';
+  document.getElementById('prog-fill').style.width = '100%';
+  alert('Dokumentacja Scrabble Responder została w pełni odkryta.');
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jak działa Twój Cyfrowy Pomocnik?</title>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --accent: #3498db;
+            --bg: #f4f7f6;
+            --card-bg: #ffffff;
+            --text: #333;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            margin: 0;
+            padding: 10px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        header {
+            background: var(--primary);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        h1 { font-size: 1.5rem; margin: 0; }
+        h2 { color: var(--primary); font-size: 1.2rem; border-left: 4px solid var(--accent); padding-left: 10px; }
+
+        .box {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        }
+
+        .emoji-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .emoji-list li {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+            background: #eef2f3;
+            padding: 10px;
+            border-radius: 10px;
+        }
+
+        .step-num {
+            background: var(--accent);
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-weight: bold;
+        }
+
+        .important {
+            background: #fff3cd;
+            border: 1px solid #ffeeba;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 0.9rem;
+        }
+
+        .image-section {
+            text-align: center;
+            margin-top: 30px;
+        }
+
+        .image-container {
+            margin-bottom: 30px;
+        }
+
+        .image-container p {
+            font-weight: bold;
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            border: 2px solid #ddd;
+        }
+
+        footer {
+            text-align: center;
+            font-size: 0.8rem;
+            color: #888;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>🤖 Twój Cyfrowy Sekretarz</h1>
+        <p>Proste wyjaśnienie systemu "Responder Biznes"</p>
+    </header>
+
+    <div class="box">
+        <h2>Dla kogo to jest?</h2>
+        <p>Wyobraź sobie, że jesteś bardzo zajętą osobą i dostajesz setki pytań. Ten system to Twój pomocnik, który sam odpisuje na maile!</p>
+        <p><strong>Obecnie pomaga:</strong> Notariuszowi (odpowiada na pytania o spadki, darowizny czy intercyzy).</p>
+        <p><strong>Dla kogo może być po przebudowie?</strong></p>
+        <ul class="emoji-list">
+            <li>🏥 <strong>Lekarz:</strong> Wyjaśnia jak przygotować się do badania i wysyła zalecenia.</li>
+            <li>⚖️ <strong>Prawnik:</strong> Tłumaczy trudne przepisy i wysyła wzory pism.</li>
+            <li>🚗 <strong>Mechanik:</strong> Odpisuje na pytania o serwis i wysyła cenniki.</li>
+            <li>🏠 <strong>Agent nieruchomości:</strong> Wysyła opisy domów, o które pytają klienci.</li>
+        </ul>
+    </div>
+
+    <div class="box">
+        <h2>Jak to działa? (Krok po kroku)</h2>
+        
+        <div class="step">
+            <div class="step-num">1</div>
+            <div><strong>Czyta:</strong> System czyta maila od klienta.</div>
+        </div>
+
+        <div class="step">
+            <div class="step-num">2</div>
+            <div><strong>Myśli:</strong> Inteligentny robot (AI) zgaduje, o co chodzi klientowi (np. "Aha, on pyta o spadek!").</div>
+        </div>
+
+        <div class="step">
+            <div class="step-num">3</div>
+            <div><strong>Pisze:</strong> Układa miłą i profesjonalną odpowiedź.</div>
+        </div>
+
+        <div class="step">
+            <div class="step-num">4</div>
+            <div><strong>Daje prezent:</strong> Z zagubionej teczki (bazy danych) wyciąga odpowiednią instrukcję w PDF i dołącza ją do maila.</div>
+        </div>
+    </div>
+
+    <div class="box">
+        <h2>⚠️ Bardzo ważne!</h2>
+        <div class="important">
+            Aby system działał dobrze, musi mieć swoją <strong>własną bazę plików PDF</strong>. To taki regał z gotowymi instrukcjami. Jeśli klient zapyta o coś, czego nie ma na regale, system i tak wyśle miłą wiadomość i ogólną informację (np. godziny otwarcia biura), żeby nikt nie został bez odpowiedzi.
+        </div>
+    </div>
+
+    <div class="image-section">
+        <div class="image-container">
+            <p>1. Tak wygląda gotowa odpowiedź dla klienta:</p>
+            <img src="1.png" alt="Przykład odpowiedzi">
+        </div>
+
+        <div class="image-container">
+            <p>2. A to dostanie klient, gdy system nie dopasuje tematu (załącznik ogólny):</p>
+            <img src="2.png" alt="Przykład załącznika fallback">
+        </div>
+    </div>
+
+    <footer>
+        Wyjaśnienie techniczne skryptu biznes.py • 2024
+    </footer>
+</div>
+
+</body>
+</html>

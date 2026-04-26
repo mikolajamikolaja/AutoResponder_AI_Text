@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Nawiązania - Mobile</title>
+    <style>
+        :root {
+            --color-gas: #3d5a16;
+            --color-render: #1a4d80;
+            --color-history: #483d8b;
+            --color-ai: #6b420f;
+            --color-skip: #444;
+            --bg-page: #1a1a1a;
+            --text-main: #ffffff;
+            --text-dim: #bbbbbb;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background-color: var(--bg-page);
+            color: var(--text-main);
+            margin: 0;
+            padding: 15px;
+            line-height: 1.4;
+        }
+
+        .container {
+            max-width: 100%;
+        }
+
+        .header {
+            text-align: center;
+            border-bottom: 1px solid #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+        }
+
+        /* Legenda */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            font-size: 11px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .dot { width: 10px; height: 10px; border-radius: 2px; }
+
+        /* Krok */
+        .step-title {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin: 15px 0 5px 5px;
+        }
+
+        .card {
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+        }
+
+        .card h3 { margin: 0 0 5px 0; font-size: 15px; }
+        .card p { margin: 0; font-size: 13px; opacity: 0.9; }
+        .card ul { margin: 5px 0 0 0; padding-left: 20px; font-size: 12px; }
+
+        /* Kolory kafelków */
+        .gas { background-color: var(--color-gas); }
+        .render { background-color: var(--color-render); }
+        .history { background-color: var(--color-history); }
+        .ai { background-color: var(--color-ai); }
+        .skip { background-color: var(--color-skip); }
+
+        /* Decyzja */
+        .decision-box {
+            background: #000;
+            border: 1px solid #444;
+            padding: 10px;
+            text-align: center;
+            border-radius: 4px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+
+        /* Obrazek na końcu */
+        .final-image {
+            margin-top: 30px;
+            text-align: center;
+        }
+        .final-image img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            border: 1px solid #444;
+        }
+
+        .arrow-down {
+            text-align: center;
+            font-size: 18px;
+            color: #555;
+            margin: -5px 0 5px 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h2>Flow Nawiązania</h2>
+        <div class="legend">
+            <div class="legend-item"><div class="dot" style="background:var(--color-gas)"></div> nadawca / GAS</div>
+            <div class="legend-item"><div class="dot" style="background:var(--color-render)"></div> render / Python</div>
+            <div class="legend-item"><div class="dot" style="background:var(--color-history)"></div> plik historii</div>
+            <div class="legend-item"><div class="dot" style="background:var(--color-ai)"></div> DeepSeek AI</div>
+        </div>
+    </div>
+
+    <div class="step-title">1. Nadawca pisze email</div>
+    <div class="card gas">
+        <h3>Nadawca / GAS</h3>
+        <p>GAS odbiera wiadomość i wysyła webhook do Rendera.</p>
+    </div>
+
+    <div class="arrow-down">↓</div>
+
+    <div class="step-title">2. Render sprawdza historię</div>
+    <div class="card history">
+        <h3>Plik historii</h3>
+        <p>Odczyt: sender@email.txt</p>
+    </div>
+    <div class="card render">
+        <h3>Render (Python)</h3>
+        <p>zwykly.py / app.py przejmuje proces.</p>
+    </div>
+
+    <div class="arrow-down">↓</div>
+
+    <div class="step-title">3. Czy istnieje previous_body?</div>
+    <div class="decision-box">previous_body?</div>
+    <div style="display: flex; gap: 10px;">
+        <div class="card skip" style="flex: 1;">
+            <h3>NIE</h3>
+            <p>Pomija</p>
+        </div>
+        <div class="card ai" style="flex: 2;">
+            <h3>TAK (DeepSeek AI)</h3>
+            <p>Model: TYLER</p>
+            <ul>
+                <li>prev_body (300 zn.)</li>
+                <li>curr_body (300 zn.)</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="arrow-down" style="margin-top:10px;">↓</div>
+
+    <div class="step-title">4. Zapis i Odpowiedź</div>
+    <div class="card render">
+        <h3>reply_html</h3>
+        <p>Generowanie sekcji nawiązania.</p>
+    </div>
+    <div class="card history">
+        <h3>Zapis do pliku</h3>
+        <p>Aktualizacja historii nadawcy.</p>
+    </div>
+
+    <div class="arrow-down">↓</div>
+
+    <div class="step-title">5. Wysyłka</div>
+    <div class="card gas">
+        <h3>GAS wysyła email</h3>
+        <p>Wiadomość z nawiązaniem trafia do nadawcy.</p>
+    </div>
+
+    <div class="final-image">
+        <p style="font-size: 12px; color: #888;">Przykład (1.png):</p>
+        <img src="1.png" alt="Podgląd 1.png">
+    </div>
+</div>
+
+</body>
+</html>

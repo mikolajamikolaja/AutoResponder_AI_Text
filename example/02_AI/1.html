@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Analysis — DeepSeek & Vision</title>
+    <style>
+        :root {
+            --primary: #534AB7;
+            --secondary: #00FF41;
+            --bg: #0D0D0D;
+            --card-bg: #1A1A1A;
+            --text: #E0E0E0;
+        }
+        body { background: var(--bg); font-family: 'Segoe UI', sans-serif; color: var(--text); line-height: 1.6; padding: 40px 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: var(--secondary); text-transform: uppercase; letter-spacing: 2px; border-bottom: 2px solid var(--primary); padding-bottom: 10px; }
+        h2 { color: var(--primary); margin-top: 30px; }
+        .feature-box { background: var(--card-bg); border-left: 4px solid var(--secondary); padding: 20px; margin: 20px 0; border-radius: 0 8px 8px 0; }
+        code { background: #000; color: #FFD700; padding: 2px 5px; border-radius: 4px; font-family: monospace; }
+        .back-link { display: inline-block; margin-top: 40px; color: var(--secondary); text-decoration: none; font-weight: bold; }
+        .back-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="../../index.html" class="back-link">← Powrót do Hubu</a>
+        <h1>Etap 3: AI Analysis</h1>
+        <p>To tutaj zapadają kluczowe decyzje. System przetwarza surowe dane z maila na inteligentny kontekst.</p>
+
+        <div class="feature-box">
+            <h2>🧠 DeepSeek-V3 / R1</h2>
+            <p>Sercem analizy tekstowej są modele <strong>DeepSeek</strong>. Wykorzystujemy je do zrozumienia intencji nadawcy, wykrywania pilności sprawy oraz ekstrakcji kluczowych danych (np. numerów zamówień czy nazwisk).</p>
+        </div>
+
+        <div class="feature-box">
+            <h2>👁️ Vision Models (Optyczna Analiza)</h2>
+            <p>Jeśli mail zawiera załączniki graficzne (skany, zdjęcia faktur, zrzuty ekranu), system przesyła je do modeli <strong>Vision</strong>. Dzięki temu AI "widzi" treść obrazu i uwzględnia ją w procesie generowania odpowiedzi.</p>
+        </div>
+
+        <div class="feature-box">
+            <h2>🎭 Prompt Engineering</h2>
+            <p>Dzięki zaawansowanym instrukcjom systemowym (System Prompts), AI potrafi przyjąć konkretną personę, taką jak <em>Tyler Durden</em> czy <em>Eryk Dociekliwy</em>, dbając o unikalny ton komunikacji.</p>
+        </div>
+    </div>
+</body>
+</html>

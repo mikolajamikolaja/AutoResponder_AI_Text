@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Response — Automatyzacja wysyłki</title>
+    <style>
+        :root {
+            --primary: #534AB7;
+            --secondary: #00FF41;
+            --bg: #0D0D0D;
+            --card-bg: #1A1A1A;
+            --text: #E0E0E0;
+        }
+        body { background: var(--bg); font-family: 'Segoe UI', sans-serif; color: var(--text); line-height: 1.6; padding: 40px 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: var(--secondary); text-transform: uppercase; letter-spacing: 2px; border-bottom: 2px solid var(--primary); padding-bottom: 10px; }
+        h2 { color: var(--primary); margin-top: 30px; }
+        .feature-box { background: var(--card-bg); border-left: 4px solid var(--primary); padding: 20px; margin: 20px 0; border-radius: 0 8px 8px 0; }
+        .code-block { background: #000; color: #00FF41; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 13px; overflow-x: auto; }
+        .back-link { display: inline-block; margin-top: 40px; color: var(--secondary); text-decoration: none; font-weight: bold; }
+        .back-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="../../index.html" class="back-link">← Powrót do Hubu</a>
+        <h1>Etap 4: Response</h1>
+        <p>Ostatni krok pętli automatyzacji — dostarczenie wygenerowanej odpowiedzi do nadawcy.</p>
+
+        <div class="feature-box">
+            <h2>📧 Protokół SMTP & Gmail API</h2>
+            <p>System korzysta z modułu <code>smtp_wysylka.py</code>, aby nawiązać bezpieczne połączenie z serwerem pocztowym. Odpowiedź jest pakowana w format MIME i wysyłana bezpośrednio do odbiorcy.</p>
+        </div>
+
+        <div class="feature-box">
+            <h2>⚙️ Logika Flask Backend</h2>
+            <p>Serwer Flask zarządza procesem wysyłki, sprawdzając czy wszystkie parametry (odbiorca, temat, treść) są poprawne. Po udanej wysyłce, system loguje zdarzenie i oznacza wątek jako zakończony.</p>
+        </div>
+
+        <div class="feature-box">
+            <h2>🔄 Zamykanie obiegu danych</h2>
+            <p>Aby uniknąć wielokrotnego odpowiadania na ten sam e-mail, skrypt po wysyłce komunikuje się z <strong>Google Apps Script</strong>, który archiwizuje maila lub dodaje odpowiednią etykietę w Gmailu.</p>
+        </div>
+    </div>
+</body>
+</html>

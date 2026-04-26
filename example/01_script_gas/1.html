@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MISJA: SEKRETARKA GAS 👩‍💼🚀</title>
+<style>
+/* TWOJE STYLE Z REQUIEM */
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#06080F;color:#D8D0E8;font-family:Arial,sans-serif;min-height:100vh;overflow-x:hidden}
+body::before{
+  content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse at 20% 20%,rgba(80,40,160,.15) 0%,transparent 60%),
+             radial-gradient(ellipse at 80% 70%,rgba(20,80,160,.12) 0%,transparent 60%);
+  pointer-events:none;z-index:0
+}
+.hero{position:relative;z-index:1;background:linear-gradient(180deg,#0A0A1A 0%,#0D0D20 100%);border-bottom:2px solid #2A1A6A;padding:40px 20px;text-align:center}
+.wrap{position:relative;z-index:1;max-width:850px;margin:20px auto;padding:20px}
+.sec-head{display:flex;align-items:center;gap:15px;margin-bottom:20px;padding:15px;background:rgba(83,74,183,0.1);border-left:4px solid #534AB7;border-radius:0 10px 10px 0}
+.ico{font-size:35px}
+.title{font-size:22px;font-weight:bold;color:#FFF;letter-spacing:1px}
+.explain{background:rgba(255,255,255,0.03);border:1px solid rgba(83,74,183,0.2);padding:30px;border-radius:20px;line-height:1.8;margin-bottom:30px;font-size:16px}
+.var{color:#00FF41;font-family:monospace;font-weight:bold;background:rgba(0,255,65,0.1);padding:2px 6px;border-radius:4px}
+.highlight{color:#FFD700;font-weight:bold}
+.img-footer{width:100%;max-width:500px;display:block;margin:50px auto 10px;border-radius:20px;border:2px solid #534AB7;box-shadow:0 0 30px rgba(83,74,183,0.4)}
+.btn-code{display:inline-block;background:#534AB7;color:#FFF;padding:15px 30px;border-radius:50px;text-decoration:none;font-weight:bold;margin-bottom:30px;transition:0.3s;border:2px solid transparent}
+.btn-code:hover{background:transparent;border-color:#534AB7;box-shadow:0 0 20px #534AB7}
+</style>
+</head>
+<body>
+
+<div class="hero">
+    <h1 style="letter-spacing:8px; color:#534AB7; font-size:35px; margin-bottom:10px;">SEKRETARKA GAS</h1>
+    <p style="color:#8A80A8; text-transform:uppercase; letter-spacing:2px;">Najbardziej zapracowany robot w galaktyce Google</p>
+</div>
+
+<div class="wrap">
+    
+    <div style="text-align:center;">
+        <p style="margin-bottom:15px; color:#D8D0E8;">Zanim zaczniemy przygodę, tutaj znajdziesz mózg naszej Sekretarki (czyli prawdziwy kod):</p>
+        <a href="https://script.google.com/home/projects/1orICjVuo81DWXZt25TeKVuNIwRfjcfzl_bKVLTSVqsG9utUbtYTu9ZVt/edit" target="_blank" class="btn-code">
+            🔓 ZOBACZ KOD SCRIPT GAS ➔
+        </a>
+    </div>
+
+    <div class="sec-head">
+        <span class="ico">🤔</span>
+        <div class="title">CO TO W OGÓLE JEST TEN "GAS"?</div>
+    </div>
+    <div class="explain">
+        Słuchaj, <span class="highlight">GAS</span> to skrót od <span class="highlight">Google Apps Script</span>. Ale dla nas to oznacza <span class="highlight">"Giga-Automatyczny-Skaner"</span>! 
+        Wyobraź sobie, że Google to wielkie miasto, a GAS to niewidzialne elfy, które potrafią same otwierać Twoją pocztę, pisać w tabelkach i dzwonić do innych komputerów, kiedy Ty jesz lody. Nasza Sekretarka to szefowa tych elfów!
+    </div>
+
+    <div class="sec-head">
+        <span class="ico">🕵️‍♀️</span>
+        <div class="title">KROK 1: WIELKIE PRZESZUKIWANIE (Skanowanie poczty)</div>
+    </div>
+    <div class="explain">
+        Sekretarka zakłada okulary detektywa i odpala funkcję <span class="var">AAA_processEmails</span>. Wbiega do Twojego Gmaila i krzyczy: 
+        <i>"Czy są tu jakieś nowe listy?!"</i>. <br><br>
+        Ale uwaga! Jeśli widzi list od jakiegoś nudziarza albo bota, odpala system <span class="var">_isBannedSender</span>. To taki bramkarz pod dyskoteką – patrzy na listę <span class="var">BANNED_EMAILS</span> i mówi: <i>"Ty nie wchodzisz, masz za brzydkie znaczki!"</i>. Dzięki temu żaden spam nie zawraca jej głowy.
+        
+    </div>
+
+    <div class="sec-head">
+        <span class="ico">📝</span>
+        <div class="title">KROK 2: WPIS DO WIELKIEJ KSIĘGI (Baza danych)</div>
+    </div>
+    <div class="explain">
+        Gdy znajdzie fajny list, nie chowa go do kieszeni. Biegnie do Google Sheets (to taka wielka tabela, nasza <span class="var">SHEET_LOG_NAME</span>) i zapisuje wszystko wielkim piórem: 
+        <i>"Dnia tego i tego, o godzinie tej, napisał do nas Jaś, a jego list ma numer <span class="var">MESSAGE_ID</span>"</i>. 
+        Na koniec przybija wielką, zieloną pieczątkę: <span class="highlight">ODEBRANO</span>. Teraz już nikt nie powie, że list zginął!
+    </div>
+
+    <div class="sec-head">
+        <span class="ico">📞</span>
+        <div class="title">KROK 3: TELEFON DO SZEFA (Łączność z Pythonem)</div>
+    </div>
+    <div class="explain">
+        Teraz najtrudniejsze. Sekretarka musi zadzwonić do Pana Pythona, który mieszka na dalekim serwerze <span class="var">RENDER_URL</span>. 
+        Używa do tego magicznego telefonu <span class="var">UrlFetchApp</span>. <br><br>
+        Sekretarka jest mega cierpliwa. Wie, że Pan Python czasem jeszcze śpi, więc ustawia <span class="highlight">deadline na 25 sekund</span>. Siedzi z telefonem przy uchu i czeka, aż Python odbierze i powie: <i>"Dobra, dawaj ten list, ja teraz wymyślę super odpowiedź!"</i>.
+    </div>
+
+    <div class="sec-head">
+        <span class="ico">🦾</span>
+        <div class="title">KROK 4: OPERACJA "NIE PODDAJEMY SIĘ" (System Retry)</div>
+    </div>
+    <div class="explain">
+        A co jeśli Pan Python ma wyłączony telefon? Sekretarka nie idzie na drzemkę! Odpala procedurę <span class="var">_checkUnprocessedMessages</span>. 
+        Przegląda tabelkę i szuka tych, którzy mają pieczątkę <span class="highlight">ODEBRANO</span>, ale nie mają pieczątki <span class="highlight">WYSŁANO</span>. <br><br>
+        Próbuje się dodzwonić <span class="var">MAX_RETRIES_PER_MSG</span> razy (czyli 3 razy!). Jeśli po trzecim razie dalej nikt nie odbiera, Sekretarka robi się czerwona ze złości i wysyła maila SOS do Ciebie na <span class="var">ADMIN_EMAIL</span>: <i>"SZEFIE! WSZYSTKO SIĘ PALI! PYTHON NIE ODBIERA!"</i>. To się nazywa profesjonalizm!
+        
+    </div>
+
+    <div style="text-align: center; margin-top: 50px;">
+        <img src="sekretarka.png" alt="Twoja Cyfrowa Sekretarka GAS" class="img-footer">
+        <p style="color:#534AB7; font-weight:bold; margin-top:15px; letter-spacing:3px;">DOKUMENTACJA ZAKOŃCZONA. MOŻESZ IŚĆ GRAĆ W ROBLOXA.</p>
+    </div>
+
+</div>
+
+</body>
+</html>

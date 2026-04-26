@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autoresponder Tylera Durdena · Dokumentacja</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#fff;color:#111;font-family:Arial,sans-serif;min-height:100vh;font-size:16px}
+
+/* ── TOP BANNER ── */
+.hero{
+  background:#000;border-bottom:3px solid #222;
+  padding:28px 20px;text-align:center
+}
+.hero-title{
+  font-size:clamp(22px,5vw,36px);font-weight:900;letter-spacing:4px;
+  color:#fff;margin-bottom:8px;text-transform:uppercase
+}
+.hero-sub{font-size:clamp(11px,2vw,13px);color:#aaa;letter-spacing:3px;margin-bottom:14px;text-transform:uppercase}
+.hero-desc{
+  font-size:clamp(13px,2vw,15px);color:#ccc;line-height:1.8;max-width:740px;margin:0 auto;
+  border:1px solid #333;border-radius:6px;padding:14px 20px;
+  background:rgba(255,255,255,.05)
+}
+.hero-desc strong{color:#fff}
+
+/* ── BACK BUTTON ── */
+.back-btn{
+  display:inline-block;margin:18px 0 0 18px;
+  background:#fff;border:2px solid #000;color:#000;
+  padding:8px 20px;border-radius:4px;font-size:14px;font-weight:bold;
+  text-decoration:none;letter-spacing:1px;cursor:pointer;
+  transition:background .15s,color .15s
+}
+.back-btn:hover{background:#000;color:#fff}
+
+/* ── MAIN WRAP ── */
+.wrap{max-width:1060px;margin:0 auto;padding:20px 18px;position:relative}
+
+/* ── SECTION HEADER ── */
+.sec-head{
+  display:flex;align-items:flex-start;gap:12px;
+  background:#f5f5f5;border:1px solid #ddd;border-left:5px solid #000;
+  border-radius:5px;padding:12px 16px;margin:28px 0 14px
+}
+.sec-head .ico{font-size:22px;flex-shrink:0;margin-top:2px}
+.sec-head .title{font-size:clamp(13px,2vw,15px);font-weight:900;letter-spacing:2px;color:#000;text-transform:uppercase}
+.sec-head .desc{font-size:clamp(12px,1.8vw,13px);color:#555;margin-top:3px;line-height:1.5}
+
+/* ── GALLERY ── */
+.gallery-grid{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:24px}
+.thumb{
+  width:clamp(90px,22vw,140px);height:clamp(60px,15vw,92px);
+  object-fit:cover;border-radius:4px;cursor:pointer;
+  border:2px solid #ddd;transition:border-color .2s,transform .2s,box-shadow .2s
+}
+.thumb:hover{border-color:#000;transform:scale(1.07);box-shadow:0 0 14px rgba(0,0,0,.25)}
+
+/* ── LIGHTBOX ── */
+#lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.96);z-index:999;align-items:center;justify-content:center;flex-direction:column}
+#lightbox.open{display:flex}
+#lightbox img{max-width:92vw;max-height:82vh;border-radius:6px;border:2px solid #555}
+.lb-nav{display:flex;gap:14px;margin-top:14px;align-items:center}
+.lb-nav button{background:#111;border:1px solid #555;color:#eee;padding:9px 22px;border-radius:4px;cursor:pointer;font-size:14px;font-weight:bold;transition:background .15s}
+.lb-nav button:hover{background:#333}
+.lb-close{position:absolute;top:16px;right:22px;background:none;border:none;color:#aaa;font-size:32px;cursor:pointer;line-height:1}
+.lb-counter{font-size:12px;color:#888;min-width:60px;text-align:center}
+
+/* ── DIVIDER ── */
+hr.div{border:none;border-top:1px solid #e0e0e0;margin:30px 0}
+
+/* ── PIPELINE CARDS ── */
+.step-card{
+  background:#fff;border:1.5px solid #ddd;border-radius:6px;
+  margin-bottom:10px;overflow:hidden;transition:border-color .2s
+}
+.step-card.active{border-color:#000}
+.step-card.done{border-color:#888;background:#f9f9f9}
+
+.step-header{display:flex;align-items:center;gap:10px;padding:14px 18px;cursor:pointer;user-select:none}
+.step-num{
+  background:#000;color:#fff;font-size:clamp(10px,1.5vw,11px);font-weight:bold;
+  letter-spacing:1px;padding:4px 10px;border-radius:3px;min-width:60px;
+  text-align:center;flex-shrink:0
+}
+.step-card.done .step-num{background:#888}
+.step-name{font-size:clamp(13px,2vw,14px);font-weight:bold;color:#111;flex:1}
+.step-emoji{font-size:20px;flex-shrink:0}
+.step-status{font-size:clamp(10px,1.5vw,11px);color:#bbb;flex-shrink:0}
+.step-status.ok{color:#222;font-weight:bold}
+.step-arrow{font-size:15px;color:#bbb;margin-left:6px;transition:transform .2s}
+.step-card.open .step-arrow{transform:rotate(90deg);color:#000}
+
+.step-body{display:none;padding:0 18px 16px;border-top:1px solid #eee}
+.step-card.open .step-body{display:block}
+
+/* ── EXPLAIN BLOCKS ── */
+.explain{
+  background:#f8f8f8;border:1px solid #e0e0e0;border-radius:5px;
+  padding:12px 16px;margin:12px 0;font-size:clamp(13px,2vw,14px);color:#333;line-height:1.8
+}
+.explain strong{color:#000}
+.explain .tag{
+  display:inline-block;background:#eee;border:1px solid #ccc;
+  color:#444;font-size:clamp(10px,1.5vw,11px);padding:3px 8px;border-radius:3px;margin:3px 3px 3px 0;
+  font-weight:bold
+}
+.explain .tag.dark{background:#222;border-color:#000;color:#fff}
+.explain .tag.grey{background:#ddd;border-color:#aaa;color:#222}
+
+/* ── STAGE FLOW ── */
+.stage-flow{
+  display:flex;align-items:center;flex-wrap:wrap;gap:6px;
+  margin:12px 0;padding:12px;background:#f0f0f0;border-radius:5px;
+  border:1px solid #ddd
+}
+.stage-box{
+  background:#fff;border:1.5px solid #222;border-radius:4px;
+  padding:6px 12px;font-size:clamp(11px,1.8vw,12px);color:#000;text-align:center;font-weight:bold
+}
+.stage-arr{color:#888;font-weight:bold;font-size:16px}
+
+/* ── CODE BLOCK ── */
+.code{
+  background:#111;color:#eee;border-radius:5px;
+  padding:14px 16px;font-family:monospace;font-size:clamp(11px,1.8vw,13px);
+  line-height:1.7;margin:12px 0;overflow-x:auto;white-space:pre
+}
+.cm{color:#777}.kw{color:#ccc;font-weight:bold}.key{color:#fff}.num{color:#aaa}
+
+/* ── NEXT BTN ── */
+.next-btn{
+  display:block;margin:14px auto 0;
+  background:#000;border:none;color:#fff;
+  padding:10px 28px;border-radius:4px;font-size:clamp(13px,2vw,14px);
+  font-weight:bold;cursor:pointer;letter-spacing:1px;transition:background .15s
+}
+.next-btn:hover{background:#333}
+
+/* ── DOWNLOAD ITEMS ── */
+.dl-list{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
+.dl-item{
+  background:#f8f8f8;border:1px solid #ddd;border-radius:5px;
+  padding:12px 16px;display:flex;align-items:center;gap:14px;
+  transition:border-color .15s,background .15s
+}
+.dl-item:hover{border-color:#000;background:#f0f0f0}
+.dl-icon{font-size:24px;flex-shrink:0}
+.dl-name{font-size:clamp(13px,2vw,14px);color:#000;font-weight:bold}
+.dl-sub{font-size:clamp(11px,1.5vw,12px);color:#666;margin-top:2px}
+.dl-btn{
+  margin-left:auto;background:#000;border:none;color:#fff;
+  padding:7px 18px;border-radius:3px;font-size:clamp(11px,1.5vw,12px);
+  cursor:pointer;font-weight:bold;transition:background .15s;text-decoration:none;display:inline-block
+}
+.dl-btn:hover{background:#333}
+
+/* ── SVG PREVIEW ── */
+.svg-wrap{
+  border:1px solid #ddd;border-radius:5px;overflow:hidden;
+  margin:12px 0;background:#f5f5f5;padding:10px;text-align:center
+}
+
+/* ── ANKIETA EMBED ── */
+.ankieta-wrap{
+  border:2px solid #000;border-radius:6px;overflow:hidden;
+  margin:12px 0;background:#fff
+}
+.ankieta-wrap iframe{width:100%;min-height:500px;border:none}
+
+/* ── VERDICT ── */
+.verdict-box{
+  background:#000;color:#fff;border-radius:6px;
+  padding:22px 24px;margin-top:28px;display:none
+}
+.verdict-box.show{display:block}
+.verdict-label{font-size:clamp(11px,1.8vw,12px);letter-spacing:3px;color:#aaa;text-align:center;margin-bottom:14px;text-transform:uppercase}
+.verdict-text{font-size:clamp(13px,2vw,15px);color:#ddd;line-height:1.9}
+.verdict-text strong,.verdict-text .hl{color:#fff;font-weight:900}
+.stats-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.stat-pill{background:#222;border:1px solid #444;color:#ccc;padding:7px 14px;border-radius:4px;font-size:clamp(12px,1.8vw,13px);font-weight:bold}
+.stat-pill span{color:#fff}
+
+/* ── PROG BAR ── */
+.prog-bar{background:#eee;border-radius:4px;height:5px;margin:10px 0;overflow:hidden}
+.prog-fill{height:100%;background:#000;width:0;transition:width .5s ease}
+
+.hint-pulse{font-size:clamp(12px,1.8vw,13px);color:#888;text-align:center;margin:8px 0;font-weight:bold;animation:pulse 1.3s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.95)}}
+
+.path-tracker{font-size:clamp(10px,1.5vw,12px);color:#aaa;text-align:center;min-height:18px;margin:6px 0;font-style:italic}
+
+/* ── MOBILE ── */
+@media(max-width:600px){
+  .step-header{flex-wrap:wrap;gap:8px}
+  .step-status{display:none}
+  .gallery-grid{gap:7px}
+  .stage-flow{gap:4px}
+  .dl-item{flex-wrap:wrap;gap:8px}
+  .dl-btn{margin-left:0}
+}
+</style>
+</head>
+<body>
+
+<!-- BACK BUTTON -->
+<a class="back-btn" href="../index.html">← Powrót do strony głównej</a>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-title">Autoresponder Tylera Durdena</div>
+  <div class="hero-sub">zwykly.py · Dokumentacja systemu · Portfolio</div>
+  <div class="hero-desc">
+    <strong>Responder emocjonalny</strong> — system odpowiadający na emaile w stylu Tylera Durdena i Sokratesa.<br>
+    Każda odpowiedź to <strong>unikalny pakiet</strong>: list filozoficzny, tryptyk obrazów AI, CV, karta RPG, horoskop, raport psychiatryczny i więcej.<br>
+    Silnik: <strong>DeepSeek AI</strong> + <strong>FLUX AI</strong> + <strong>Groq</strong> + <strong>Google Apps Script</strong>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- ════ GALERIA ════ -->
+  <div class="sec-head">
+    <span class="ico">🖼️</span>
+    <div>
+      <div class="title">Przykładowe wyjścia — Tryptyk FLUX</div>
+      <div class="desc">7 paneli obrazków wygenerowanych przez FLUX AI w stylu Fight Club / David Fincher · kliknij aby powiększyć</div>
+    </div>
+  </div>
+  <div class="gallery-grid">
+    <img class="thumb" src="1.jpg" onclick="openLightbox(0)" alt="Panel 1">
+    <img class="thumb" src="2.jpg" onclick="openLightbox(1)" alt="Panel 2">
+    <img class="thumb" src="3.jpg" onclick="openLightbox(2)" alt="Panel 3">
+    <img class="thumb" src="4.jpg" onclick="openLightbox(3)" alt="Panel 4">
+    <img class="thumb" src="5.jpg" onclick="openLightbox(4)" alt="Panel 5">
+    <img class="thumb" src="6.jpg" onclick="openLightbox(5)" alt="Panel 6">
+    <img class="thumb" src="7.jpg" onclick="openLightbox(6)" alt="Panel 7">
+  </div>
+
+  <hr class="div">
+
+  <!-- ════ INNE PRZYKŁADY ════ -->
+  <div class="sec-head">
+    <span class="ico">📁</span>
+    <div>
+      <div class="title">Inne przykłady projektu</div>
+      <div class="desc">Pełne archiwum przykładów wyjść systemu na Google Drive</div>
+    </div>
+  </div>
+  <div class="dl-list">
+    <div class="dl-item">
+      <span class="dl-icon">☁️</span>
+      <div>
+        <div class="dl-name">Google Drive — archiwum przykładów</div>
+        <div class="dl-sub">Pełna kolekcja wyjść: PDF, obrazki FLUX, HTML, CV, karty RPG, raporty psychiatryczne</div>
+      </div>
+      <a class="dl-btn" href="https://drive.google.com/drive/folders/1fpj3DxFNlLEj7OPhZlHyCI8FtHZTX8g4?usp=sharing" target="_blank">Otwórz →</a>
+    </div>
+  </div>
+
+  <hr class="div">
+
+  <!-- ════ PIPELINE ════ -->
+  <div class="sec-head">
+    <span class="ico">⚙️</span>
+    <div>
+      <div class="title">Pipeline systemu — jak to działa</div>
+      <div class="desc">Kliknij każdy krok aby rozwinąć szczegóły · odkrywaj kolejno</div>
+    </div>
+  </div>
+
+  <div style="background:#f5f5f5;border:1px solid #ddd;border-radius:5px;padding:14px 18px;margin-bottom:16px;text-align:center">
+    <p style="font-size:clamp(13px,2vw,14px);color:#444;line-height:1.7">
+      System przetwarza emaila przez <strong>9 kroków</strong> równolegle i sekwencyjnie.<br>
+      Każdy email generuje unikalny zestaw wyjść spersonalizowanych dla nadawcy.
+    </p>
+    <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
+    <div class="hint-pulse" id="hint-main">▼ Zacznij od Kroku 1</div>
+    <div class="path-tracker" id="path-tracker"></div>
+  </div>
+
+  <!-- KROK 1 -->
+  <div class="step-card" id="step-1" style="opacity:1;pointer-events:auto">
+    <div class="step-header" onclick="toggleStep(1)">
+      <span class="step-emoji">📧</span>
+      <span class="step-num">KROK 1</span>
+      <div style="flex:1">
+        <div class="step-name">Email przychodzi — ekstrakcja danych</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">Groq wyciąga rzeczowniki, imię nadawcy i miasto z treści emaila</div>
+      </div>
+      <span class="step-status" id="st1">aktywny</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-1">
+      <div class="explain">
+        System odbiera email przez <strong>Google Apps Script</strong> i przekazuje go do Pythona.<br><br>
+        <strong>Groq (llama-3.3-70b)</strong> analizuje treść i wyciąga:
+        <br><br>
+        <span class="tag dark">rzeczowniki konkretne</span> — przedmioty fizyczne z emaila (kopalnia, pies, kilof…)<br>
+        <span class="tag dark">imię nadawcy</span> — ze podpisu emaila, w mianowniku<br>
+        <span class="tag dark">miasto zamieszkania</span> — jeśli wymienione w tekście<br>
+        <span class="tag grey">płeć nadawcy</span> — wywnioskowana z imienia i końcówek gramatycznych<br><br>
+        Rzeczowniki trafiają do zmiennej <code>nouns_dict</code> i są używane przez WSZYSTKIE kolejne kroki jako kontekst personalny.
+      </div>
+      <div class="code"><span class="cm"># Groq — ekstrakcja rzeczowników z emaila</span>
+nouns_dict = {
+  <span class="key">"rzecz001"</span>: <span class="key">"kopalnia"</span>,
+  <span class="key">"rzecz002"</span>: <span class="key">"pies"</span>,
+  <span class="key">"rzecz003"</span>: <span class="key">"kilof"</span>,
+  <span class="key">"rzecz004"</span>: <span class="key">"dłoń"</span>
+}</div>
+      <button class="next-btn" onclick="nextStep(1)">→ Krok 2: Główna odpowiedź AI</button>
+    </div>
+  </div>
+
+  <!-- KROK 2 -->
+  <div class="step-card" id="step-2" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(2)">
+      <span class="step-emoji">✍️</span>
+      <span class="step-num">KROK 2</span>
+      <div style="flex:1">
+        <div class="step-name">DeepSeek pisze odpowiedź Tylera + Sokratesa</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">Główny list z 8 zasadami i 8 manifestami spersonalizowany dla nadawcy</div>
+      </div>
+      <span class="step-status" id="st2">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-2">
+      <div class="explain">
+        <strong>DeepSeek AI</strong> generuje główną odpowiedź emaila zawierającą dwie perspektywy:<br><br>
+        <span class="tag dark">SOKRATES</span> — mądrość filozoficzna, max 4 zdania, zwraca się do nadawcy zdrobniałym imieniem w wołaczu<br>
+        <span class="tag dark">TYLER DURDEN</span> — nihilistyczny manifest z 8 zasadami i 8 tematami<br><br>
+        <strong>Zasady są spersonalizowane</strong> — Zasada 1 i 2 brzmią identycznie (jak w Fight Club), zasada 5 zawsze brzmi <em>"Nie dawaj sobie szansy na prawdziwą wolność!"</em>, zasada 8 zawiera imię nadawcy.<br><br>
+        <strong>8 tematów manifestów:</strong> konsumpcjonizm, dno (rock bottom), bóg/religia, klasa robotnicza, śmiertelność, odpuszczenie, autentyczność, iluzja bezpieczeństwa — każdy przepisany konkretnymi detalami z emaila.
+      </div>
+      <div class="stage-flow">
+        <div class="stage-box">Email</div><span class="stage-arr">→</span>
+        <div class="stage-box">DeepSeek</div><span class="stage-arr">→</span>
+        <div class="stage-box">Sokrates (4 zdania)</div><span class="stage-arr">+</span>
+        <div class="stage-box">Tyler: 8 zasad + 8 manifestów</div>
+      </div>
+      <button class="next-btn" onclick="nextStep(2)">→ Krok 3: Tryptyk obrazów FLUX</button>
+    </div>
+  </div>
+
+  <!-- KROK 3 -->
+  <div class="step-card" id="step-3" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(3)">
+      <span class="step-emoji">🎨</span>
+      <span class="step-num">KROK 3</span>
+      <div style="flex:1">
+        <div class="step-name">FLUX AI generuje tryptyk — 7 paneli Fight Club</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">Każdy panel to wizualizacja odwrotności jednej zasady Tylera · styl David Fincher</div>
+      </div>
+      <span class="step-status" id="st3">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-3">
+      <div class="explain">
+        Dla każdej z 7 zasad (zasady 1–8) system generuje osobny obraz przez <strong>FLUX.1 [schnell]</strong>.<br><br>
+        <strong>Logika odwrócenia:</strong> Tyler zakazuje czegoś → obrazek pokazuje <em>złamanie</em> tego zakazu. Nie można pokazać "nierobienia" czegoś wizualnie — więc zawsze widać odwrotność.<br><br>
+        <span class="tag dark">Styl globalny</span> David Fincher · Fight Club 1999 · underexposed · 35mm film grain<br>
+        <span class="tag dark">Paleta</span> desaturated grey-green-yellow · red tylko dla krwi i ognia<br>
+        <span class="tag grey">Postacie</span> Tyler Durden (Brad Pitt) · Narrator (Edward Norton) · Marla Singer<br><br>
+        <strong>Rotacja tokenów HF</strong> — system używa do 20 tokenów HuggingFace (HF_TOKEN, HF_TOKEN1…HF_TOKEN20). Jeśli token wyczerpany → przechodzi do następnego. PNG ~2MB → konwersja do JPG 95% (Pillow) → ~400KB.
+      </div>
+      <button class="next-btn" onclick="nextStep(3)">→ Krok 4: CV Tylera Durdena</button>
+    </div>
+  </div>
+
+  <!-- KROK 4 -->
+  <div class="step-card" id="step-4" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(4)">
+      <span class="step-emoji">📄</span>
+      <span class="step-num">KROK 4</span>
+      <div style="flex:1">
+        <div class="step-name">CV — bezlitosne lustro emaila (PDF)</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">DeepSeek pisze CV nadawcy pokazujące kim NAPRAWDĘ jest · FLUX generuje zdjęcie profilowe</div>
+      </div>
+      <span class="step-status" id="st4">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-4">
+      <div class="explain">
+        Tyler jako bezlitosny doradca kariery tworzy CV które pokazuje <strong>kim nadawca naprawdę jest</strong> — nie kim chce być.<br><br>
+        <strong>Struktura CV:</strong><br>
+        <span class="tag dark">Imię/Nazwisko</span> metafora tematu emaila (np. "Kazimierz Szybikowy" dla górnika)<br>
+        <span class="tag dark">3 miejsca pracy</span> nazwane od konkretnych problemów/stanów z emaila<br>
+        <span class="tag dark">Uczelnia</span> fikcyjna, nazwa pochodzi wprost z emaila<br>
+        <span class="tag dark">Języki</span> 10 "języków" — język Węgla, język Własnej Winy, język Milczenia…<br>
+        <span class="tag dark">Życiorys</span> 8–15 zdań, każde z konkretnym faktem z emaila, styl nekrologu absurdu<br><br>
+        <strong>Zdjęcie profilowe</strong> generowane przez FLUX: nadawca z sińcami, roztarganym garniturem, trzymający obiekt z emaila — na tle chaosu z branży nadawcy.<br><br>
+        Gotowy <strong>PDF budowany przez ReportLab</strong> z czcionkami DejaVuSans (polskie znaki).
+      </div>
+      <button class="next-btn" onclick="nextStep(4)">→ Krok 5: Horoskop + Karta RPG</button>
+    </div>
+  </div>
+
+  <!-- KROK 5 -->
+  <div class="step-card" id="step-5" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(5)">
+      <span class="step-emoji">🔮</span>
+      <span class="step-num">KROK 5</span>
+      <div style="flex:1">
+        <div class="step-name">Horoskop nihilistyczny + Karta postaci RPG (PDF)</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">7 dni proroctw w stylu gazety lat 60 · statystyki RPG nadawcy</div>
+      </div>
+      <span class="step-status" id="st5">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-5">
+      <div class="explain">
+        <strong>Horoskop</strong> — Tyler pisze 7-dniowy horoskop nihilistyczny:<br>
+        <span class="tag grey">Znak zodiaku</span> wymyślony z emaila (np. "Górnik Wschodzący", "Excel w Kwadracie")<br>
+        <span class="tag grey">Nagłówki</span> w stylu gazety bulwarowej lat 60 — CAPS LOCK, dramatyczne<br>
+        <span class="tag grey">Każdy dzień</span> 2–3 zdania proroctwa + rada Tylera. ZAKAZ pozytywnych przepowiedni.<br><br>
+        <strong>Karta postaci RPG</strong> — nadawca jako postać gry:<br>
+        <span class="tag dark">Klasa</span> np. "Górnik Poziomu Rozpaczy" · <span class="tag dark">Poziom</span> 1–20 (wyższy = więcej problemów)<br>
+        <span class="tag dark">Statystyki</span> Siła Zaprzeczenia, Odporność na Prawdę, Poziom Iluzji, Punkty Życia…<br>
+        <span class="tag dark">Ekwipunek</span> konkretne przedmioty z emaila jako itemy RPG (np. "Kilof +2 do Rozpaczy")<br>
+        <span class="tag dark">Quest główny</span> ironiczne podsumowanie celu życiowego nadawcy według Tylera<br><br>
+        Oba wyjścia renderowane do <strong>PDF przez ReportLab</strong>.
+      </div>
+      <button class="next-btn" onclick="nextStep(5)">→ Krok 6: Plakat SVG + Gra HTML</button>
+    </div>
+  </div>
+
+  <!-- KROK 6 -->
+  <div class="step-card" id="step-6" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(6)">
+      <span class="step-emoji">🎮</span>
+      <span class="step-num">KROK 6</span>
+      <div style="flex:1">
+        <div class="step-name">Plakat motywacyjny SVG + Gra interaktywna HTML</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">Odwrócony plakat + gra z wyborami a/b/c na podstawie emaila</div>
+      </div>
+      <span class="step-status" id="st6">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-6">
+      <div class="explain">
+        <strong>Plakat SVG</strong> — odwrócony plakat motywacyjny:<br>
+        Najsilniejsze nihilistyczne zdanie z odpowiedzi Tylera · duże tło z watermark-słowem z emaila · kolory dobrane do nastroju emaila · format A4 do druku.<br><br>
+        <strong>Gra interaktywna HTML</strong> — 10 pytań sytuacyjnych z emaila:<br>
+        <span class="tag dark">a/c</span> — odpowiedzi konformistyczne lub pasywne<br>
+        <span class="tag dark">b</span> — droga Tylera (destrukcyjna, wyzwalająca)<br>
+        Na końcu wynik: ile razy wybrałeś drogę Tylera + komentarz Tylera dla każdego wyniku.<br><br>
+        Sytuacje w grze to <strong>konkretne sceny z emaila nadawcy</strong> — nie generyczne dylematy.
+      </div>
+      <button class="next-btn" onclick="nextStep(6)">→ Krok 7: Raport psychiatryczny</button>
+    </div>
+  </div>
+
+  <!-- KROK 7 -->
+  <div class="step-card" id="step-7" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(7)">
+      <span class="step-emoji">🏥</span>
+      <span class="step-num">KROK 7</span>
+      <div style="flex:1">
+        <div class="step-name">Raport psychiatryczny DOCX — Szpital im. Tylera Durdena</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">9 sekcji dokumentacji klinicznej · styl Szwejk + Monty Python + Tyler Durden</div>
+      </div>
+      <span class="step-status" id="st7">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-7">
+      <div class="explain">
+        <strong>Szpital Psychiatryczny im. Tylera Durdena</strong> — Oddział Egzystencjalny, Piętro B2 (Poziom Głęboki).<br>
+        Dr. T. Durden, MD, PhD, FIGHT przyjmuje nadawcę na podstawie treści emaila.<br><br>
+        <strong>9 sekcji raportu:</strong><br>
+        <span class="tag dark">I. Skierowanie</span> psychiatra sądowy · min. 8 powodów z cytatami z emaila<br>
+        <span class="tag dark">II. Powód przyjęcia</span> min. 15 zdań, każde nawiązuje do konkretnego słowa z emaila<br>
+        <span class="tag dark">III. Cytaty z izby</span> parafrazy zdań z emaila + komentarz kliniczny min. 15 zdań<br>
+        <span class="tag dark">IV. Depozyt</span> fizyczne przedmioty z emaila z żartobliwymi cechami udziwnionymi<br>
+        <span class="tag dark">V. Farmakologia</span> jeden lek per rzeczownik z emaila, dawkowanie żartobliwe<br>
+        <span class="tag dark">VI. Hospitalizacja</span> absurdalne incydenty wynikające z emaila · styl Monty Pythona<br>
+        <span class="tag dark">VII. Karta wypisu</span> stan + zalecenia + rokowanie<br>
+        <span class="tag dark">VIII. Relacje świadków</span> ksiądz, kurier, hydraulik, rodzina — każdy w innej gwarze<br>
+        <span class="tag dark">IX. Protokół Durden</span> 8 metod terapeutycznych odpowiadających zasadom Tylera<br><br>
+        Dwa przejścia kontroli jakości: <em>tone check</em> i <em>completeness check</em> przez DeepSeek.<br>
+        Zdjęcia psychiatryczne: 2 obrazy FLUX — stół z 4 rozrzuconymi polaroidami pacjenta.
+      </div>
+      <button class="next-btn" onclick="nextStep(7)">→ Krok 8: Ankieta wiedzy</button>
+    </div>
+  </div>
+
+  <!-- KROK 8 -->
+  <div class="step-card" id="step-8" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(8)">
+      <span class="step-emoji">📋</span>
+      <span class="step-num">KROK 8</span>
+      <div style="flex:1">
+        <div class="step-name">Ankieta wiedzy o odpowiedzi Tylera (HTML)</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">10 pytań wielokrotnego wyboru opartych na konkretnych zdaniach odpowiedzi</div>
+      </div>
+      <span class="step-status" id="st8">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-8">
+      <div class="explain">
+        Tyler sprawdza czy nadawca <strong>naprawdę zrozumiał</strong> co do niego napisał.<br><br>
+        10 pytań wielokrotnego wyboru (a/b/c) — każde bierze <strong>konkretne zdanie</strong> z odpowiedzi Tylera i pyta co miał na myśli:<br>
+        <span class="tag grey">a</span> — odpowiedź absurdalna lub odwrotna do prawdy<br>
+        <span class="tag dark">b</span> — odpowiedź poprawna (zawsze na pozycji b dla uproszczenia HTML)<br>
+        <span class="tag grey">c</span> — odpowiedź coachingowa / pozytywistyczna<br><br>
+        Styl pytań: <strong>ironiczny, nihilistyczny</strong>. Pytania od najłatwiejszego do najtrudniejszego.<br>
+        Każde pytanie zawiera wyjaśnienie dlaczego b jest poprawne (max 2 zdania).
+      </div>
+      <button class="next-btn" onclick="nextStep(8)">→ Krok 9: Wysyłka i finalizacja</button>
+    </div>
+  </div>
+
+  <!-- KROK 9 -->
+  <div class="step-card" id="step-9" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(9)">
+      <span class="step-emoji">📤</span>
+      <span class="step-num">KROK 9</span>
+      <div style="flex:1">
+        <div class="step-name">Wysyłka emaila — kompletny pakiet dla nadawcy</div>
+        <div style="font-size:clamp(11px,1.5vw,12px);color:#888">Google Apps Script składa i wysyła email z załącznikami</div>
+      </div>
+      <span class="step-status" id="st9">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-9">
+      <div class="explain">
+        System składa gotowy email i wysyła go przez <strong>Google Apps Script (SMTP)</strong>.<br><br>
+        <strong>Co zawiera email:</strong><br>
+        <span class="tag dark">📝 Odpowiedź HTML</span> Tyler Durden + Sokrates<br>
+        <span class="tag dark">🎨 Emotka PNG</span> ikona-metafora wygenerowana przez FLUX (AbsurdStyle444)<br>
+        <span class="tag dark">📄 PDF — CV</span> bezlitosne CV nadawcy<br>
+        <span class="tag dark">📄 PDF — Horoskop</span> 7-dniowy horoskop nihilistyczny<br>
+        <span class="tag dark">📄 PDF — Karta RPG</span> karta postaci nadawcy<br>
+        <span class="tag dark">🏥 DOCX — Raport</span> psychiatryczny raport kliniczny<br>
+        <span class="tag dark">🖼️ JPG x7</span> tryptyk Fight Club inline + załącznik<br>
+        <span class="tag grey">☁️ Google Drive</span> JPG zapisywane na Drive nadawcy<br><br>
+        <strong>Diagram SVG</strong> flow execution — generowany na końcu przez logger, pokazuje które API były wywołane i ile czasu zajęły.
+      </div>
+      <div class="code"><span class="cm"># Zwracany wynik — kompletny pakiet</span>
+<span class="kw">return</span> {
+  <span class="key">"reply_html"</span>:    reply_html,      <span class="cm"># treść emaila (HTML)</span>
+  <span class="key">"triptych"</span>:      triptych_images, <span class="cm"># lista 7 JPG (base64)</span>
+  <span class="key">"raport_pdf"</span>:    raport_pdf,      <span class="cm"># DOCX psychiatryczny</span>
+  <span class="key">"horoskop_pdf"</span>:  horoskop_pdf,    <span class="cm"># PDF horoskop</span>
+  <span class="key">"karta_rpg_pdf"</span>: karta_rpg_pdf,   <span class="cm"># PDF karta RPG</span>
+  <span class="key">"plakat_svg"</span>:    plakat_svg,      <span class="cm"># SVG plakat motywacyjny</span>
+  <span class="key">"ankieta_html"</span>:  ankieta_html,    <span class="cm"># HTML ankieta wiedzy</span>
+  <span class="key">"gra_html"</span>:      gra_html,        <span class="cm"># HTML gra interaktywna</span>
+  <span class="key">"nouns_dict"</span>:    nouns_dict,      <span class="cm"># rzeczowniki z emaila</span>
+}</div>
+      <button class="next-btn" onclick="showVerdict()">🏁 Pokaż podsumowanie całego systemu</button>
+    </div>
+  </div>
+
+  <!-- ════ VERDICT ════ -->
+  <div class="verdict-box" id="verdict">
+    <div class="verdict-label">✦ PODSUMOWANIE · AUTORESPONDER TYLERA DURDENA ✦</div>
+    <div class="verdict-text">
+      <strong>Autoresponder Tylera Durdena</strong> to system który odpowiada na każdy email unikalnym pakietem treści AI spersonalizowanych dla nadawcy na podstawie <em>konkretnych słów i sytuacji z wiadomości</em>.<br><br>
+      Jeden email wejściowy generuje: <span class="hl">list filozoficzny</span>, <span class="hl">tryptyk 7 obrazów FLUX</span>, <span class="hl">CV</span>, <span class="hl">horoskop</span>, <span class="hl">kartę RPG</span>, <span class="hl">plakat SVG</span>, <span class="hl">grę interaktywną</span>, <span class="hl">ankietę wiedzy</span> i <span class="hl">raport psychiatryczny</span>.<br><br>
+      Technologia: <span class="hl">DeepSeek AI</span> pisze teksty · <span class="hl">FLUX AI</span> generuje obrazy · <span class="hl">Groq</span> ekstrahuje dane · <span class="hl">ReportLab</span> buduje PDF · <span class="hl">Google Apps Script</span> obsługuje email.
+    </div>
+    <div class="stats-row" style="margin-top:16px">
+      <div class="stat-pill">🎨 <span>7</span> paneli FLUX</div>
+      <div class="stat-pill">📄 <span>3</span> pliki PDF</div>
+      <div class="stat-pill">🏥 <span>9</span> sekcji raportu</div>
+      <div class="stat-pill">🎮 <span>10</span> pytań gry</div>
+      <div class="stat-pill">📋 <span>10</span> pytań ankiety</div>
+      <div class="stat-pill">🔑 <span>20</span> tokenów HF</div>
+    </div>
+  </div>
+
+  <hr class="div">
+
+  <!-- ════ PLAKAT SVG ════ -->
+  <div class="sec-head">
+    <span class="ico">🖼️</span>
+    <div>
+      <div class="title">Plakat SVG — przykład wyjścia</div>
+      <div class="desc">Odwrócony plakat motywacyjny generowany na podstawie treści emaila nadawcy</div>
+    </div>
+  </div>
+  <div class="svg-wrap">
+    <img src="plakat.svg" alt="Plakat Tyler Durden" style="max-width:100%;max-height:500px;border-radius:4px">
+  </div>
+
+  <hr class="div">
+
+  <!-- ════ PLIKI DO POBRANIA ════ -->
+  <div class="sec-head">
+    <span class="ico">📥</span>
+    <div>
+      <div class="title">Pliki do pobrania — przykłady wyjść systemu</div>
+      <div class="desc">Pliki PDF i DOCX wygenerowane przez system dla przykładowego emaila</div>
+    </div>
+  </div>
+  <div class="dl-list">
+    <div class="dl-item">
+      <span class="dl-icon">🔮</span>
+      <div>
+        <div class="dl-name">Horoskop nihilistyczny</div>
+        <div class="dl-sub">PDF · 7-dniowy horoskop w stylu gazety bulwarowej lat 60 · znak zodiaku z emaila</div>
+      </div>
+      <a class="dl-btn" href="horoskop.pdf" download>Pobierz PDF</a>
+    </div>
+    <div class="dl-item">
+      <span class="dl-icon">⚔️</span>
+      <div>
+        <div class="dl-name">Karta postaci RPG</div>
+        <div class="dl-sub">PDF · statystyki nadawcy jako postaci gry · ekwipunek i questy</div>
+      </div>
+      <a class="dl-btn" href="karta_rpg.pdf" download>Pobierz PDF</a>
+    </div>
+    <div class="dl-item">
+      <span class="dl-icon">🏥</span>
+      <div>
+        <div class="dl-name">Raport psychiatryczny</div>
+        <div class="dl-sub">DOCX · Szpital im. Tylera Durdena · 9 sekcji dokumentacji klinicznej · styl Szwejk + Monty Python</div>
+      </div>
+      <a class="dl-btn" href="raport_psychiatryczny.docx" download>Pobierz DOCX</a>
+    </div>
+  </div>
+
+  <hr class="div">
+
+  <!-- ════ ANKIETA ════ -->
+  <div class="sec-head">
+    <span class="ico">📋</span>
+    <div>
+      <div class="title">Ankieta wiedzy — przykład wyjścia (interaktywna)</div>
+      <div class="desc">10 pytań wielokrotnego wyboru sprawdzających czy nadawca zrozumiał odpowiedź Tylera</div>
+    </div>
+  </div>
+  <div class="ankieta-wrap">
+    <iframe src="ankieta.html" title="Ankieta Tylera Durdena" loading="lazy"></iframe>
+  </div>
+
+  <div style="height:50px"></div>
+</div>
+
+<!-- LIGHTBOX -->
+<div id="lightbox">
+  <button class="lb-close" onclick="closeLightbox()">✕</button>
+  <img id="lb-img" src="" alt="Powiększone zdjęcie">
+  <div class="lb-nav">
+    <button onclick="lbPrev()">← Poprzednie</button>
+    <span class="lb-counter" id="lb-counter">1 / 7</span>
+    <button onclick="lbNext()">Następne →</button>
+  </div>
+</div>
+
+<script>
+/* ── LIGHTBOX ── */
+var IMGS=['1.jpg','2.jpg','3.jpg','4.jpg','5.jpg','6.jpg','7.jpg'];
+var lbIdx=0;
+function openLightbox(i){lbIdx=i;document.getElementById('lightbox').classList.add('open');updateLb()}
+function closeLightbox(){document.getElementById('lightbox').classList.remove('open')}
+function updateLb(){
+  document.getElementById('lb-img').src=IMGS[lbIdx];
+  document.getElementById('lb-counter').textContent=(lbIdx+1)+' / '+IMGS.length;
+}
+function lbPrev(){lbIdx=(lbIdx-1+IMGS.length)%IMGS.length;updateLb()}
+function lbNext(){lbIdx=(lbIdx+1)%IMGS.length;updateLb()}
+document.getElementById('lightbox').addEventListener('click',function(e){if(e.target===this)closeLightbox()});
+document.addEventListener('keydown',function(e){
+  if(!document.getElementById('lightbox').classList.contains('open'))return;
+  if(e.key==='ArrowLeft')lbPrev();
+  if(e.key==='ArrowRight')lbNext();
+  if(e.key==='Escape')closeLightbox();
+});
+
+/* ── PIPELINE ── */
+var total=9,current=0;
+function toggleStep(n){
+  var c=document.getElementById('step-'+n);
+  if(c.style.opacity==='0.35')return;
+  var open=c.classList.contains('open');
+  for(var i=1;i<=total;i++){var el=document.getElementById('step-'+i);if(el)el.classList.remove('open')}
+  if(!open)c.classList.add('open');
+}
+function nextStep(n){
+  var card=document.getElementById('step-'+n);
+  card.classList.remove('active','open');card.classList.add('done');
+  var st=document.getElementById('st'+n);
+  if(st){st.textContent='✓ odkryty';st.classList.add('ok')}
+  document.getElementById('hint-main').style.display='none';
+  var next=n+1;
+  if(next<=total){
+    var nc=document.getElementById('step-'+next);
+    nc.style.opacity='1';nc.style.pointerEvents='auto';nc.classList.add('active','open');
+    document.getElementById('st'+next).textContent='▶ aktywny';
+    nc.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+  current=n;
+  document.getElementById('prog-fill').style.width=(n/total*100)+'%';
+  var labels=['','Ekstrakcja danych','Odpowiedź AI','Tryptyk FLUX','CV PDF','Horoskop + RPG','Plakat + Gra','Raport psych.','Ankieta','Wysyłka'];
+  var done=[];for(var i=1;i<=n;i++)done.push(labels[i]);
+  document.getElementById('path-tracker').textContent='Odkryte: '+done.join(' → ');
+}
+function showVerdict(){
+  var c=document.getElementById('step-9');
+  c.classList.remove('active','open');c.classList.add('done');
+  var st=document.getElementById('st9');if(st){st.textContent='✓ odkryty';st.classList.add('ok')}
+  document.getElementById('prog-fill').style.width='100%';
+  document.getElementById('path-tracker').textContent='✦ Wszystkie 9 kroków odkryte — pipeline kompletny! ✦';
+  var v=document.getElementById('verdict');
+  v.classList.add('show');
+  v.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+// Init
+(function(){
+  var c=document.getElementById('step-1');
+  c.style.opacity='1';c.style.pointerEvents='auto';c.classList.add('open');
+})();
+</script>
+</body>
+</html>
