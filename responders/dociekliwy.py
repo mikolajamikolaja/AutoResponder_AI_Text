@@ -227,7 +227,8 @@ Zasady:
 - Pytania konkretne, wynikające z treści wiadomości rozmówcy
 - Reakcje krótkie (1-2 zdania), absurdalne, biurokratyczne
 - Każde pytanie z innej dziedziny (filozofia, biologia, prawo, kosmologia, kulinaria itp.)
-- Wyrok absurdalny ale logiczny po erykowemu"""
+- Wyrok absurdalny ale logiczny po erykowemu
+- Wyrok NIE może zawierać żadnych liczb ani statystyk (zakaz: "X pytań", "Y odpowiedzi", "Z%") — tylko sam absurdalny tekst"""
 
     raw = _deepseek_call(prompt, _SYSTEM_ERYK, max_tokens=4000 if max_pytania <= 2 else 7000)
     if not raw:
