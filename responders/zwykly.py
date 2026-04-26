@@ -152,6 +152,24 @@ from core.config import (
 
 from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WYMUSZANIE STARTU JSON od '{'
+# ─────────────────────────────────────────────────────────────────────────────
+_JSON_FORCE_SUFFIX = '\n\nOdpowiedź (zacznij od {):'
+_JSON_FORCE_SYSTEM = 'ZAWSZE zacznij odpowiedź od znaku {. Zakaz jakiegokolwiek tekstu przed {.'
+
+
+def _ju(user_prompt: str) -> str:
+    """Wymusza start odpowiedzi od '{' w user promptcie."""
+    return user_prompt + _JSON_FORCE_SUFFIX
+
+
+def _js(system_prompt: str) -> str:
+    """Dodaje wymóg startu od '{' do system promptu."""
+    if not system_prompt:
+        return _JSON_FORCE_SYSTEM
+    return system_prompt + '\n' + _JSON_FORCE_SYSTEM
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ŁADOWANIE prompt.json
@@ -2771,7 +2789,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=3000)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=3000)
 
     if not raw:
         logger.warning("[ankieta] Brak danych od AI")
@@ -3144,7 +3162,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=3000)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=3000)
     if not raw:
         return None
 
@@ -3346,7 +3364,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=2500)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=2500)
     if not raw:
         logger.warning("[karta-rpg] Brak odpowiedzi od AI")
         return None
@@ -3745,7 +3763,7 @@ def _build_raport_psychiatryczny(
     context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
     # DeepSeek dla raportu
-    raw = call_deepseek(system_msg, context, MODEL_TYLER)
+    raw = call_deepseek(_js(system_msg), _ju(context), MODEL_TYLER)
 
     if not raw:
         logger.warning("[raport] Brak odpowiedzi od AI")
@@ -4026,7 +4044,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. KLUCZ glowne_zdanie MUSI być na górnym poziomie — nie zagnieżdżaj w 'plakat'."
     )
 
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER)
     if not raw:
         logger.warning("[plakat] Brak odpowiedzi od AI")
         return None
@@ -4333,7 +4351,7 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
     )
 
     # max_tokens=4000 — zwiększone, 10 pytań × ~200 tokenów = min 3500 potrzebnych
-    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER, max_tokens=4000)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=4000)
     if not raw:
         logger.warning("[gra] Brak odpowiedzi od AI")
         return None
