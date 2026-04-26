@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="1188" viewBox="0 0 840 1188">
+  <!-- Tło -->
+  <rect width="840" height="1188" fill="#0A0A0A"/>
+
+  <!-- Słowo klucz — watermark -->
+  <text x="420" y="594" font-family="Arial Black, sans-serif" font-size="200" font-weight="bold"
+        fill="#FF2A2A" text-anchor="middle" dominant-baseline="middle"
+        opacity="0.04" transform="rotate(-30, 420, 594)">PYTANIA</text>
+
+  <!-- Linia górna dekoracyjna -->
+  <rect x="60" y="80" width="720" height="3" fill="#8b0000"/>
+  <rect x="60" y="87" width="720" height="1" fill="#8b0000" opacity="0.5"/>
+
+  <!-- Główny tekst -->
+  <text x="420" y="165" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="#FF2A2A" text-anchor="middle" dominant-baseline="middle" letter-spacing="1">Twoje pytania są tylko</text>
+<text x="420" y="227" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="#FF2A2A" text-anchor="middle" dominant-baseline="middle" letter-spacing="1">niewolnikiem Twoich</text>
+<text x="420" y="289" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="#FF2A2A" text-anchor="middle" dominant-baseline="middle" letter-spacing="1">posiadanych przedmiotów, a</text>
+<text x="420" y="351" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="#FF2A2A" text-anchor="middle" dominant-baseline="middle" letter-spacing="1">Ty jesteś niewolnikiem</text>
+<text x="420" y="413" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="#FF2A2A" text-anchor="middle" dominant-baseline="middle" letter-spacing="1">swoich pytań.</text>
+
+
+  <!-- Podtytuł (zawijany) -->
+  <text x="420" y="525" font-family="Georgia, serif" font-size="22" fill="#FF2A2A" text-anchor="middle" opacity="0.75">Doprecyzuj-Analityczna-Niepewna</text>
+
+
+  <!-- Cytat dodatkowy z odpowiedzi Tylera -->
+  <text x="420" y="615" font-family="Georgia, serif" font-size="18" font-style="italic" fill="#FF2A2A" text-anchor="middle" opacity="0.55">Czy nie widzisz, że twoje systemy i skrypty</text>
+<text x="420" y="641" font-family="Georgia, serif" font-size="18" font-style="italic" fill="#FF2A2A" text-anchor="middle" opacity="0.55">stały się twoją jedyną rzeczywistością, a ja</text>
+<text x="420" y="667" font-family="Georgia, serif" font-size="18" font-style="italic" fill="#FF2A2A" text-anchor="middle" opacity="0.55">jestem tylko kolejnym wpisem w</text>
+
+
+  <!-- Linia przed autorem -->
+  <rect x="160" y="723" width="520" height="1" fill="#FF2A2A" opacity="0.3"/>
+
+  <!-- Autor -->
+  <text x="420" y="743"
+        font-family="Georgia, serif" font-size="20" font-style="italic"
+        fill="#8b0000" text-anchor="middle">— Tyler Durden</text>
+
+  <!-- Linia dolna dekoracyjna -->
+  <rect x="60" y="1100" width="720" height="1" fill="#8b0000" opacity="0.5"/>
+  <rect x="60" y="1104" width="720" height="3" fill="#8b0000"/>
+
+  <!-- Małe logo projektu -->
+  <text x="420" y="1150" font-family="Arial, sans-serif" font-size="11"
+        fill="#FF2A2A" text-anchor="middle" opacity="0.3" letter-spacing="3">PROJEKT TYLER DURDEN</text>
+</svg>

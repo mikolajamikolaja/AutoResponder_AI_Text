@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Test: Czy rozumiesz Tylera Durdena?</title>
+<style>
+  body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #e0d0b0; margin: 0; padding: 20px; }
+  h1 { color: #8b0000; text-align: center; font-size: 1.8em; border-bottom: 2px solid #8b0000; padding-bottom: 10px; }
+  .intro { color: #888; font-style: italic; text-align: center; margin: 20px 0; }
+  .pytanie { background: #111; border-left: 4px solid #8b0000; margin: 20px 0; padding: 15px; border-radius: 0 4px 4px 0; }
+  .pytanie h3 { color: #c8b89a; margin: 0 0 8px 0; font-size: 0.9em; }
+  .cytat { color: #666; font-style: italic; font-size: 0.85em; margin-bottom: 10px; }
+  .opcje label { display: block; margin: 8px 0; cursor: pointer; }
+  .opcje input { margin-right: 8px; accent-color: #8b0000; }
+  .wyjasnienie { display: none; background: #1a0a0a; border: 1px solid #8b0000; padding: 10px; margin-top: 10px; font-size: 0.85em; color: #c8b89a; }
+  button { background: #8b0000; color: white; border: none; padding: 12px 30px; font-size: 1em; cursor: pointer; margin: 20px auto; display: block; font-family: 'Courier New', monospace; }
+  button:hover { background: #a00000; }
+  #wynik { text-align: center; font-size: 1.2em; color: #8b0000; margin: 20px; display: none; }
+  .nr { color: #8b0000; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Test: Czy rozumiesz Tylera Durdena?</h1>
+<p class="intro">Ten test to lustro pokazujące twoją pustkę. Jeśli go nie zdasz, twoje życie to tylko skrypt na GitHubie.</p>
+<form id="quiz">
+
+<div class="pytanie">
+  <h3><span class="nr">Pytanie 1:</span> Co Tyler miał na myśli mówiąc: 'Twoje repozytorium GitHub zaczyna posiadać ciebie.'?</h3>
+  <div class="cytat">"Twoje repozytorium GitHub zaczyna posiadać ciebie."</div>
+  <div class="opcje">
+    <label><input type="radio" name="q1" value="a"> a) Że powinieneś założyć więcej kont na GitHubie, aby zwiększyć swoją wartość rynkową.</label>
+    <label><input type="radio" name="q1" value="b"> b) Że twoje narzędzia i systemy kontrolują cię, zamiast ty je kontrolować.</label>
+    <label><input type="radio" name="q1" value="c"> c) Że GitHub to świetna platforma do budowania portfolio i networkingu.</label>
+  </div>
+  <div class="wyjasnienie" id="w1">Tyler krytykuje uzależnienie od technologii, gdzie człowiek staje się niewolnikiem własnych tworów, tracąc autentyczność.</div>
+</div>
+<div class="pytanie">
+  <h3><span class="nr">Pytanie 2:</span> Co Tyler miał na myśli mówiąc: 'Wolność można osiągnąć tylko poprzez usunięcie całego katalogu *AutoResponder_AI_Text* i spalenie diagramu.'?</h3>
+  <div class="cytat">"Wolność można osiągnąć tylko poprzez usunięcie całego katalogu *AutoResponder_AI_Text* i spalenie diagramu."</div>
+  <div class="opcje">
+    <label><input type="radio" name="q2" value="a"> a) Że należy regularnie backupować swoje projekty na zewnętrznych dyskach.</label>
+    <label><input type="radio" name="q2" value="b"> b) Że prawdziwa wolność wymaga radykalnego odrzucenia systemów i iluzji kontroli.</label>
+    <label><input type="radio" name="q2" value="c"> c) Że diagramy interaktywne są kluczem do efektywnego zarządzania czasem.</label>
+  </div>
+  <div class="wyjasnienie" id="w2">Tyler nawołuje do zniszczenia narzędzi, które symbolizują ucieczkę w automatyzację i iluzję porządku.</div>
+</div>
+<div class="pytanie">
+  <h3><span class="nr">Pytanie 3:</span> Co Tyler miał na myśli mówiąc: 'Twoje zachowanie odpowiadania automatycznego jest tylko maską, która ukrywa twój lęk przed prawdziwą rozmową.'?</h3>
+  <div class="cytat">"Twoje zachowanie odpowiadania automatycznego jest tylko maską, która ukrywa twój lęk przed prawdziwą rozmową."</div>
+  <div class="opcje">
+    <label><input type="radio" name="q3" value="a"> a) Że automatyzacja odpowiedzi to najnowszy trend w efektywnej komunikacji biznesowej.</label>
+    <label><input type="radio" name="q3" value="b"> b) Że uciekasz w technologiczne zastępstwa, bo boisz się autentycznej, nieprzewidywalnej interakcji.</label>
+    <label><input type="radio" name="q3" value="c"> c) Że powinieneś zainwestować w lepszy chatbot, aby twoje odpowiedzi brzmiały bardziej ludzko.</label>
+  </div>
+  <div class="wyjasnienie" id="w3">Tyler wskazuje, że automatyzacja to tchórzliwa ucieczka od ryzyka i wrażliwości prawdziwego kontaktu.</div>
+</div>
+<div class="pytanie">
+  <h3><span class="nr">Pytanie 4:</span> Co Tyler miał na myśli mówiąc: 'Twoja rutyna commitów i deployów jest tylko chwilowym otoczeniem, które chroni cię przed katastrofą pustego ekranu.'?</h3>
+  <div class="cytat">"Twoja rutyna commitów i deployów jest tylko chwilowym otoczeniem, które chroni cię przed katastrofą pustego ekranu."</div>
+  <div class="opcje">
+    <label><input type="radio" name="q4" value="a"> a) Że regularne commity to podstawa dobrej praktyki DevOps i stabilności systemu.</label>
+    <label><input type="radio" name="q4" value="b"> b) Że zapracowujesz się w bezsensownych rytuałach, by zagłuszyć pustkę i brak prawdziwego celu.</label>
+    <label><input type="radio" name="q4" value="c"> c) Że pusty ekran to znak, że powinieneś kupić monitor o wyższej rozdzielczości.</label>
+  </div>
+  <div class="wyjasnienie" id="w4">Tyler demaskuje zawodową rutynę jako narcystyczny mechanizm obronny przed konfrontacją z egzystencjalną nicością.</div>
+</div>
+<div class="pytanie">
+  <h3><span class="nr">Pytanie 5:</span> Co Tyler miał na myśli mówiąc: 'Jesteś projektem open source bez właściciela.'?</h3>
+  <div class="cytat">"Jesteś projektem open source bez właściciela."</div>
+  <div class="opcje">
+    <label><input type="radio" name="q5" value="a"> a) Że powinieneś opatentować swój kod, aby zabezpieczyć swoje prawa autorskie.</label>
+    <label><input type="radio" name="q5" value="b"> b) Że utraciłeś swoją tożsamość i autonomię, stając się produktem systemu pozbawionym prawdziwego 'ja'.</label>
+    <label><input type="radio" name="q5" value="c"> c) Że współpraca open source to przyszłość innowacji i powinieneś dołączyć do więcej projektów.</label>
+  </div>
+  <div class="wyjasnienie" id="w5">Tyler porównuje człowieka do bezosobowego, publicznego kodu - pozbawionego duszy, celu i prawdziwego sprawstwa.</div>
+</div>
+</form>
+<button onclick="sprawdz()">Sprawdź wynik</button>
+<div id="wynik"></div>
+<p style="text-align:center;color:#666;font-style:italic;margin-top:40px">Twoje odpowiedzi są tylko kolejnym commitem do repozytorium twojej iluzji.</p>
+<script>
+function sprawdz() {
+  var poprawne = 0;
+  var total = 5;
+  for (var i = 1; i <= total; i++) {
+    var sel = document.querySelector('input[name="q'+i+'"]:checked');
+    var wyn = document.getElementById('w'+i);
+    if (sel) {
+      if (sel.value === 'b') { poprawne++; wyn.style.background='#0a1a0a'; }
+      else { wyn.style.background='#1a0a0a'; }
+      wyn.style.display = 'block';
+    }
+  }
+  var wynikDiv = document.getElementById('wynik');
+  wynikDiv.style.display = 'block';
+  wynikDiv.innerHTML = 'Wynik: ' + poprawne + '/' + total + ' — ' + 
+    (poprawne < 4 ? 'Nie rozumiesz nic. Typowe.' : 
+     poprawne < 7 ? 'Trochę rozumiesz. To niepokojące.' : 
+     'Rozumiesz Tylera. Powinieneś się tym martwić.');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eryk Responder&#8482; &mdash; Kinga Beska</title>
+<style>
+
+/* ===== RESET ===== */
+*{box-sizing:border-box;margin:0;padding:0}
+
+/* ===== STYLE BAZOWY (domy[lny: klasyczny) ===== */
+body{background:#FAF8F4;font-family:Arial,sans-serif;transition:background .4s,color .4s}
+.dg-wrap{padding:16px;max-width:980px;margin:0 auto}
+
+/* NAGAÓWEK */
+.dg-header{background:#2C2C2A;color:#F1EFE8;text-align:center;padding:10px 20px;
+  border-radius:8px;font-size:13px;font-weight:bold;margin-bottom:8px;letter-spacing:1px}
+.pilne-badge{display:inline-block;background:#CC0000;color:#fff;
+  font-size:10px;padding:2px 8px;border-radius:10px;margin-left:8px;
+  animation:blink 1s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* PRZEACZNIK STYLU */
+.style-switcher{display:flex;gap:8px;justify-content:center;margin-bottom:12px;flex-wrap:wrap}
+.style-btn{border:1.5px solid #888;border-radius:20px;padding:4px 14px;
+  font-size:10px;cursor:pointer;background:transparent;font-family:inherit;
+  transition:all .2s}
+.style-btn.active{background:#534AB7;color:#fff;border-color:#534AB7}
+
+/* PASEK POSTPU */
+.progress-wrap{margin:0 auto 12px;max-width:700px}
+.progress-label{font-size:10px;color:#888;margin-bottom:3px;text-align:center;
+  font-style:italic;min-height:16px}
+.progress-bar-bg{background:#E0DEDA;border-radius:4px;height:8px;overflow:hidden}
+.progress-bar-fill{background:linear-gradient(90deg,#534AB7,#8B7ED8);
+  height:100%;border-radius:4px;width:0%;transition:width .4s ease}
+
+/* TRACKER ZCIE{KI */
+.path-tracker{font-size:11px;color:#888;text-align:center;margin:6px 0;min-height:16px}
+
+/* PYTANIE */
+.dg-question{background:#EEEDFE;border:2px solid #534AB7;border-radius:8px;
+  padding:12px 18px;margin:0 auto 8px;text-align:center}
+.dg-q-label{font-size:10px;color:#534AB7;font-weight:bold;letter-spacing:2px;margin-bottom:4px}
+.dg-q-text{font-size:13px;color:#3C3489;font-weight:bold;line-height:1.4}
+
+/* KOLUMNY OPCJI */
+.dg-cols{display:flex;gap:10px;margin-bottom:8px}
+.dg-col{flex:1;display:flex;flex-direction:column;gap:6px}
+
+/* PRZYCISKI OPCJI R1 */
+.opc-btn{border-radius:6px;padding:10px;cursor:pointer;border-width:1.5px;
+  border-style:solid;text-align:left;width:100%;font-family:inherit;
+  transition:filter .15s,transform .1s;background:inherit}
+.opc-btn:hover{filter:brightness(.93);transform:translateY(-1px)}
+.opc-btn:active{transform:translateY(0)}
+.opc-btn.active{outline:2px solid;outline-offset:2px}
+.opc-label{font-size:9px;font-weight:bold;letter-spacing:1px;margin-bottom:2px}
+.opc-text{font-size:11px;line-height:1.4}
+
+/* REAKCJA ERYKA  efekt maszyny do pisania */
+.reakcja{border-radius:4px;padding:8px;font-size:10px;font-style:italic;
+  border:1px dashed #C8A96A;background:#FFF8F0;color:#7A6040;
+  line-height:1.5;display:none;min-height:20px}
+.reakcja-cursor{display:inline-block;width:2px;height:11px;
+  background:#7A6040;margin-left:1px;animation:blink 0.7s step-end infinite;
+  vertical-align:text-bottom}
+
+/* R2 */
+.r2-block{margin-top:6px;display:none}
+.r2-question{background:#F0E6FA;border:1px solid #7A5FB7;border-radius:5px;
+  padding:8px;font-size:10px;color:#534AB7;font-weight:bold;
+  margin-bottom:6px;text-align:center}
+.r2-sub-label{font-size:9px;color:#7A5FB7;letter-spacing:1px;margin-bottom:3px}
+.r2-cols{display:flex;gap:4px}
+.r2-col{flex:1}
+.r2-btn{border-radius:4px;padding:6px 5px;font-size:9px;border-width:1px;
+  border-style:solid;text-align:center;line-height:1.4;cursor:pointer;
+  width:100%;font-family:inherit;background:inherit;
+  transition:filter .15s,transform .1s}
+.r2-btn:hover{filter:brightness(.92);transform:translateY(-1px)}
+.r2-btn.active{outline:2px solid;outline-offset:1px}
+.r2-tile-label{font-weight:bold;margin-bottom:2px}
+.r2-hint{font-size:9px;color:#aaa;text-align:center;margin-top:2px;font-style:italic}
+
+/* SEKCJE UKRYTE */
+.section-hidden{display:none}
+.dg-arrow{text-align:center;color:#888780;font-size:20px;margin:6px 0}
+
+/* WYROKI */
+.wyrok{background:#2C2C2A;color:#E8D5B0;border-radius:8px;padding:16px;
+  text-align:center;margin:0 auto;border:2px solid #8B6914;display:none}
+.wyrok-label{font-size:10px;color:#8B6914;font-weight:bold;
+  letter-spacing:2px;margin-bottom:8px}
+.wyrok-sciezka{font-size:9px;color:#aaa;margin-bottom:8px;font-style:italic}
+.wyrok-text{font-size:12px;line-height:1.6}
+
+/* ===== STYL: RETRO TERMINAL ===== */
+body.terminal{background:#0D0D0D;color:#00FF41;font-family:'Courier New',monospace}
+body.terminal .dg-header{background:#001A00;color:#00FF41;border:1px solid #00FF41}
+body.terminal .dg-question{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .dg-q-label{color:#00FF41}
+body.terminal .dg-q-text{color:#00FF41}
+body.terminal .opc-btn{background:#001A00 !important;border-color:#00FF41 !important;
+  color:#00FF41 !important}
+body.terminal .opc-label{color:#00FF41 !important}
+body.terminal .reakcja{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .r2-question{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .r2-btn{background:#001A00 !important;border-color:#00FF41 !important;
+  color:#00FF41 !important}
+body.terminal .wyrok{background:#001A00;border-color:#00FF41;color:#00FF41}
+body.terminal .wyrok-label{color:#00FF41}
+body.terminal .wyrok-sciezka{color:#00AA2A}
+body.terminal .progress-bar-fill{background:#00FF41}
+body.terminal .style-btn{color:#00FF41;border-color:#00FF41}
+body.terminal .style-btn.active{background:#00FF41;color:#000}
+body.terminal .path-tracker{color:#00AA2A}
+body.terminal .progress-label{color:#00AA2A}
+
+/* ===== STYL: {ÓATA KARTKA ===== */
+body.kartka{background:#F5EDB0;font-family:Georgia,serif}
+body.kartka .dg-wrap{background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Crect width='4' height='4' fill='%23F0E4A0'/%3E%3Ccircle cx='1' cy='1' r='0.5' fill='%23E8D880' opacity='0.5'/%3E%3C/svg%3E");
+  box-shadow:3px 3px 12px rgba(0,0,0,.3);padding:24px;
+  transform:rotate(-0.3deg);border:1px solid #C8A820}
+body.kartka .dg-header{background:#8B6914;font-family:Georgia,serif}
+body.kartka .dg-question{background:#FFFDE0;border-color:#8B6914}
+body.kartka .dg-q-label{color:#8B6914}
+body.kartka .dg-q-text{color:#5A3E00}
+body.kartka .opc-btn{font-family:Georgia,serif}
+body.kartka .reakcja{background:#FFFDE0;border-color:#8B6914;font-family:Georgia,serif}
+body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
+
+/* ===== MEDIA QUERY  TELEFON ===== */
+@media (max-width:600px){
+  .dg-cols{flex-direction:column}
+  .dg-col{width:100%}
+  .r2-cols{flex-direction:column}
+  .r2-col{width:100%}
+  .dg-wrap{padding:8px;margin:0}
+  .dg-question{padding:8px 10px}
+  .dg-q-text{font-size:12px}
+  .opc-btn{padding:8px}
+  .opc-text{font-size:12px}
+  .dg-header{font-size:11px;padding:8px}
+  .wyrok-text{font-size:11px}
+}
+
+</style>
+</head>
+<body>
+<div class="dg-wrap">
+<div class="dg-header">ERYK RESPONDER&#8482; &middot; Drzewo dociekliwo&#347;ci &middot; Kinga Beska
+</div>
+<div class="style-switcher">
+  <button class="style-btn active" onclick="setStyl('klasyczny',this)">&#128196; Klasyczny</button>
+  <button class="style-btn" onclick="setStyl('terminal',this)">&#9608; Terminal</button>
+  <button class="style-btn" onclick="setStyl('kartka',this)">&#128195; Kartka</button>
+</div>
+<div class="progress-wrap">
+  <div class="progress-label" id="prog-label">Inicjalizacja systemu Eryka&hellip;</div>
+  <div class="progress-bar-bg"><div class="progress-bar-fill" id="prog-bar"></div></div>
+</div>
+<div class="path-tracker" id="path-tracker">Wybierz odpowied&#378; na Pytanie 1 &rarr;</div>
+<div id="sekcja-p1">
+<div class="dg-question">
+  <div class="dg-q-label">PYTANIE 1</div>
+  <div class="dg-q-text">Czy trzy zBote to waluta fiducjarna czy raczej umowny symbol zobowizania, które wymagaBoby notarialnego po[wiadczenia?</div>
+</div>
+<div class="dg-cols" id="cols-p1">
+<div class="dg-col">
+<button class="opc-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR1(1,'A',this,true)"><div class="opc-label" style="color:#185FA5">A)</div><div class="opc-text">To tylko trzy zBote, oddam jutro.</div></button>
+<div class="reakcja" id="rea-1-A" data-tekst="Jutro? Prosz wskaza konkretn dat w kalendarzu gregoriaDskim z uwzgldnieniem strefy czasowej i faz ksi|yca."></div>
+<div class="r2-block" id="r2-1-A">
+<div class="r2-question"><div class="r2-sub-label">RUNDA 2 &mdash; A</div>Czy jutro to 24 godziny, czy mo|e dzieD roboczy w rozumieniu kodeksu cywilnego?</div>
+<div class="r2-cols">
+<div class="r2-col"><button class="r2-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR2(1,'A','A',this)"><div class="r2-tile-label">AA</div>24 godziny.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR2(1,'A','B',this)"><div class="r2-tile-label">AB</div>DzieD roboczy.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR2(1,'A','C',this)"><div class="r2-tile-label">AC</div>Nie wiem, po prostu oddam.</button></div>
+</div>
+<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>
+</div>
+</div>
+<div class="dg-col">
+<button class="opc-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR1(1,'B',this,true)"><div class="opc-label" style="color:#0F6E56">B)</div><div class="opc-text">Potrzebuj na bilet.</div></button>
+<div class="reakcja" id="rea-1-B" data-tekst="Bilet? Czyli cel transportowy. Prosz o podanie trasy, [rodka transportu oraz numeru rejestracyjnego pojazdu  to kluczowe dla oceny ryzyka."></div>
+<div class="r2-block" id="r2-1-B">
+<div class="r2-question"><div class="r2-sub-label">RUNDA 2 &mdash; B</div>Czy bilet jest jednorazowy, czy okresowy, i czy podlega zwrotowi w przypadku rezygnacji?</div>
+<div class="r2-cols">
+<div class="r2-col"><button class="r2-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR2(1,'B','A',this)"><div class="r2-tile-label">BA</div>Jednorazowy.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR2(1,'B','B',this)"><div class="r2-tile-label">BB</div>Okresowy.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR2(1,'B','C',this)"><div class="r2-tile-label">BC</div>Nie wiem, po prostu kupi.</button></div>
+</div>
+<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>
+</div>
+</div>
+<div class="dg-col">
+<button class="opc-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR1(1,'C',this,true)"><div class="opc-label" style="color:#854F0B">C)</div><div class="opc-text">Chc kupi dBugopis.</div></button>
+<div class="reakcja" id="rea-1-C" data-tekst="DBugopis  narzdzie biurowe. Czy jest to dBugopis jednorazowego u|ytku, czy z wymiennym wkBadem? Ma to kluczowe znaczenie dla amortyzacji."></div>
+<div class="r2-block" id="r2-1-C">
+<div class="r2-question"><div class="r2-sub-label">RUNDA 2 &mdash; C</div>Jaki kolor atramentu preferujesz i czy dBugopis bdzie u|ywany do celów sBu|bowych, czy prywatnych?</div>
+<div class="r2-cols">
+<div class="r2-col"><button class="r2-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR2(1,'C','A',this)"><div class="r2-tile-label">CA</div>Niebieski, prywatny.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR2(1,'C','B',this)"><div class="r2-tile-label">CB</div>Czarny, sBu|bowy.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR2(1,'C','C',this)"><div class="r2-tile-label">CC</div>Czerwony, nie wiem do czego.</button></div>
+</div>
+<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>
+</div>
+</div>
+</div>
+</div>
+<div id="sekcja-p2" class="section-hidden">
+<div class="dg-arrow">&#8595;</div>
+<div class="dg-question">
+  <div class="dg-q-label">PYTANIE 2</div>
+  <div class="dg-q-text">Czy moneta trzyzBotowa istnieje fizycznie, czy to tylko koncept matematyczny w systemie finansowym?</div>
+</div>
+<div class="dg-cols" id="cols-p2">
+<div class="dg-col">
+<button class="opc-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR1(2,'A',this,true)"><div class="opc-label" style="color:#185FA5">A)</div><div class="opc-text">Istnieje, widziaBem tak monet.</div></button>
+<div class="reakcja" id="rea-2-A" data-tekst="WidziaBe[  ale czy dotknBe[? WspóBczesna numizmatyka wymaga potwierdzenia dotykowego. Prosz o opis struktury powierzchni."></div>
+<div class="r2-block" id="r2-2-A">
+<div class="r2-question"><div class="r2-sub-label">RUNDA 2 &mdash; A</div>Czy moneta byBa bitym stemplem, czy mo|e to byB |eton reklamowy?</div>
+<div class="r2-cols">
+<div class="r2-col"><button class="r2-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR2(2,'A','A',this)"><div class="r2-tile-label">AA</div>Stempel menniczy.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR2(2,'A','B',this)"><div class="r2-tile-label">AB</div>{eton reklamowy.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR2(2,'A','C',this)"><div class="r2-tile-label">AC</div>Nie pamitam.</button></div>
+</div>
+<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>
+</div>
+</div>
+<div class="dg-col">
+<button class="opc-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR1(2,'B',this,true)"><div class="opc-label" style="color:#0F6E56">B)</div><div class="opc-text">Nie istnieje, to tylko cyfra.</div></button>
+<div class="reakcja" id="rea-2-B" data-tekst="Cyfra  czyli jeste[ zwolennikiem monetaryzmu abstrakcyjnego. Czy twoje |danie trzech zBotych to próba obalenia teorii Keynesa?"></div>
+<div class="r2-block" id="r2-2-B">
+<div class="r2-question"><div class="r2-sub-label">RUNDA 2 &mdash; B</div>Czy te trzy zBote to kwota netto, czy brutto z uwzgldnieniem inflacji?</div>
+<div class="r2-cols">
+<div class="r2-col"><button class="r2-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR2(2,'B','A',this)"><div class="r2-tile-label">BA</div>Netto.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR2(2,'B','B',this)"><div class="r2-tile-label">BB</div>Brutto.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR2(2,'B','C',this)"><div class="r2-tile-label">BC</div>Nie wiem, co to znaczy.</button></div>
+</div>
+<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>
+</div>
+</div>
+<div class="dg-col">
+<button class="opc-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR1(2,'C',this,true)"><div class="opc-label" style="color:#854F0B">C)</div><div class="opc-text">To tylko |art, nie potrzebuj pienidzy.</div></button>
+<div class="reakcja" id="rea-2-C" data-tekst="{art  a wic twoja wiadomo[ byBa aktem performatywnym. Czy mam to potraktowa jako prób nawizania relacji midzyludzkiej przez humor?"></div>
+<div class="r2-block" id="r2-2-C">
+<div class="r2-question"><div class="r2-sub-label">RUNDA 2 &mdash; C</div>Czy |art jest objty prawem autorskim, czy to domena domeny publicznej?</div>
+<div class="r2-cols">
+<div class="r2-col"><button class="r2-btn" style="background:#E6F1FB;border-color:#185FA5;color:#0C447C;outline-color:#185FA5" onclick="wybierzR2(2,'C','A',this)"><div class="r2-tile-label">CA</div>Mój autorski |art.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#E1F5EE;border-color:#0F6E56;color:#085041;outline-color:#0F6E56" onclick="wybierzR2(2,'C','B',this)"><div class="r2-tile-label">CB</div>Zapo|yczyBem z internetu.</button></div>
+<div class="r2-col"><button class="r2-btn" style="background:#FAEEDA;border-color:#854F0B;color:#633806;outline-color:#854F0B" onclick="wybierzR2(2,'C','C',this)"><div class="r2-tile-label">CC</div>Nie wiem, skd si wziB.</button></div>
+</div>
+<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>
+</div>
+</div>
+</div>
+</div>
+<div id="sekcja-wyrok" class="section-hidden"><div class="dg-arrow">&#8595;</div>
+<div id="wyrok-fallback" class="wyrok"><div class="wyrok-label">&#9878; WYROK KO&#323;COWY</div><div class="wyrok-text">Po przeanalizowaniu wszystkich hipotez stwierdzam, |e rozmówca nie ma prawa do trzech zBotych, poniewa| nie udowodniB ani istnienia monety, ani celu po|yczki, ani swojego stanu psychicznego. Nakazuj wpBat trzech zBotych na konto funduszu prewencji biurokratycznej. Z pozdrowieniami, Eryk.</div></div>
+</div>
+</div>
+<div style="font-size:10px;color:#aaa;text-align:center;padding:12px 8px">
+  Eryk Responder&#8482; &middot; Wygenerowano automatycznie &middot; Odpowied&#378; nast&#261;pi w odpowiednim czasie
+</div>
+<script>
+
+const AUDIO_BASE = "https://legionowopawel.github.io/AutoResponder_AI_Text/audio/";
+const SND_R1     = ["beep.mp3", "plink.mp3", "bop.mp3"];
+const SND_R2     = ["bounce.mp3", "bop.mp3", "bubbles.mp3"];
+const SND_WYROK  = ["eureka.mp3", "wishgranted.mp3"];
+const SND_PILNE  = ["nextlevel.mp3"];
+const PILNE      = false;
+const WYROKI     = {};
+const N_PYTAN    = 2;
+
+//    Audio                                                                  
+function graj(lista) {
+  var plik = lista[Math.floor(Math.random() * lista.length)];
+  var a = new Audio(AUDIO_BASE + plik);
+  a.preload = 'auto';
+  a.play().catch(function(){});
+}
+
+//    Pasek postpu                                                          
+var progVal = 0;
+var progTimer = null;
+var progFaza = 0;  // 0=wolny start, 1=przyspieszenie, 2=cofnicie, 3=zatrzymanie
+var PROG_LABELS = [
+  "Inicjalizacja systemu Eryka&",
+  "Analiza merytoryczna odpowiedzi&",
+  "Weryfikacja spójno[ci logicznej&",
+  "Ocena intencji nadawcy&",
+  "  Wykryto nie[cisBo[ w intencjach nadawcy",
+  "Ponowna analiza od 50%&",
+  "Finalizacja wyroku&",
+  "Wyrok gotowy."
+];
+
+function startProgress() {
+  var bar = document.getElementById('prog-bar');
+  var lbl = document.getElementById('prog-label');
+  progVal = 0; progFaza = 0;
+  bar.style.width = '0%';
+  lbl.textContent = PROG_LABELS[0];
+  if(progTimer) clearInterval(progTimer);
+  progTimer = setInterval(function() {
+    if(progFaza === 0) {
+      progVal += 2;
+      lbl.textContent = PROG_LABELS[Math.floor(progVal/30) % 2];
+      if(progVal >= 70) { progFaza = 1; }
+    } else if(progFaza === 1) {
+      progVal += 3;
+      lbl.textContent = PROG_LABELS[2 + Math.floor((progVal-70)/10) % 2];
+      if(progVal >= 99) { progFaza = 2; lbl.textContent = PROG_LABELS[4]; }
+    } else if(progFaza === 2) {
+      // Cofa si dramatycznie do 50%
+      progVal -= 5;
+      if(progVal <= 50) { progFaza = 3; lbl.textContent = PROG_LABELS[5]; }
+    } else if(progFaza === 3) {
+      progVal += 1;
+      if(progVal >= 95) { lbl.textContent = PROG_LABELS[6]; }
+      if(progVal >= 100) {
+        progVal = 100;
+        lbl.textContent = PROG_LABELS[7];
+        clearInterval(progTimer);
+      }
+    }
+    bar.style.width = Math.min(100, Math.max(0, progVal)) + '%';
+  }, 60);
+}
+
+//    Typewriter                                                             
+var twTimers = {};
+function typewriter(elId, tekst, speed) {
+  speed = speed || 28;
+  var el = document.getElementById(elId);
+  if(!el) return;
+  el.style.display = 'block';
+  el.innerHTML = '';
+  if(twTimers[elId]) clearInterval(twTimers[elId]);
+  var i = 0;
+  var cursor = '<span class="reakcja-cursor"></span>';
+  twTimers[elId] = setInterval(function() {
+    el.innerHTML = 'Eryk: ' + tekst.substring(0, i) + '' + (i < tekst.length ? cursor : '');
+    i++;
+    if(i > tekst.length) {
+      clearInterval(twTimers[elId]);
+      el.innerHTML = 'Eryk: ' + tekst + '';
+    }
+  }, speed);
+}
+
+//    Styl (terminal / kartka / klasyczny)                                   
+function setStyl(styl, btn) {
+  document.body.className = styl === 'klasyczny' ? '' : styl;
+  document.querySelectorAll('.style-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+}
+
+//    Zcie|ka u|ytkownika                                                    
+var sciezka = {};
+for(var _p=1; _p<=N_PYTAN; _p++) sciezka[_p] = null;
+
+function updateTracker() {
+  var parts = [];
+  for(var p=1; p<=N_PYTAN; p++) {
+    if(sciezka[p]) parts.push('P' + p + ':' + sciezka[p]);
+    else break;
+  }
+  var t = document.getElementById('path-tracker');
+  if(parts.length === 0) t.textContent = 'Wybierz odpowiedz na Pytanie 1 ’';
+  else if(parts.length < N_PYTAN) t.textContent = 'Zcie|ka: ' + parts.join(' ’ ') + ' ’ ?';
+  else t.textContent = 'Zcie|ka: ' + Object.values(sciezka).join(' ’ ');
+}
+
+//    Reset sekcji                                                           
+function resetSekcja(pyt) {
+  var cols = document.getElementById('cols-p' + pyt);
+  if(!cols) return;
+  cols.querySelectorAll('.opc-btn').forEach(function(b){ b.classList.remove('active'); });
+  cols.querySelectorAll('.reakcja').forEach(function(r){ r.style.display='none'; r.innerHTML=''; });
+  cols.querySelectorAll('.r2-block').forEach(function(r){ r.style.display='none'; });
+  cols.querySelectorAll('.r2-btn').forEach(function(b){ b.classList.remove('active'); });
+  sciezka[pyt] = null;
+}
+
+function odkryjNastepne(pyt) {
+  var nastepna = pyt + 1;
+  var sek = document.getElementById('sekcja-p' + nastepna);
+  if(sek) {
+    sek.style.display = 'block';
+    setTimeout(function(){ sek.scrollIntoView({behavior:'smooth',block:'nearest'}); }, 100);
+  } else {
+    pokazWyrok();
+  }
+}
+
+//    Wybór opcji R1                                                         
+function wybierzR1(pyt, lit, btn, maR2) {
+  graj(PILNE ? SND_PILNE : SND_R1);
+  startProgress();
+
+  var cols = document.getElementById('cols-p' + pyt);
+  cols.querySelectorAll('.opc-btn').forEach(function(b){ b.classList.remove('active'); });
+  cols.querySelectorAll('.reakcja').forEach(function(r){ r.style.display='none'; r.innerHTML=''; });
+  cols.querySelectorAll('.r2-block').forEach(function(r){ r.style.display='none'; });
+  cols.querySelectorAll('.r2-btn').forEach(function(b){ b.classList.remove('active'); });
+
+  btn.classList.add('active');
+  sciezka[pyt] = lit;
+
+  // Reset kolejnych pytaD
+  for(var p = pyt+1; p <= N_PYTAN; p++) {
+    resetSekcja(p);
+    var sek = document.getElementById('sekcja-p' + p);
+    if(sek) sek.style.display = 'none';
+  }
+  document.getElementById('sekcja-wyrok').style.display = 'none';
+
+  // Typewriter dla reakcji
+  var reaEl = document.getElementById('rea-' + pyt + '-' + lit);
+  if(reaEl) {
+    var tekst = reaEl.getAttribute('data-tekst') || '';
+    if(tekst) typewriter('rea-' + pyt + '-' + lit, tekst, 25);
+  }
+
+  if(maR2) {
+    // Poka| R2  czekaj na wybór przed odkryciem nastpnego pytania
+    var r2 = document.getElementById('r2-' + pyt + '-' + lit);
+    if(r2) { r2.style.display = 'block'; setTimeout(function(){ graj(SND_R2); }, 400); }
+  } else {
+    // Brak R2  od razu odkryj nastpne
+    setTimeout(function(){ odkryjNastepne(pyt); }, 600);
+  }
+
+  updateTracker();
+}
+
+//    Wybór opcji R2                                                         
+function wybierzR2(pyt, litR1, litR2, btn) {
+  graj(SND_R2);
+  var r2block = document.getElementById('r2-' + pyt + '-' + litR1);
+  if(r2block) r2block.querySelectorAll('.r2-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  setTimeout(function(){ odkryjNastepne(pyt); }, 400);
+  updateTracker();
+}
+
+//    Poka| wyrok koDcowy                                                    
+function pokazWyrok() {
+  graj(SND_WYROK);
+  // Ukryj wszystkie wyroki
+  document.querySelectorAll('.wyrok').forEach(function(w){ w.style.display='none'; });
+
+  // Zbuduj klucz ze [cie|ki
+  var klucz = '';
+  for(var p=1; p<=N_PYTAN; p++) klucz += (sciezka[p] || 'X');
+
+  var w = document.getElementById('wyrok-' + klucz);
+  if(!w) w = document.getElementById('wyrok-fallback');
+  if(w) w.style.display = 'block';
+
+  var sek = document.getElementById('sekcja-wyrok');
+  sek.style.display = 'block';
+  setTimeout(function(){ sek.scrollIntoView({behavior:'smooth',block:'nearest'}); }, 100);
+  updateTracker();
+}
+
+//    Start                                                                  
+startProgress();
+
+</script>
+</body>
+</html>

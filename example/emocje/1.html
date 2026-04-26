@@ -1,0 +1,528 @@
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,wght@0,300;0,600;1,300;1,600&display=swap');
+
+:root {
+  --bg: #fdf8f3;
+  --ink: #2a1f14;
+  --muted: #8a7a6a;
+  --teal: #1d8a6e;
+  --teal-light: #d4f0e8;
+  --teal-mid: #7ecab8;
+  --purple: #534ab7;
+  --purple-light: #eeedfe;
+  --purple-mid: #afa9ec;
+  --red: #a32d2d;
+  --red-light: #fcebeb;
+  --gray: #5f5e5a;
+  --gray-light: #f1efe8;
+  --amber: #854f0b;
+  --amber-light: #faeeda;
+  --coral: #993c1d;
+  --coral-light: #faece7;
+  --line: #d3cfc8;
+  --pink: #993556;
+  --pink-light: #fbeaf0;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  font-family: 'DM Mono', monospace;
+  color: var(--ink);
+  padding: 20px 14px 60px;
+}
+
+/* ── HEADER ── */
+.header {
+  background: var(--purple-light);
+  border: 1.5px solid var(--purple-mid);
+  border-radius: 16px;
+  padding: 18px 20px;
+  text-align: center;
+  margin-bottom: 0;
+  animation: fadeUp 0.4s ease both;
+}
+.header h1 {
+  font-family: 'Fraunces', serif;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--purple);
+  line-height: 1.2;
+}
+.header p {
+  font-size: 11px;
+  color: var(--purple);
+  opacity: 0.7;
+  margin-top: 5px;
+  line-height: 1.5;
+}
+
+/* ── ARROWS ── */
+.arrow-down {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin: 0 auto;
+}
+.arrow-down .shaft { width: 1px; background: var(--line); }
+.arrow-down .head {
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--line);
+}
+.arrow-label-txt {
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+  margin: 0;
+  line-height: 1;
+}
+
+/* ── BASIC NODES ── */
+.node {
+  border-radius: 10px;
+  padding: 10px 14px;
+  width: 100%;
+  animation: fadeUp 0.5s ease both;
+}
+.node .label { font-size: 12px; font-weight: 500; line-height: 1.3; }
+.node .sub   { font-size: 10px; margin-top: 3px; opacity: 0.7; line-height: 1.4; }
+
+.node-gray   { background: var(--gray-light);   border: 1px solid var(--line);       color: var(--gray); }
+.node-teal   { background: var(--teal-light);   border: 1.5px solid var(--teal-mid); color: var(--teal); }
+.node-teal .label { font-size: 11px; }
+.node-purple { background: var(--purple-light); border: 1.5px solid var(--purple-mid); color: var(--purple); }
+.node-amber  { background: var(--amber-light);  border: 1px solid #fac775;           color: var(--amber); }
+.node-red    { background: var(--red-light);    border: 1px solid #f09595;           color: var(--red); }
+
+/* ── DECISION (side branches) ── */
+.decision-wrap {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+.decision-main { width: 100%; }
+.decision-side {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 6px;
+  margin-top: 6px;
+}
+.decision-side .side-line { flex: 1; height: 1px; background: var(--line); }
+.decision-side .side-node {
+  font-size: 10px;
+  font-family: 'DM Mono', monospace;
+  border-radius: 6px;
+  padding: 5px 8px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.side-red    { background: var(--red-light);   color: var(--red);   border: 1px solid #f09595; }
+.side-amber  { background: var(--amber-light); color: var(--amber); border: 1px solid #fac775; }
+.side-label  { font-size: 10px; color: var(--muted); white-space: nowrap; }
+
+/* ── ATTACHMENTS ROW ── */
+.attach-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.attach-item {
+  flex: 1;
+  background: var(--gray-light);
+  border: 1px solid var(--line);
+  color: var(--gray);
+  border-radius: 8px;
+  padding: 8px 6px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.attach-item .sub { font-size: 9px; opacity: 0.65; margin-top: 2px; }
+
+/* ── SECTION DIVIDER ── */
+.section-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 4px 0;
+}
+.section-divider .line { flex: 1; height: 1px; background: var(--line); }
+.section-divider .txt  { font-size: 9px; color: var(--muted); letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap; }
+
+/* ══════════════════════════════════════════════════
+   ── METODY POCIESZENIA — GŁÓWNA SEKCJA ──
+══════════════════════════════════════════════════ */
+.metody-header {
+  background: linear-gradient(135deg, #1d8a6e 0%, #085041 100%);
+  border-radius: 16px;
+  padding: 20px 18px 16px;
+  color: #d4f0e8;
+  text-align: center;
+  animation: fadeUp 0.5s ease both;
+}
+.metody-header h2 {
+  font-family: 'Fraunces', serif;
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+}
+.metody-header p {
+  font-size: 10px;
+  margin-top: 5px;
+  opacity: 0.75;
+  line-height: 1.5;
+}
+
+/* karty metod */
+.metoda-card {
+  border-radius: 12px;
+  padding: 14px 16px;
+  width: 100%;
+  animation: fadeUp 0.5s ease both;
+  border-left: 4px solid transparent;
+}
+
+.metoda-card .m-tag {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-bottom: 5px;
+  font-weight: 500;
+}
+.metoda-card h3 {
+  font-family: 'Fraunces', serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-bottom: 6px;
+}
+.metoda-card p {
+  font-size: 11px;
+  line-height: 1.65;
+  opacity: 0.82;
+}
+.metoda-card .m-example {
+  margin-top: 8px;
+  font-size: 10px;
+  font-style: italic;
+  opacity: 0.65;
+  border-top: 1px solid rgba(0,0,0,0.07);
+  padding-top: 7px;
+  line-height: 1.5;
+}
+
+/* kolory kart */
+.m-teal   { background: var(--teal-light);   border-color: var(--teal);   color: var(--teal); }
+.m-teal h3 { color: #085041; }
+.m-purple { background: var(--purple-light); border-color: var(--purple); color: var(--purple); }
+.m-purple h3 { color: #26215c; }
+.m-amber  { background: var(--amber-light);  border-color: var(--amber);  color: var(--amber); }
+.m-amber h3 { color: #412402; }
+.m-coral  { background: var(--coral-light);  border-color: var(--coral);  color: var(--coral); }
+.m-coral h3 { color: #4a1b0c; }
+.m-pink   { background: var(--pink-light);   border-color: var(--pink);   color: var(--pink); }
+.m-pink h3 { color: #4b1528; }
+.m-gray   { background: var(--gray-light);   border-color: var(--gray);   color: var(--gray); }
+.m-gray h3 { color: #2c2c2a; }
+
+/* subwęzeł AI prompt */
+.ai-prompt-box {
+  background: #fff;
+  border: 1px dashed var(--teal-mid);
+  border-radius: 10px;
+  padding: 12px 14px;
+  width: 100%;
+  animation: fadeUp 0.5s ease both;
+}
+.ai-prompt-box .pbt { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--teal); margin-bottom: 6px; font-weight: 500; }
+.ai-prompt-box ul { list-style: none; padding: 0; }
+.ai-prompt-box ul li {
+  font-size: 11px;
+  color: var(--teal);
+  padding: 3px 0 3px 14px;
+  position: relative;
+  line-height: 1.5;
+  border-bottom: 1px solid #e8f8f3;
+}
+.ai-prompt-box ul li::before { content: '→'; position: absolute; left: 0; opacity: 0.5; font-size: 10px; }
+.ai-prompt-box ul li:last-child { border-bottom: none; }
+
+/* scenariusze */
+.scenario-card {
+  border-radius: 10px;
+  padding: 10px 14px;
+  animation: fadeUp 0.5s ease both;
+  width: 100%;
+}
+.scenario-card .s-label { font-size: 12px; font-weight: 500; margin-bottom: 3px; }
+.scenario-card .s-sub   { font-size: 10px; opacity: 0.7; line-height: 1.4; }
+.s-teal  { background: var(--teal-light);   border: 1.5px solid var(--teal-mid); color: var(--teal); }
+.s-amber { background: var(--amber-light);  border: 1px solid #fac775;           color: var(--amber); }
+.s-red   { background: var(--red-light);    border: 1px solid #f09595;           color: var(--red); }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.gap4  { height: 4px; }
+.gap8  { height: 8px; }
+.gap16 { height: 16px; }
+</style>
+
+<div style="max-width:480px; margin:0 auto; display:flex; flex-direction:column; align-items:center; gap:0;">
+
+  <!-- HEADER -->
+  <div class="header" style="width:100%;">
+    <h1>Projekt Pocieszyciel</h1>
+    <p>responder pociesza nadawcę — cokolwiek napisze</p>
+  </div>
+
+  <!-- arrow -->
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- krok 1 -->
+  <div class="node node-gray" style="width:100%;">
+    <div class="label">Wiadomość e-mail przychodzi</div>
+    <div class="sub">app.py odbiera: body, sender, sender_name</div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- router -->
+  <div class="node node-gray" style="width:100%;">
+    <div class="label">Router słów kluczowych</div>
+    <div class="sub">dopasowanie → POCIESZYCIEL</div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- główna funkcja -->
+  <div class="node node-teal" style="width:100%;">
+    <div class="label">build_pocieszyciel_section()</div>
+    <div class="sub">pocieszyciel.py — główna funkcja respondenta</div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- walidacja + side -->
+  <div class="decision-wrap" style="width:100%;">
+    <div class="node node-gray decision-main">
+      <div class="label">Walidacja wejścia</div>
+      <div class="sub">czy body nie jest puste?</div>
+    </div>
+    <div class="decision-side">
+      <span class="side-label" style="color:var(--red);">puste</span>
+      <div class="side-line"></div>
+      <div class="side-node side-red">Fallback — krótki HTML</div>
+    </div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:16px;"></div><div class="head"></div></div>
+  <div class="arrow-label-txt">niepuste</div>
+  <div class="gap4"></div>
+
+  <!-- AI call -->
+  <div class="node node-teal" style="width:100%;">
+    <div class="label">_generuj_pocieszenie(body, sender_name)</div>
+    <div class="sub">DeepSeek — jedno wywołanie</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- system prompt box -->
+  <div class="ai-prompt-box">
+    <div class="pbt">System prompt AI — zasady pocieszenia</div>
+    <ul>
+      <li>Nie dawaj konkretnych rad ani rozwiązań</li>
+      <li>Najpierw nazwij i potwierdź emocje nadawcy</li>
+      <li>Użyj ciepłego, nieokrągłego języka</li>
+      <li>Powiedz że to co czuje jest zrozumiałe</li>
+      <li>Wyraź że jest z nim/nią ktoś w tym momencie</li>
+      <li>Dostosuj ton do treści wiadomości</li>
+      <li>Nigdy nie umniejszaj bólu ani nie spieszysz z „będzie lepiej"</li>
+    </ul>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- czy AI ok + side -->
+  <div class="decision-wrap" style="width:100%;">
+    <div class="node node-gray decision-main">
+      <div class="label">Odpowiedź z AI?</div>
+      <div class="sub">parsowanie JSON z tekstem pocieszenia</div>
+    </div>
+    <div class="decision-side">
+      <span class="side-label" style="color:var(--amber);">błąd AI</span>
+      <div class="side-line"></div>
+      <div class="side-node side-amber">Fallback — stały tekst ciepła</div>
+    </div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:16px;"></div><div class="head"></div></div>
+  <div class="arrow-label-txt">sukces</div>
+  <div class="gap4"></div>
+
+  <!-- ══════════════════════════════════════
+       SEKCJA METOD POCIESZENIA
+  ══════════════════════════════════════ -->
+  <div class="metody-header" style="width:100%;">
+    <h2>Metody pocieszenia</h2>
+    <p>AI dobiera metodę do kontekstu wiadomości — bez dawania rad, bez przyspieszania, bez umniejszania</p>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 1 -->
+  <div class="metoda-card m-teal">
+    <div class="m-tag">metoda 01 · walidacja emocji</div>
+    <h3>Potwierdzenie że to co czujesz — jest prawdziwe</h3>
+    <p>AI nie ocenia, nie analizuje, nie tłumaczy dlaczego tak jest. Po prostu mówi: twój ból jest prawdziwy, twoje uczucia mają sens, masz prawo tak się czuć. To proste potwierdzenie jest jednym z najpotężniejszych aktów troski.</p>
+    <div class="m-example">„To co czujesz brzmi naprawdę ciężko. Masz pełne prawo być teraz w takim miejscu."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 2 -->
+  <div class="metoda-card m-purple">
+    <div class="m-tag">metoda 02 · obecność</div>
+    <h3>Danie poczucia że ktoś jest obok — teraz</h3>
+    <p>Nie jutro, nie za chwilę. Teraz. AI wyraża że jest tu, że czyta, że słyszy. Sama obecność — nawet bez słów — potrafi zmniejszyć poczucie samotności bardziej niż jakikolwiek poradnik czy rozwiązanie problemu.</p>
+    <div class="m-example">„Jestem tu z tobą w tym. Czytam każde słowo i zostaję."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 3 -->
+  <div class="metoda-card m-amber">
+    <div class="m-tag">metoda 03 · normalizacja</div>
+    <h3>To co przeżywasz — przeżywali inni ludzie</h3>
+    <p>Bez banalizowania. Bez „wszyscy przez to przechodzą". Subtelne pokazanie że ta konkretna ciemność nie jest oznaką słabości ani wyjątkowego pecha — że inni ludzie znają ten ciężar i udało im się go nieść. To nie pociesza przez porównanie, ale przez więź.</p>
+    <div class="m-example">„Wielu ludzi, którzy przez to przechodzili, mówiło dokładnie to samo. Nie jesteś z tym sam/sama."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 4 -->
+  <div class="metoda-card m-coral">
+    <div class="m-tag">metoda 04 · odzwierciedlenie</div>
+    <h3>Powtórzenie słów nadawcy z troską</h3>
+    <p>AI parafrazuje to co napisał nadawca — nie po to żeby skorygować, ale żeby pokazać: słyszałem/słyszałam dokładnie to. Ta technika pochodzi z terapii skoncentrowanej na osobie i daje nadawcy poczucie że jest naprawdę zrozumiany, nie tylko wysłuchany.</p>
+    <div class="m-example">„Napisałeś/aś że czujesz się jakbyś stał/a w miejscu, podczas gdy wszystko się wali. To brzmi naprawdę wyczerpująco."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 5 -->
+  <div class="metoda-card m-pink">
+    <div class="m-tag">metoda 05 · przestrzeń na ciszę</div>
+    <h3>Pozwolenie żeby nic nie musiało być teraz rozwiązane</h3>
+    <p>AI nie spieszy do „wyjścia". Nie sugeruje że czas wszystko uleczy. Zamiast tego daje przyzwolenie na to żeby teraz po prostu być w tym, bez presji poprawy, bez harmonogramu powrotu do normalności. Cisza i bezruch mają swoją wartość.</p>
+    <div class="m-example">„Nie musisz tego teraz naprawiać. Nie musisz wiedzieć co dalej. Możesz po prostu być tu, gdzie jesteś."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 6 -->
+  <div class="metoda-card m-teal">
+    <div class="m-tag">metoda 06 · docenienie odwagi</div>
+    <h3>Napisanie tego wymagało siły — i AI to widzi</h3>
+    <p>Sam akt napisania wiadomości — szczególnie gdy jest ciężko — bywa ogromnym wysiłkiem. AI dostrzega to wprost. Nie chwali za „bycie silnym/ą", ale zauważa że zrobienie tego kroku wymagało czegoś prawdziwego.</p>
+    <div class="m-example">„Dziękuję że mi o tym napisałeś/aś. To że to zrobiłeś/aś — naprawdę coś znaczy."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 7 -->
+  <div class="metoda-card m-gray">
+    <div class="m-tag">metoda 07 · bez srebnych podszewek</div>
+    <h3>Nie szukanie jasnej strony — gdy jej nie ma</h3>
+    <p>AI nie mówi „ale może to cię wzmocni" ani „może coś z tego wyniknie". Gdy ktoś jest w bólu, szukanie pozytywów często komunikuje: twój ból nie jest wystarczający. Zamiast tego AI zostaje w prawdzie chwili — bez upiększania, bez przyspieszania do nadziei.</p>
+    <div class="m-example">„Nie będę szukać w tym jasnej strony. Po prostu jest teraz ciężko i to wystarczy żeby to powiedzieć."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <!-- metoda 8 -->
+  <div class="metoda-card m-purple">
+    <div class="m-tag">metoda 08 · ciepło przez konkret</div>
+    <h3>Odniesienie do tego co napisał — nie do ogólnego bólu</h3>
+    <p>AI nie pisze generycznych słów pocieszenia. Odpowiada na konkretny fragment, konkretne słowo, konkretną sytuację. „Napisałeś że twój kot choruje" — nie „słyszę że jesteś smutny/a". Ta konkretność tworzy poczucie że ktoś naprawdę przeczytał, a nie wkleił szablon.</p>
+    <div class="m-example">„Napisałeś/aś o tym projekcie który padł. To musiało być coś na czym ci bardzo zależało."</div>
+  </div>
+
+  <div class="gap8"></div>
+
+  <div class="section-divider" style="width:100%;">
+    <div class="line"></div>
+    <div class="txt">dalszy pipeline</div>
+    <div class="line"></div>
+  </div>
+
+  <!-- generowanie wizualizacji -->
+  <div class="node node-purple" style="width:100%;">
+    <div class="label">Generowanie wizualizacji pocieszenia</div>
+    <div class="sub">diagram SVG + miniatura JPG (ciepłe kolory)</div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- html maila -->
+  <div class="node node-teal" style="width:100%;">
+    <div class="label">_buduj_html_email(pocieszenie, sender_name, jpg)</div>
+    <div class="sub">reply_html z ciepłym layoutem i obrazkiem</div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- załączniki -->
+  <div class="attach-row">
+    <div class="attach-item">SVG<br>interaktywny<div class="sub">diagram.htm</div></div>
+    <div class="attach-item">Miniatura<br>JPG<div class="sub">mapa.jpg</div></div>
+    <div class="attach-item">HTML<br>pełny<div class="sub">pelna.htm</div></div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <!-- wynik -->
+  <div class="node node-teal" style="width:100%;">
+    <div class="label">return {"reply_html", "docx_list"}</div>
+    <div class="sub">wynik → smtp_wysylka.py → mail do nadawcy</div>
+  </div>
+
+  <div class="arrow-down"><div class="shaft" style="height:20px;"></div><div class="head"></div></div>
+
+  <div class="section-divider" style="width:100%;">
+    <div class="line"></div>
+    <div class="txt">scenariusze</div>
+    <div class="line"></div>
+  </div>
+
+  <div class="scenario-card s-teal" style="width:100%;">
+    <div class="s-label">Smutek / problem</div>
+    <div class="s-sub">AI waliduje emocje, używa metody odzwierciedlenia i obecności</div>
+  </div>
+  <div class="gap8"></div>
+  <div class="scenario-card s-amber" style="width:100%;">
+    <div class="s-label">Neutralna lub zwykła wiadomość</div>
+    <div class="s-sub">AI dostosowuje ciepło — lżejszy ton, docenienie kontaktu</div>
+  </div>
+  <div class="gap8"></div>
+  <div class="scenario-card s-red" style="width:100%;">
+    <div class="s-label">Pusta wiadomość</div>
+    <div class="s-sub">fallback — stały tekst pocieszenia niezależny od treści</div>
+  </div>
+
+</div>

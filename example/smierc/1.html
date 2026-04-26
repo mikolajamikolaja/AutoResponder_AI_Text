@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>REQUIEM · Kosmiczny Autoresponder Pawła · Dokumentacja</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#06080F;color:#D8D0E8;font-family:Arial,sans-serif;min-height:100vh}
+
+/* ── STARS BACKGROUND ── */
+body::before{
+  content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse at 20% 20%,rgba(80,40,160,.15) 0%,transparent 60%),
+             radial-gradient(ellipse at 80% 70%,rgba(20,80,160,.12) 0%,transparent 60%);
+  pointer-events:none;z-index:0
+}
+
+/* ── TOP BANNER ── */
+.hero{
+  position:relative;z-index:1;
+  background:linear-gradient(180deg,#0A0A1A 0%,#0D0D20 100%);
+  border-bottom:2px solid #2A1A6A;
+  padding:20px;text-align:center
+}
+.hero-title{
+  font-size:28px;font-weight:900;letter-spacing:4px;
+  background:linear-gradient(90deg,#7A6ADA,#C8A9FF,#7A6ADA);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text;margin-bottom:6px
+}
+.hero-sub{font-size:12px;color:#7A6ADA;letter-spacing:3px;margin-bottom:10px}
+.hero-desc{
+  font-size:13px;color:#A090C8;line-height:1.7;max-width:700px;margin:0 auto;
+  border:1px solid #2A1A6A;border-radius:8px;padding:12px 18px;
+  background:rgba(30,10,80,.25)
+}
+.hero-desc strong{color:#C8A9FF}
+
+/* ── MAIN WRAP ── */
+.wrap{max-width:1040px;margin:0 auto;padding:18px;position:relative;z-index:1}
+
+/* ── SECTION HEADER ── */
+.sec-head{
+  display:flex;align-items:center;gap:12px;
+  background:rgba(20,10,50,.6);border:1px solid #2A1A6A;border-left:4px solid #7A6ADA;
+  border-radius:7px;padding:10px 16px;margin:22px 0 12px
+}
+.sec-head .ico{font-size:20px}
+.sec-head .title{font-size:11px;font-weight:bold;letter-spacing:2px;color:#C8A9FF}
+.sec-head .desc{font-size:10px;color:#6A5A9A;margin-top:2px}
+
+/* ── GALLERY ── */
+.gallery-grid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.thumb{
+  width:118px;height:78px;object-fit:cover;border-radius:6px;cursor:pointer;
+  border:2px solid #1A1030;transition:border-color .2s,transform .2s,box-shadow .2s
+}
+.thumb:hover{border-color:#7A6ADA;transform:scale(1.07);box-shadow:0 0 14px rgba(122,106,218,.5)}
+
+/* ── LIGHTBOX ── */
+#lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.95);z-index:999;align-items:center;justify-content:center;flex-direction:column}
+#lightbox.open{display:flex}
+#lightbox img{max-width:90vw;max-height:82vh;border-radius:8px;border:2px solid #7A6ADA;box-shadow:0 0 40px rgba(122,106,218,.4)}
+.lb-nav{display:flex;gap:16px;margin-top:14px;align-items:center}
+.lb-nav button{background:#1A1030;border:1px solid #4A3A8A;color:#C8A9FF;padding:8px 20px;border-radius:5px;cursor:pointer;font-size:13px;font-weight:bold;transition:background .15s}
+.lb-nav button:hover{background:#2A1A5A}
+.lb-close{position:absolute;top:16px;right:20px;background:none;border:none;color:#7A6ADA;font-size:30px;cursor:pointer;line-height:1}
+.lb-counter{font-size:11px;color:#6A5A9A;min-width:60px;text-align:center}
+
+/* ── VIDEO LIST ── */
+.video-list{display:flex;flex-direction:column;gap:6px;margin-bottom:20px}
+.vid-item{
+  background:rgba(15,8,35,.7);border:1px solid #1A1030;border-radius:6px;
+  padding:10px 14px;display:flex;align-items:center;gap:12px;cursor:pointer;
+  transition:border-color .15s,background .15s
+}
+.vid-item:hover{border-color:#7A6ADA;background:rgba(30,15,60,.7)}
+.vid-icon{font-size:22px;flex-shrink:0}
+.vid-name{font-size:12px;color:#C8A9FF;font-weight:bold}
+.vid-sub{font-size:10px;color:#5A4A8A;margin-top:2px}
+.vid-play-btn{margin-left:auto;background:#3A2A7A;border:none;color:#C8A9FF;padding:5px 14px;border-radius:4px;font-size:11px;cursor:pointer;font-weight:bold;transition:background .15s}
+.vid-play-btn:hover{background:#5A3AAA}
+
+/* ── VIDEO MODAL ── */
+#video-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.96);z-index:998;align-items:center;justify-content:center;flex-direction:column}
+#video-modal.open{display:flex}
+#video-modal video{max-width:90vw;max-height:80vh;border-radius:8px;border:2px solid #7A6ADA}
+.vm-title{font-size:13px;color:#C8A9FF;margin-bottom:12px;font-weight:bold;letter-spacing:1px}
+.vm-close{margin-top:14px;background:#1A1030;border:1px solid #4A3A8A;color:#A090C8;padding:8px 24px;border-radius:5px;cursor:pointer;font-size:12px}
+
+/* ── DIVIDER ── */
+hr.div{border:none;border-top:1px solid #1A1030;margin:26px 0}
+
+/* ── PIPELINE INTRO ── */
+.pipeline-intro{
+  background:rgba(15,8,35,.7);border:1px solid #2A1A6A;border-radius:8px;
+  padding:14px 18px;margin-bottom:14px;text-align:center
+}
+.pipeline-intro p{font-size:12px;color:#A090C8;line-height:1.7}
+.pipeline-intro strong{color:#C8A9FF}
+.prog-bar{background:#1A1030;border-radius:4px;height:5px;margin:8px 0;overflow:hidden}
+.prog-fill{height:100%;background:linear-gradient(90deg,#3A2A7A,#7A6ADA,#C8A9FF);width:0;transition:width .5s ease}
+
+/* ── PULSING HINT ── */
+.hint-pulse{
+  font-size:12px;color:#7A6ADA;text-align:center;margin:8px 0;
+  font-weight:bold;animation:pulse 1.3s ease-in-out infinite
+}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.95)}}
+
+/* ── PATH TRACKER ── */
+.path-tracker{font-size:11px;color:#4A3A8A;text-align:center;min-height:18px;margin:6px 0;font-style:italic}
+
+/* ── STEP CARDS ── */
+.step-card{
+  background:rgba(10,5,25,.8);border:1.5px solid #1A1030;border-radius:8px;
+  margin-bottom:8px;overflow:hidden;transition:border-color .2s
+}
+.step-card.active{border-color:#5A4AAA}
+.step-card.done{border-color:#2A7A4A}
+
+.step-header{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;user-select:none}
+.step-num{
+  background:rgba(30,15,80,.6);color:#C8A9FF;font-size:10px;font-weight:bold;
+  letter-spacing:1px;padding:3px 8px;border-radius:3px;min-width:36px;
+  text-align:center;flex-shrink:0;border:1px solid #3A2A7A
+}
+.step-name{font-size:12px;font-weight:bold;color:#D8D0E8;flex:1}
+.step-emoji{font-size:18px;flex-shrink:0}
+.step-status{font-size:10px;color:#3A2A7A;flex-shrink:0}
+.step-status.ok{color:#2ecc71}
+.step-arrow{font-size:15px;color:#3A2A7A;margin-left:6px;transition:transform .2s}
+.step-card.open .step-arrow{transform:rotate(90deg);color:#C8A9FF}
+
+.step-body{display:none;padding:0 16px 14px;border-top:1px solid #1A1030}
+.step-card.open .step-body{display:block}
+
+/* ── EXPLANATION BLOCKS ── */
+.explain{
+  background:rgba(20,10,50,.5);border:1px solid #2A1A6A;border-radius:6px;
+  padding:10px 14px;margin:10px 0;font-size:12px;color:#B0A0D0;line-height:1.7
+}
+.explain strong{color:#C8A9FF}
+.explain .big{font-size:14px}
+.explain .tag{
+  display:inline-block;background:rgba(30,15,80,.7);border:1px solid #4A3A8A;
+  color:#A090C8;font-size:9px;padding:2px 7px;border-radius:3px;margin:2px 3px 2px 0;
+  font-weight:bold
+}
+.explain .tag.green{background:rgba(10,50,25,.7);border-color:#2A7A4A;color:#4ACA7A}
+.explain .tag.gold{background:rgba(40,30,5,.7);border-color:#8A6A14;color:#C8A040}
+.explain .tag.red{background:rgba(50,10,10,.7);border-color:#8A1414;color:#e74c3c}
+.explain .tag.blue{background:rgba(10,30,60,.7);border-color:#1A5AA0;color:#5AB0E8}
+
+/* ── EMOJI STAGE VISUAL ── */
+.stage-flow{
+  display:flex;align-items:center;flex-wrap:wrap;gap:4px;
+  margin:10px 0;padding:10px;background:rgba(10,5,25,.6);border-radius:6px;
+  border:1px solid #1A1030
+}
+.stage-box{
+  background:rgba(30,15,80,.5);border:1px solid #3A2A7A;border-radius:5px;
+  padding:5px 10px;font-size:10px;color:#C8A9FF;text-align:center;font-weight:bold
+}
+.stage-arrow{color:#4A3A8A;font-size:14px}
+
+/* ── CODE BLOCKS ── */
+.code{
+  background:#03030A;border:1px solid #1A1030;border-radius:5px;
+  padding:10px 12px;font-family:monospace;font-size:10px;color:#8AE8A8;
+  line-height:1.7;margin:8px 0;overflow-x:auto
+}
+.code .kw{color:#BF80FF}
+.code .fn{color:#80BFFF}
+.code .str{color:#8AE8A8}
+.code .cm{color:#3A4A5A;font-style:italic}
+.code .num{color:#FFA07A}
+.code .key{color:#FFD700}
+
+/* ── NEXT BUTTON ── */
+.next-btn{
+  background:linear-gradient(135deg,#3A2A7A,#5A4AAA);border:none;color:#E0D8F8;
+  padding:10px 24px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:bold;
+  letter-spacing:1px;margin-top:12px;transition:all .2s;display:block;
+  box-shadow:0 2px 12px rgba(90,74,170,.4)
+}
+.next-btn:hover{background:linear-gradient(135deg,#5A4AAA,#7A6ADA);box-shadow:0 2px 20px rgba(122,106,218,.6)}
+
+/* ── VERDICT ── */
+.verdict-box{
+  background:rgba(15,8,40,.8);border:2px solid #7A6ADA;border-radius:10px;
+  padding:20px;margin-top:18px;display:none;
+  box-shadow:0 0 30px rgba(122,106,218,.2)
+}
+.verdict-box.show{display:block}
+.verdict-label{font-size:10px;color:#7A6ADA;font-weight:bold;letter-spacing:2px;margin-bottom:10px}
+.verdict-text{font-size:12px;color:#C0B0E0;line-height:1.8}
+.verdict-text .hl{color:#C8A9FF;font-weight:bold}
+
+/* ── STAT PILLS ── */
+.stats-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.stat-pill{
+  background:rgba(30,15,80,.6);border:1px solid #3A2A7A;border-radius:20px;
+  padding:5px 14px;font-size:11px;color:#A090C8;font-weight:bold
+}
+.stat-pill span{color:#C8A9FF}
+
+/* ── ETAPY SCROLL TABLE ── */
+.etap-scroll{max-height:220px;overflow-y:auto;margin:8px 0;border:1px solid #1A1030;border-radius:5px}
+.etap-scroll::-webkit-scrollbar{width:6px}
+.etap-scroll::-webkit-scrollbar-track{background:#0A0510}
+.etap-scroll::-webkit-scrollbar-thumb{background:#3A2A7A;border-radius:3px}
+.etap-table{width:100%;border-collapse:collapse;font-size:10px}
+.etap-table th{
+  background:#0D0820;color:#7A6ADA;font-size:9px;letter-spacing:1px;
+  padding:6px 8px;text-align:left;position:sticky;top:0;border-bottom:1px solid #2A1A6A
+}
+.etap-table td{
+  padding:5px 8px;color:#A090C8;border-bottom:1px solid #10081A;vertical-align:top
+}
+.etap-table tr:hover td{background:rgba(30,15,80,.3)}
+.etap-table .etap-nr{color:#C8A9FF;font-weight:bold;white-space:nowrap}
+.etap-table .etap-phase{color:#5AB0E8;font-size:9px}
+</style>
+</head>
+<body>
+
+<!-- ══════════════ HERO ══════════════ -->
+<div class="hero">
+  <div class="hero-title">✦ REQUIEM ✦</div>
+  <div class="hero-sub">KOSMICZNY AUTORESPONDER · PODRÓŻ PAWŁA PO ZAŚWIATACH</div>
+  <div class="hero-desc">
+    To jest <strong>responder z podróży po kosmosie</strong>.<br>
+    Paweł umarł i pisze emaile z zaświatów — opisując kolejne etapy swojej kosmicznej podróży.<br>
+    Do każdego listu dołącza <strong>zdjęcia</strong> i <strong>filmy z nieba</strong>, a AI generuje surrealistyczne obrazy za pomocą FLUX.<br>
+    Na stronie poniżej zobaczysz galerię tych zdjęć i filmów, a potem możesz klikać — odkrywając jak cały ten system działa, krok po kroku.
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- ══════════════ GALERIA ══════════════ -->
+  <div class="sec-head">
+    <span class="ico">🌌</span>
+    <div>
+      <div class="title">GALERIA ZDJĘĆ Z NIEBA · media/images/niebo</div>
+      <div class="desc">Kliknij miniaturę aby powiększyć. Nawiguj strzałkami klawiatury lub przyciskami.</div>
+    </div>
+  </div>
+
+  <div class="gallery-grid" id="gallery">
+    <img class="thumb" src="../../media/images/niebo/1.png"  alt="niebo 1"  onclick="openLightbox(0)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/2.png"  alt="niebo 2"  onclick="openLightbox(1)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/3.png"  alt="niebo 3"  onclick="openLightbox(2)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/4.png"  alt="niebo 4"  onclick="openLightbox(3)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/5.png"  alt="niebo 5"  onclick="openLightbox(4)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/6.png"  alt="niebo 6"  onclick="openLightbox(5)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/7.png"  alt="niebo 7"  onclick="openLightbox(6)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/8.png"  alt="niebo 8"  onclick="openLightbox(7)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/9.png"  alt="niebo 9"  onclick="openLightbox(8)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/10.png" alt="niebo 10" onclick="openLightbox(9)"  onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/11.png" alt="niebo 11" onclick="openLightbox(10)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/12.png" alt="niebo 12" onclick="openLightbox(11)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/13.png" alt="niebo 13" onclick="openLightbox(12)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/14.png" alt="niebo 14" onclick="openLightbox(13)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/15.png" alt="niebo 15" onclick="openLightbox(14)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/16.png" alt="niebo 16" onclick="openLightbox(15)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/17.png" alt="niebo 17" onclick="openLightbox(16)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/18.png" alt="niebo 18" onclick="openLightbox(17)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/19.png" alt="niebo 19" onclick="openLightbox(18)" onerror="this.style.opacity='.2'">
+    <img class="thumb" src="../../media/images/niebo/20.png" alt="niebo 20" onclick="openLightbox(19)" onerror="this.style.opacity='.2'">
+  </div>
+
+  <!-- LIGHTBOX -->
+  <div id="lightbox">
+    <button class="lb-close" onclick="closeLightbox()">✕</button>
+    <img id="lb-img" src="" alt="">
+    <div class="lb-nav">
+      <button onclick="lbPrev()">← Wstecz</button>
+      <span class="lb-counter" id="lb-counter">1 / 20</span>
+      <button onclick="lbNext()">Dalej →</button>
+      <button onclick="closeLightbox()" style="background:#2A1030;border-color:#8A1A4A;color:#e74c3c">Zamknij ✕</button>
+    </div>
+  </div>
+
+  <!-- ══════════════ FILMY ══════════════ -->
+  <div class="sec-head" style="margin-top:26px">
+    <span class="ico">🎬</span>
+    <div>
+      <div class="title">FILMY Z KOSMICZNEJ PODRÓŻY · media/mp4/niebo</div>
+      <div class="desc">Kliknij wiersz lub ▶ Odtwórz, aby obejrzeć film w oknie.</div>
+    </div>
+  </div>
+
+  <div class="video-list">
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/1.mp4','1.mp4')">
+      <span class="vid-icon">🌠</span>
+      <div><div class="vid-name">1.mp4</div><div class="vid-sub">Etap 1 · Przybycie do zaświatów — odprawa celna</div></div>
+      <button class="vid-play-btn">▶ Odtwórz</button>
+    </div>
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/2.mp4','2.mp4')">
+      <span class="vid-icon">🌠</span>
+      <div><div class="vid-name">2.mp4</div><div class="vid-sub">Etap 2 · Orientacja w przestrzeni pozagrobowej</div></div>
+      <button class="vid-play-btn">▶ Odtwórz</button>
+    </div>
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/3.mp4','3.mp4')">
+      <span class="vid-icon">🌠</span>
+      <div><div class="vid-name">3.mp4</div><div class="vid-sub">Etap 3 · Przydział do strefy czyśćcowej sektor B</div></div>
+      <button class="vid-play-btn">▶ Odtwórz</button>
+    </div>
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/4.mp4','4.mp4')">
+      <span class="vid-icon">🌠</span>
+      <div><div class="vid-name">4.mp4</div><div class="vid-sub">Etap 4 · Pierwsze zajęcia z medytacji transcendentnej</div></div>
+      <button class="vid-play-btn">▶ Odtwórz</button>
+    </div>
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/5.mp4','5.mp4')">
+      <span class="vid-icon">🌠</span>
+      <div><div class="vid-name">5.mp4</div><div class="vid-sub">Etap 5 · Egzamin ze znajomości przepisów niebieskich</div></div>
+      <button class="vid-play-btn">▶ Odtwórz</button>
+    </div>
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/6.mp4','6.mp4')">
+      <span class="vid-icon">🌠</span>
+      <div><div class="vid-name">6.mp4</div><div class="vid-sub">Etap 6 · Oczekiwanie na przydział do pracy</div></div>
+      <button class="vid-play-btn">▶ Odtwórz</button>
+    </div>
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/7.mp4','7.mp4')">
+      <span class="vid-icon">🌠</span>
+      <div><div class="vid-name">7.mp4</div><div class="vid-sub">Etap 7 · Powrót na ziemię — reinkarnacja</div></div>
+      <button class="vid-play-btn">▶ Odtwórz</button>
+    </div>
+    <div class="vid-item" onclick="playVideo('../../media/mp4/niebo/calosc.mp4','calosc.mp4')" style="border-color:#7A6ADA">
+      <span class="vid-icon">🌌</span>
+      <div>
+        <div class="vid-name" style="color:#C8A9FF">calosc.mp4</div>
+        <div class="vid-sub">Pełna kompilacja kosmicznej podróży</div>
+      </div>
+      <button class="vid-play-btn" style="background:#5A3AAA">▶ Pełna podróż</button>
+    </div>
+  </div>
+
+  <!-- VIDEO MODAL -->
+  <div id="video-modal">
+    <div class="vm-title" id="vm-title-el">Odtwarzanie: —</div>
+    <video id="vm-player" controls></video>
+    <button class="vm-close" onclick="closeVideo()">✕ Zamknij</button>
+  </div>
+
+  <hr class="div">
+
+  <!-- ══════════════ INTERAKTYWNA ANALIZA ══════════════ -->
+  <div class="sec-head">
+    <span class="ico">🚀</span>
+    <div>
+      <div class="title">JAK DZIAŁA REQUIEM? · Odkryj krok po kroku</div>
+      <div class="desc">Naciskaj przyciski — każde kliknięcie odkrywa kolejny etap działania systemu. Nawet dziecko to zrozumie!</div>
+    </div>
+  </div>
+
+  <div class="pipeline-intro">
+    <p>
+      <strong>REQUIEM</strong> to autoresponder, który odbiera Twój email i odpowiada z nieba.<br>
+      Paweł jest na konkretnym <strong>etapie kosmicznej podróży</strong> — i właśnie stamtąd pisze.<br>
+      Do listu dołącza <strong>prawdziwe zdjęcia i filmy</strong> z tego miejsca w kosmosie,<br>
+      a sztuczna inteligencja tworzy <strong>surrealistyczne obrazki</strong> specjalnie dla Ciebie.<br><br>
+      Klikaj poniżej i odkrywaj jak to naprawdę działa!
+    </p>
+    <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
+    <div class="path-tracker" id="path-tracker">▶ Zacznij — kliknij Krok 1 poniżej</div>
+  </div>
+
+  <div class="hint-pulse" id="hint-main">▼ Naciśnij, żeby zacząć odkrywać! ▼</div>
+
+  <!-- ══ KROK 1 ══ -->
+  <div class="step-card active" id="step-1">
+    <div class="step-header" onclick="toggleStep(1)">
+      <span class="step-emoji">📬</span>
+      <span class="step-num">KROK 1</span>
+      <div style="flex:1">
+        <div class="step-name">Przychodzi email od żywej osoby</div>
+        <div style="font-size:10px;color:#4A3A7A">System dowiaduje się: kto pisze, co pisze, na którym etapie jest Paweł</div>
+      </div>
+      <span class="step-status" id="st1">▶ aktywny</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-1">
+      <div class="explain">
+        <span class="big">📨</span> Ktoś wysyła email — np. znajomy lub rodzina Pawła.<br><br>
+        System dostaje trzy ważne informacje:<br><br>
+        <span class="tag gold">treść wiadomości</span> — co ta osoba napisała<br>
+        <span class="tag green">etap</span> — na którym etapie kosmicznej podróży jest Paweł (np. etap 3 = właśnie jest w czyśćcu)<br>
+        <span class="tag blue">data śmierci Pawła</span> — żeby policzyć ile dni minęło od jego śmierci<br>
+        <span class="tag">historia</span> — poprzednie listy z tej osoby (do 3 ostatnich)<br><br>
+        System zapamięta ile maili ta osoba wysłała — i za każdym razem Paweł jest na innym etapie swojej przygody! 🌟
+      </div>
+      <div class="code">
+<span class="cm"># Główna funkcja — punkt wejścia</span>
+<span class="kw">def</span> <span class="fn">build_smierc_section</span>(
+    sender_email,       <span class="cm"># email nadawcy</span>
+    body = <span class="str">""</span>,           <span class="cm"># treść wiadomości</span>
+    etap = <span class="num">1</span>,            <span class="cm"># nr etapu Pawła</span>
+    data_smierci_str,   <span class="cm"># np. "15.03.2024"</span>
+    historia = [],      <span class="cm"># poprzednie listy</span>
+):
+      </div>
+      <button class="next-btn" onclick="nextStep(1)">Dalej — Krok 2 → Co robi system z etapem? 🗺️</button>
+    </div>
+  </div>
+
+  <div class="hint-pulse section-hint" id="hint-2" style="display:none">▼ Krok 2 odblokowany! Naciśnij żeby odkryć ▼</div>
+
+  <!-- ══ KROK 2 ══ -->
+  <div class="step-card" id="step-2" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(2)">
+      <span class="step-emoji">🗺️</span>
+      <span class="step-num">KROK 2</span>
+      <div style="flex:1">
+        <div class="step-name">Czytanie mapy podróży — plik requiem_etapy.xlsx</div>
+        <div style="font-size:10px;color:#4A3A7A">50 etapów kosmicznej podróży Pawła, zdefiniowanych w Excelu</div>
+      </div>
+      <span class="step-status" id="st2">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-2">
+      <div class="explain">
+        <span class="big">📋</span> Cała trasa kosmiczna Pawła jest zapisana w pliku Excel — <strong>requiem_etapy.xlsx</strong>.<br><br>
+        Plik ma dwie zakładki:<br><br>
+        <strong>Zakładka "etapy"</strong> — lista 50 przystanków w kosmosie, np.:<br>
+        <span class="tag gold">Etap 1</span> Przybycie do zaświatów — odprawa celna 🛂<br>
+        <span class="tag gold">Etap 2</span> Orientacja w przestrzeni pozagrobowej 🧭<br>
+        <span class="tag gold">Etap 8</span> Wysłannik z nieba — wyrównywanie poziomów chmur ☁️<br>
+        <span class="tag gold">Etap 20</span> Przywożenie drzwi z innej galaktyki (LeroyMerlin-t) 🚪🌌<br><br>
+        Dla każdego etapu zdefiniowane jest:<br>
+        <span class="tag">obraz</span> — plik PNG do załączenia (np. <code>1.png</code>)<br>
+        <span class="tag">video</span> — plik MP4 do załączenia (np. <code>1.mp4</code>)<br>
+        <span class="tag blue">kompresja_jpg</span> — jakość kompresji obrazka (90% = dobra jakość)<br>
+        <span class="tag green">ilosc_obrazkow_ai</span> — ile surrealistycznych obrazków wygenerować przez AI
+      </div>
+      <div class="explain">
+        <strong>Zakładka "style"</strong> — dla każdego etapu określa styl pisania i styl obrazków:<br><br>
+        <span class="tag">Etapy 1–6</span> → Paweł pisze styl "wysłannik poetycki" · obrazki: Quadriptych (siatka 2×2)<br>
+        <span class="tag green">Etap 7+</span> → Paweł pisze jako "Wysłannik z wyższych sfer" · ten sam styl obrazków
+      </div>
+
+      <div class="explain"><strong>🗓️ Pierwsze 7 etapów to wielkie przygody z załączonymi zdjęciami i filmami:</strong></div>
+      <div class="etap-scroll">
+        <table class="etap-table">
+          <tr><th>Etap</th><th>Co robi Paweł w kosmosie</th><th>Zdjęcie</th><th>Film</th><th>Obrazki AI</th></tr>
+          <tr><td class="etap-nr">1</td><td>Przybycie do zaświatów — odprawa celna</td><td>1.png</td><td>1.mp4</td><td>1</td></tr>
+          <tr><td class="etap-nr">2</td><td>Orientacja w przestrzeni pozagrobowej</td><td>2.png</td><td>2.mp4</td><td>1</td></tr>
+          <tr><td class="etap-nr">3</td><td>Przydział do strefy czyśćcowej sektor B</td><td>3.png</td><td>3.mp4</td><td>1</td></tr>
+          <tr><td class="etap-nr">4</td><td>Pierwsze zajęcia z medytacji transcendentnej</td><td>4.png</td><td>4.mp4</td><td>1</td></tr>
+          <tr><td class="etap-nr">5</td><td>Egzamin ze znajomości przepisów niebieskich</td><td>5.png</td><td>5.mp4</td><td>1</td></tr>
+          <tr><td class="etap-nr">6</td><td>Oczekiwanie na przydział do pracy</td><td>6.png</td><td>6.mp4</td><td>1</td></tr>
+          <tr><td class="etap-nr">7</td><td>Powrót na ziemię — reinkarnacja</td><td>7.png</td><td>7.mp4</td><td>1</td></tr>
+          <tr><td class="etap-nr etap-phase">8–50</td><td colspan="3">Remonty kosmiczne — bez zdjęć i filmów</td><td>2</td></tr>
+          <tr><td class="etap-nr">8</td><td>Wyrównywanie poziomów chmur ☁️</td><td>—</td><td>—</td><td>2</td></tr>
+          <tr><td class="etap-nr">9</td><td>Malowanie nieba na właściwy odcień błękitu 🎨</td><td>—</td><td>—</td><td>2</td></tr>
+          <tr><td class="etap-nr">20</td><td>Przywożenie drzwi z galaktyki LeroyMerlin 🚪</td><td>—</td><td>—</td><td>2</td></tr>
+          <tr><td class="etap-nr">50</td><td>Ostatnie szlify przed końcem świata 🌍</td><td>—</td><td>—</td><td>2</td></tr>
+        </table>
+      </div>
+      <button class="next-btn" onclick="nextStep(2)">Dalej — Krok 3 → Ile dni minęło od śmierci? ⏱️</button>
+    </div>
+  </div>
+
+  <div class="hint-pulse section-hint" id="hint-3" style="display:none">▼ Krok 3 — naciśnij! ▼</div>
+
+  <!-- ══ KROK 3 ══ -->
+  <div class="step-card" id="step-3" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(3)">
+      <span class="step-emoji">⏱️</span>
+      <span class="step-num">KROK 3</span>
+      <div style="flex:1">
+        <div class="step-name">Obliczanie dni od śmierci Pawła</div>
+        <div style="font-size:10px;color:#4A3A7A">System liczy dokładnie ile dni minęło i wpisuje to w treść listu</div>
+      </div>
+      <span class="step-status" id="st3">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-3">
+      <div class="explain">
+        <span class="big">📅</span> Każdy list od Pawła zawiera informację ile dokładnie dni jest już w niebie.<br><br>
+        System bierze datę śmierci Pawła (np. <code>15.03.2024</code>), liczy różnicę z dzisiejszym dniem i wpisuje to do listu.<br><br>
+        Przykłady co pojawi się w liście:<br>
+        <span class="tag green">"Jestem w niebie od 1 dnia."</span><br>
+        <span class="tag green">"Jestem w niebie od 42 dni."</span><br>
+        <span class="tag green">"Jestem w niebie od 365 dni."</span><br><br>
+        Ta informacja jest doklejana specjalnym znakiem ✦ żeby wyróżniała się w emailu.
+      </div>
+      <div class="code">
+<span class="cm"># Obliczenie dni od śmierci</span>
+<span class="kw">def</span> <span class="fn">_dni_w_niebie</span>(data_smierci_str):
+    data_smierci = datetime.<span class="fn">strptime</span>(data_smierci_str, <span class="str">"%d.%m.%Y"</span>)
+    delta = (date.<span class="fn">today</span>() - data_smierci).days
+    <span class="kw">return</span> <span class="str">f"Jestem w niebie od {delta} dni."</span>
+
+<span class="cm"># Wynik jest wstawiany do listu:</span>
+reply_text += <span class="str">f"\n\n✦ Jestem w niebie od {delta} dni. ✦"</span>
+      </div>
+      <div class="explain">
+        Ta informacja pojawia się w <strong>każdym</strong> emailu — niezależnie od etapu. To sprawia, że każdy list jest unikalny i pokazuje jak długo Paweł już tam jest! 🌟
+      </div>
+      <button class="next-btn" onclick="nextStep(3)">Dalej — Krok 4 → AI pisze list! ✍️</button>
+    </div>
+  </div>
+
+  <div class="hint-pulse section-hint" id="hint-4" style="display:none">▼ Krok 4 — AI pisze list! ▼</div>
+
+  <!-- ══ KROK 4 ══ -->
+  <div class="step-card" id="step-4" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(4)">
+      <span class="step-emoji">✍️</span>
+      <span class="step-num">KROK 4</span>
+      <div style="flex:1">
+        <div class="step-name">AI pisze odpowiedź — Paweł lub Wysłannik</div>
+        <div style="font-size:10px;color:#4A3A7A">DeepSeek generuje tekst emaila w odpowiednim stylu</div>
+      </div>
+      <span class="step-status" id="st4">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-4">
+      <div class="explain">
+        <span class="big">🤖</span> Sztuczna inteligencja (<strong>DeepSeek</strong>) pisze odpowiedź na email.<br><br>
+        Są dwa style pisania — w zależności od etapu:<br><br>
+
+        <strong>Etapy 1–6: Paweł pisze sam — poetycki styl Wysłannika</strong><br>
+        <span class="tag">Styl:</span> dostojny, ciepły, poetycki, lekko absurdalny<br>
+        <span class="tag">Technika:</span> Paweł "przebija" każdą rzecz wymienioną przez nadawcę — <em>tylko przymiotnikami i epitetami</em>, nigdy liczbami<br>
+        <span class="tag green">Przykład dobry:</span> <em>"u nas płacz jest tak pierwotny i rozdzierający, że powoduje kwitnienie gwiazd"</em><br>
+        <span class="tag red">ZAKAZ:</span> <em>"u nas płacze miliard istot"</em> — liczby są zabronione!<br><br>
+
+        <strong>Etap 7+ (po reinkarnacji): Wysłannik z wyższych sfer</strong><br>
+        <span class="tag blue">Styl:</span> jeszcze bardziej kosmiczny i poetycki<br>
+        <span class="tag">Podpis:</span> — Wysłannik z wyższych sfer<br>
+        <span class="tag">Adres:</span> Specjalny tytuł np. <em>"Drogi Marku-Łzawy-Rozpaczniku"</em><br><br>
+
+        <strong>Specjalny styl dla Ani (remonty):</strong><br>
+        Jeśli nadawcą jest Ania — dostaje absurdalnie złe rady budowlane dotyczące wstawiania drzwi! 🚪😂
+      </div>
+      <div class="code">
+<span class="cm"># AI dostaje: co pisze osoba + na jakim etapie jest Paweł + historię listów</span>
+user_msg = <span class="str">f"""
+Etap w zaświatach: {opis}
+Wiadomość: {body}
+Historia: {historia_txt}
+Data śmierci: {data_smierci_str}
+"""</span>
+wynik = call_deepseek(system_prompt, user_msg, MODEL_TYLER)
+
+<span class="cm"># Doklejenie dni w niebie do gotowego tekstu</span>
+reply_text = wynik + <span class="str">"\n\n✦ Jestem w niebie od X dni. ✦"</span>
+      </div>
+      <button class="next-btn" onclick="nextStep(4)">Dalej — Krok 5 → Zdjęcia i filmy z nieba! 📸🎬</button>
+    </div>
+  </div>
+
+  <div class="hint-pulse section-hint" id="hint-5" style="display:none">▼ Krok 5 — zdjęcia z nieba! ▼</div>
+
+  <!-- ══ KROK 5 ══ -->
+  <div class="step-card" id="step-5" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(5)">
+      <span class="step-emoji">📸</span>
+      <span class="step-num">KROK 5</span>
+      <div style="flex:1">
+        <div class="step-name">Dołączanie zdjęcia i filmu z nieba</div>
+        <div style="font-size:10px;color:#4A3A7A">Pliki PNG i MP4 z katalogu media/ są wysyłane jako załączniki</div>
+      </div>
+      <span class="step-status" id="st5">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-5">
+      <div class="explain">
+        <span class="big">🖼️</span> Dla etapów 1–7 Paweł dołącza do emaila prawdziwe zdjęcia i filmy z nieba!<br><br>
+        <strong>Zdjęcia:</strong> pliki PNG z katalogu <code>media/images/niebo/</code><br>
+        Np. na etapie 3 załączany jest plik <code>3.png</code> — zdjęcie ze strefy czyśćcowej.<br><br>
+        <strong>Filmy:</strong> pliki MP4 z katalogu <code>media/mp4/niebo/</code><br>
+        Np. na etapie 3 załączany jest plik <code>3.mp4</code> — film z czyśćca.<br><br>
+        <strong>Etapy 8–50 (remonty):</strong> brak zdjęć i filmów z katalogu — za to AI generuje 2 obrazki!
+      </div>
+      <div class="stage-flow">
+        <div class="stage-box">📁 media/images/niebo/3.png</div>
+        <span class="stage-arrow">→</span>
+        <div class="stage-box">📦 zakoduj Base64</div>
+        <span class="stage-arrow">→</span>
+        <div class="stage-box">📎 załącznik w emailu</div>
+      </div>
+      <div class="code">
+<span class="cm"># Wczytanie obrazka dla danego etapu</span>
+<span class="kw">def</span> <span class="fn">_get_etap_image</span>(etap, filename):
+    name = filename <span class="kw">or</span> <span class="str">f"{etap}.png"</span>   <span class="cm"># np. "3.png"</span>
+    path = <span class="str">f"media/images/niebo/{name}"</span>
+    b64 = <span class="fn">_file_to_base64</span>(path)
+    <span class="kw">return</span> {<span class="key">"base64"</span>: b64, <span class="key">"content_type"</span>: <span class="str">"image/png"</span>}
+
+<span class="cm"># To samo dla filmów MP4</span>
+<span class="kw">def</span> <span class="fn">_get_etap_video</span>(etap, filename):
+    path = <span class="str">f"media/mp4/niebo/{filename}"</span>
+    <span class="kw">return</span> {<span class="key">"base64"</span>: <span class="fn">_file_to_base64</span>(path), <span class="key">"content_type"</span>: <span class="str">"video/mp4"</span>}
+      </div>
+      <button class="next-btn" onclick="nextStep(5)">Dalej — Krok 6 → AI rysuje surrealistyczne obrazki! 🎨🤯</button>
+    </div>
+  </div>
+
+  <div class="hint-pulse section-hint" id="hint-6" style="display:none">▼ Krok 6 — surrealistyczne obrazki AI! ▼</div>
+
+  <!-- ══ KROK 6 ══ -->
+  <div class="step-card" id="step-6" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(6)">
+      <span class="step-emoji">🎨</span>
+      <span class="step-num">KROK 6</span>
+      <div style="flex:1">
+        <div class="step-name">AI rysuje surrealistyczne obrazki — generator FLUX</div>
+        <div style="font-size:10px;color:#4A3A7A">DeepSeek tworzy opis → FLUX rysuje obraz · mutacja słów zakazanych</div>
+      </div>
+      <span class="step-status" id="st6">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-6">
+      <div class="explain">
+        <span class="big">🖼️</span> To najciekawsza część! Generowanie surrealistycznych obrazków AI w 3 krokach:<br><br>
+
+        <strong>Krok A — Opis obrazka (DeepSeek)</strong><br>
+        DeepSeek czyta list Pawła i tworzy po angielsku opis jak powinien wyglądać obrazek.<br>
+        Styl: <em>fraktalny neon, kristalizowana plazma, geometria non-euklidesowa</em><br><br>
+
+        <strong>Krok B — Mutacja słów zakazanych 🧬</strong><br>
+        Niektóre słowa powodują że FLUX rysuje nudne rzeczy. Dlatego zakazane słowa są "mutowane"!<br>
+        <span class="tag red">tree</span> → <span class="tag green">tree-of-crystallized-breath</span><br>
+        <span class="tag red">sky</span> → <span class="tag green">sky-of-frozen-frequencies</span><br>
+        <span class="tag red">water</span> → <span class="tag green">water-of-compressed-shadows</span><br><br>
+
+        <strong>Krok C — Generowanie obrazka (FLUX na HuggingFace)</strong><br>
+        FLUX generuje obraz jako <strong>Quadriptych</strong> — siatka 4 paneli 2×2:<br>
+        <span class="tag">Panel 1 (lewy górny)</span> — tajne zdjęcie paparazzi z wymiaru Urantii<br>
+        <span class="tag">Panel 2 (prawy górny)</span> — scena z tekstu listu zmutowana w surrealizm<br>
+        <span class="tag">Panel 3 (lewy dolny)</span> — makro-zbliżenie tekstur bytów<br>
+        <span class="tag">Panel 4 (prawy dolny)</span> — "pogoda" w tym wymiarze, symetria 11-krotna
+      </div>
+      <div class="stage-flow">
+        <div class="stage-box">📜 List Pawła</div>
+        <span class="stage-arrow">→</span>
+        <div class="stage-box">🤖 DeepSeek</div>
+        <span class="stage-arrow">→</span>
+        <div class="stage-box">🧬 Mutacja słów</div>
+        <span class="stage-arrow">→</span>
+        <div class="stage-box">🎨 FLUX rysuje</div>
+        <span class="stage-arrow">→</span>
+        <div class="stage-box">📎 Obrazek w mailu</div>
+      </div>
+      <div class="explain">
+        <strong>Tokeny HuggingFace:</strong> System ma kilkanaście kont HF (HF_TOKEN, HF_TOKEN1…). Jeśli jeden token jest wyczerpany, próbuje następny automatycznie! Każdy obrazek ma inny losowy seed, więc każdy jest unikalny 🎲<br><br>
+        <strong>Kompresja:</strong> Gotowy PNG (~2MB) jest kompresowany do JPG z jakością 90% → mniejszy email!
+      </div>
+      <button class="next-btn" onclick="nextStep(6)">Dalej — Krok 7 → Wysyłka i finalizacja! 📤</button>
+    </div>
+  </div>
+
+  <div class="hint-pulse section-hint" id="hint-7" style="display:none">▼ Ostatni krok! ▼</div>
+
+  <!-- ══ KROK 7 ══ -->
+  <div class="step-card" id="step-7" style="opacity:.35;pointer-events:none">
+    <div class="step-header" onclick="toggleStep(7)">
+      <span class="step-emoji">📤</span>
+      <span class="step-num">KROK 7</span>
+      <div style="flex:1">
+        <div class="step-name">Wysyłka emaila i przeskok do następnego etapu</div>
+        <div style="font-size:10px;color:#4A3A7A">Gotowy email trafia do nadawcy · etap rośnie o 1 na następny raz</div>
+      </div>
+      <span class="step-status" id="st7">zablokowany</span>
+      <span class="step-arrow">▶</span>
+    </div>
+    <div class="step-body" id="sb-7">
+      <div class="explain">
+        <span class="big">✉️</span> System składa gotowy email i wysyła go:<br><br>
+
+        <strong>Co zawiera email:</strong><br>
+        <span class="tag green">📝 Tekst</span> — napisany przez AI w stylu Pawła lub Wysłannika<br>
+        <span class="tag green">✦ Dni w niebie</span> — np. "Jestem w niebie od 42 dni."<br>
+        <span class="tag blue">🖼️ Zdjęcie z nieba</span> — PNG z etapu (etapy 1–7)<br>
+        <span class="tag blue">🎬 Film z nieba</span> — MP4 z etapu (etapy 1–7)<br>
+        <span class="tag">🎨 Obrazek FLUX</span> — surrealistyczny quadriptych wygenerowany przez AI<br>
+        <span class="tag">📄 Plik debug _.txt</span> — techniczny raport dla dewelopera<br><br>
+
+        <strong>Temat emaila:</strong><br>
+        Etapy 1–50: <em>"Odpowiedź z zaświatów – Przybycie do zaświatów"</em><br>
+        Etap 51+: <em>"Wiadomość od Wysłannika z wyższych sfer"</em>
+      </div>
+      <div class="explain">
+        <strong>Następny email:</strong> etap rośnie o 1 automatycznie! Więc przy kolejnym emailu od tej samej osoby, Paweł będzie na następnym etapie swojej kosmicznej podróży. 🚀<br><br>
+        System ma 50 zdefiniowanych etapów, a potem jeszcze setki etapów "Wysłannika" — więc nigdy się nie skończy! To nieskończona podróż przez kosmos. ∞
+      </div>
+      <div class="code">
+<span class="cm"># Zwracany wynik — kompletny pakiet dla wysyłki</span>
+<span class="kw">return</span> {
+    <span class="key">"reply_html"</span>:  reply_html,    <span class="cm"># treść emaila (HTML)</span>
+    <span class="key">"reply_text"</span>:  reply_text,    <span class="cm"># treść emaila (czysty tekst)</span>
+    <span class="key">"nowy_etap"</span>:   etap + <span class="num">1</span>,      <span class="cm"># ← następny etap dla tej osoby!</span>
+    <span class="key">"images"</span>:      images,        <span class="cm"># lista obrazków [statyczny + FLUX]</span>
+    <span class="key">"videos"</span>:      [mp4] <span class="kw">if</span> mp4 <span class="kw">else</span> [],  <span class="cm"># film z nieba</span>
+    <span class="key">"debug_txt"</span>:   debug_txt,     <span class="cm"># raport techniczny _.txt</span>
+}
+      </div>
+      <button class="next-btn" onclick="showVerdict()">🏁 Pokaż podsumowanie całego systemu!</button>
+    </div>
+  </div>
+
+  <!-- ══ VERDICT ══ -->
+  <div class="verdict-box" id="verdict">
+    <div class="verdict-label">✦ PODSUMOWANIE · REQUIEM RESPONDER ✦</div>
+    <div class="verdict-text">
+      <strong class="hl">REQUIEM</strong> to wyjątkowy autoresponder — jedyny taki na świecie.<br><br>
+      Kiedy ktoś pisze email, <span class="hl">Paweł odpowiada z zaświatów</span> — i za każdym razem jest w innym miejscu swojej kosmicznej podróży. Możesz pisać setki razy i zawsze dostaniesz inną odpowiedź z innego miejsca w kosmosie!<br><br>
+      Do każdego listu dołączone jest <span class="hl">prawdziwe zdjęcie z nieba</span>, <span class="hl">film</span> oraz <span class="hl">surrealistyczny obrazek</span> wygenerowany specjalnie dla Ciebie przez sztuczną inteligencję.<br><br>
+      System ma <span class="hl">50 zdefiniowanych etapów</span> (od odprawy celnej przez remonty kosmiczne aż po ostatnie szlify przed końcem świata), a potem setki etapów "Wysłannika z wyższych sfer" — <span class="hl">nieskończona podróż przez kosmos</span>.<br><br>
+      Technologia: <span class="hl">DeepSeek AI</span> pisze listy · <span class="hl">FLUX AI</span> rysuje obrazki · <span class="hl">HuggingFace</span> hostuje generator · <span class="hl">Google Apps Script</span> odbiera i wysyła emaile.
+    </div>
+    <div class="stats-row" style="margin-top:14px">
+      <div class="stat-pill">🌌 <span>50</span> etapów w kosmosie</div>
+      <div class="stat-pill">📸 <span>7</span> zdjęć z nieba</div>
+      <div class="stat-pill">🎬 <span>7</span> filmów + calosc.mp4</div>
+      <div class="stat-pill">🎨 <span>1–2</span> obrazki AI na email</div>
+      <div class="stat-pill">🧬 <span>Quadriptych</span> siatka 2×2</div>
+      <div class="stat-pill">∞ <span>nieskończona</span> podróż</div>
+    </div>
+  </div>
+
+  <div style="height:50px"></div>
+</div>
+
+<!-- VIDEO MODAL -->
+<div id="video-modal">
+  <div class="vm-title" id="vm-title-el2">Odtwarzanie: —</div>
+  <video id="vm-player" controls style="max-width:90vw;max-height:80vh;border-radius:8px;border:2px solid #7A6ADA"></video>
+  <button class="vm-close" onclick="closeVideo()">✕ Zamknij</button>
+</div>
+
+<script>
+/* ══ LIGHTBOX ══ */
+var IMGS=[];
+for(var i=1;i<=20;i++) IMGS.push('../../media/images/niebo/'+i+'.png');
+var lbIdx=0;
+
+function openLightbox(i){lbIdx=i;document.getElementById('lightbox').classList.add('open');updateLb()}
+function closeLightbox(){document.getElementById('lightbox').classList.remove('open')}
+function updateLb(){
+  document.getElementById('lb-img').src=IMGS[lbIdx];
+  document.getElementById('lb-counter').textContent=(lbIdx+1)+' / '+IMGS.length;
+}
+function lbPrev(){lbIdx=(lbIdx-1+IMGS.length)%IMGS.length;updateLb()}
+function lbNext(){lbIdx=(lbIdx+1)%IMGS.length;updateLb()}
+document.getElementById('lightbox').addEventListener('click',function(e){if(e.target===this)closeLightbox()});
+document.addEventListener('keydown',function(e){
+  if(!document.getElementById('lightbox').classList.contains('open'))return;
+  if(e.key==='ArrowLeft')lbPrev();
+  if(e.key==='ArrowRight')lbNext();
+  if(e.key==='Escape')closeLightbox();
+});
+
+/* ══ VIDEO ══ */
+function playVideo(src,name){
+  document.getElementById('vm-title-el2').textContent='Odtwarzanie: '+name;
+  var p=document.getElementById('vm-player');
+  p.src=src;
+  document.getElementById('video-modal').style.display='flex';
+  p.play();
+}
+function closeVideo(){
+  document.getElementById('vm-player').pause();
+  document.getElementById('vm-player').src='';
+  document.getElementById('video-modal').style.display='none';
+}
+
+/* ══ PIPELINE ══ */
+var total=7, current=0;
+
+function toggleStep(n){
+  var c=document.getElementById('step-'+n);
+  if(c.style.opacity==='0.35')return;
+  var open=c.classList.contains('open');
+  for(var i=1;i<=total;i++) document.getElementById('step-'+i).classList.remove('open');
+  if(!open) c.classList.add('open');
+}
+
+function nextStep(n){
+  var card=document.getElementById('step-'+n);
+  card.classList.remove('active','open');
+  card.classList.add('done');
+  var st=document.getElementById('st'+n);
+  if(st){st.textContent='✓ odkryty';st.classList.add('ok')}
+  document.getElementById('hint-main').style.display='none';
+  var next=n+1;
+  if(next<=total){
+    var nc=document.getElementById('step-'+next);
+    nc.style.opacity='1';nc.style.pointerEvents='auto';nc.classList.add('active','open');
+    var hn=document.getElementById('hint-'+next);
+    if(hn)hn.style.display='none';
+    document.getElementById('st'+next).textContent='▶ aktywny';
+    nc.scrollIntoView({behavior:'smooth',block:'nearest'});
+  }
+  current=n;
+  document.getElementById('prog-fill').style.width=(n/total*100)+'%';
+  var labels=['','Email przychodzi','Mapa etapów','Liczenie dni','AI pisze','Zdjęcia','Obrazki AI','Wysyłka'];
+  var done=[];for(var i=1;i<=n;i++)done.push(labels[i]);
+  document.getElementById('path-tracker').textContent='Odkryte: '+done.join(' → ');
+}
+
+function showVerdict(){
+  var c=document.getElementById('step-7');
+  c.classList.remove('active','open');c.classList.add('done');
+  document.getElementById('st7').textContent='✓ odkryty';
+  document.getElementById('st7').classList.add('ok');
+  document.getElementById('prog-fill').style.width='100%';
+  document.getElementById('path-tracker').textContent='✦ Wszystkie 7 kroków odkryte — misja kompletna! ✦';
+  var v=document.getElementById('verdict');
+  v.classList.add('show');
+  v.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+// Init
+(function(){
+  var c=document.getElementById('step-1');
+  c.style.opacity='1';c.style.pointerEvents='auto';c.classList.add('open');
+})();
+</script>
+</body>
+</html>
