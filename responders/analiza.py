@@ -700,7 +700,7 @@ render();
 # ── GŁÓWNA FUNKCJA ────────────────────────────────────────────────────────────
 
 
-def build_dociekliwy_section(
+def build_analiza_section(
     body: str,
     attachments: list = None,
     sender: str = "",
