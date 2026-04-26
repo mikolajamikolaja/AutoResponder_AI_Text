@@ -700,13 +700,21 @@ render();
 # ── GŁÓWNA FUNKCJA ────────────────────────────────────────────────────────────
 
 
-def build_analiza_section(
+def build_dociekliwy_section(
     body: str,
     attachments: list = None,
     sender: str = "",
+    sender_email: str = "",
     sender_name: str = "",
+    data: dict = None,
     test_mode: bool = False,
 ) -> dict:
+    # Kompatybilność: app.py przekazuje sender_email= zamiast sender=
+    if not sender and sender_email:
+        sender = sender_email
+    # Kompatybilność: app.py przekazuje data= — wyciągamy sender_name jeśli brak
+    if not sender_name and data:
+        sender_name = data.get("sender_name", "")
     """
     Eryk Responder - generuje grę logiczną.
 

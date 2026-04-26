@@ -4532,7 +4532,7 @@ def build_zwykly_section(
     """
     from flask import current_app as flask_app
     import re
-    from responders.analiza import build_analiza_section
+    from responders.dociekliwy import build_dociekliwy_section
 
     logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2)")
     app_obj = flask_app._get_current_object()
