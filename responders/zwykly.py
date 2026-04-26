@@ -4764,12 +4764,7 @@ def build_zwykly_section(
 
                 # Nie dołączamy już HTM jako załącznik — trafia tylko na Drive
 
-                # Wstaw obrazek JPG (diagram) inline do tresci maila
-                if diagram_jpg_b64:
-                    reply_html = _build_html_reply_with_image(res_text, diagram_jpg_b64)
-                    logger.info(
-                        "[zwykly_dociekliwy_INLINE] ✓ Wstawiono JPG diagram inline do HTML"
-                    )
+                # Wstaw obrazek JPG inline — zlikwidowany (JPG usunięty z dociekliwego)
 
                 # Dolacz pierwsza odpowiedz tekstowa dociekliwego na koncu tresci maila
                 dociekliwy_reply = analiza_res.get("reply_html", "")
