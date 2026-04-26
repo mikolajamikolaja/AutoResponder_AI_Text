@@ -483,7 +483,7 @@ def generate_thumbnail_jpg(
         _log(f"generate_thumbnail_jpg: blad — {e}")
         return None
 
-def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "") -> str:
+def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "", tytul: str = "") -> str:
     """
     Generuje samodzielny plik HTML z interaktywnym drzewem decyzyjnym Eryka.
 
@@ -672,12 +672,21 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
   .r2-cols{flex-direction:column}
   .r2-col{width:100%}
   .dg-wrap{padding:8px;margin:0}
-  .dg-question{padding:8px 10px}
-  .dg-q-text{font-size:12px}
-  .opc-btn{padding:8px}
-  .opc-text{font-size:12px}
-  .dg-header{font-size:11px;padding:8px}
-  .wyrok-text{font-size:11px}
+  .dg-question{padding:10px 12px;margin-bottom:6px}
+  .dg-q-text{font-size:14px}
+  .dg-q-label{font-size:11px}
+  .opc-btn{padding:12px 10px;margin-bottom:2px}
+  .opc-text{font-size:13px}
+  .opc-label{font-size:11px}
+  .dg-header{font-size:12px;padding:10px;line-height:1.4}
+  .wyrok-text{font-size:12px}
+  .wyrok{padding:14px 12px}
+  .r2-btn{padding:10px 6px;font-size:11px}
+  .r2-question{font-size:11px;padding:10px}
+  .reakcja{font-size:11px;padding:10px}
+  .style-btn{font-size:11px;padding:6px 16px}
+  .progress-label{font-size:11px}
+  .path-tracker{font-size:11px}
 }
 """
 
@@ -685,7 +694,13 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
     def esc(s): return escape(str(s)) if s else ""
 
     body_parts = []
-    body_parts.append(f'<div class="dg-header">ERYK RESPONDER&#8482; &middot; Drzewo dociekliwo&#347;ci &middot; {sn}')
+    # ── Nagłówek: pytanie użytkownika jako tytuł strony ──────────────────────
+    tytul_safe = escape(tytul.strip()) if tytul and tytul.strip() else (sn or "Eryk Responder&#8482;")
+    # Skróć do 100 znaków dla czytelności
+    if len(tytul_safe) > 100:
+        tytul_safe = tytul_safe[:97] + "&#8230;"
+
+    body_parts.append(f'<div class="dg-header">{tytul_safe}')
     if pilne:
         body_parts.append('<span class="pilne-badge">&#9888; PILNE</span>')
     body_parts.append('</div>')
@@ -1030,12 +1045,13 @@ function pokazWyrok() {{
 startProgress();
 """
 
-    return f"""<!DOCTYPE html>
+    return f"""\ufeff<!DOCTYPE html>
 <html lang="pl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Eryk Responder&#8482; &mdash; {sn}</title>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>{tytul_safe if tytul_safe else 'Eryk Responder'}</title>
 <style>
 {css}
 </style>

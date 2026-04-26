@@ -38,7 +38,7 @@ execution_logger = get_logger()
 
 _DEEPSEEK_KEY = os.getenv("API_KEY_DEEPSEEK", "").strip()
 
-MAX_PYTANIA = 2  # Zmniejszone z 3 → mniejszy JSON, mniej tokenów, mniej timeoutów
+MAX_PYTANIA = 5
 MAX_RUNDY = 2  # Zmniejszone z 3 → j.w.
 
 
@@ -516,16 +516,6 @@ def _buduj_html_email_pierwsza_gra(
     </a>
   </div>
 
-  <!-- INFO O ZAŁĄCZNIKU -->
-  <div style="background:#FFF8E7;border:1px solid #C8A96A;border-radius:6px;
-    padding:12px 16px;margin-bottom:16px;font-size:12px;color:#7A6040;line-height:1.6">
-    <strong>&#128206; Interaktywna gra Eryka</strong> dost&#281;pna jest w za&#322;&#261;czniku
-    <code style="background:#f0e8d8;padding:1px 5px;border-radius:3px">eryk_gra_interaktywna.txt</code>.<br>
-    Aby j&#261; uruchomi&#263;: <strong>&#347;ci&#261;gnij za&#322;&#261;cznik</strong>, nast&#281;pnie
-    <strong>zmie&#324; rozszerzenie</strong> pliku z <code>.txt</code> na <code>.html</code>
-    i otw&#243;rz w przegl&#261;darce.
-  </div>
-
   {body_html}
 
   <!-- STATYCZNY PODGLĄD PYTAŃ -->
@@ -861,7 +851,10 @@ def build_dociekliwy_section(
 
     # ── GENERUJ SVG HTML interaktywny (diagram — załącznik + Drive) ──────────
     logger.info("[ERYK] Krok 2: Generowanie interaktywnego SVG HTML...")
-    diagram_svg_html = generate_svg_html_interactive(gra_data, sn)
+    # Skróć body do max 120 znaków jako tytuł strony
+    tytul_strony = (body or "").strip()
+    tytul_strony = re.sub(r'\s+', ' ', tytul_strony)[:120]
+    diagram_svg_html = generate_svg_html_interactive(gra_data, sn, tytul=tytul_strony)
     if diagram_svg_html:
         diagram_svg_b64 = base64.b64encode(
             b"\xef\xbb\xbf" + diagram_svg_html.encode("utf-8")
@@ -897,20 +890,11 @@ def build_dociekliwy_section(
 
     return {
         "reply_html": reply_html,
-        # HTM jako plik na Drive — link podmienia {DRIVE_LINK_PLACEHOLDER}
         "htm_for_drive": {
             "base64": diagram_svg_b64,
             "filename": "eryk_diagram_interaktywny.htm",
             "content_type": "text/html",
         },
         "drive_link": "",
-        "docx_list": [
-            # Interaktywny HTML zapisany jako .txt — Gmail nie blokuje .txt
-            # Odbiorca musi zmienić rozszerzenie z .txt na .html i otworzyć w przeglądarce
-            {
-                "base64": diagram_svg_b64,
-                "filename": "eryk_gra_interaktywna.txt",
-                "content_type": "text/plain",
-            },
-        ],
+        "docx_list": [],  # brak załączników — Gmail blokował .txt i .html
     }
