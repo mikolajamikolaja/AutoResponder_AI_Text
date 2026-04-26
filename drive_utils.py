@@ -162,7 +162,7 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id,webViewLink',
+            fields='id,webViewLink,webContentLink',
             supportsAllDrives=True,
             supportsTeamDrives=True
         ).execute()
@@ -170,7 +170,7 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
         try:
             service.permissions().create(
                 fileId=file['id'],
-                body={'type': 'anyone', 'role': 'writer'},
+                body={'type': 'anyone', 'role': 'reader'},
                 supportsAllDrives=True,
                 supportsTeamDrives=True
             ).execute()
@@ -180,9 +180,12 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
             else:
                 raise
 
+        # Dla HTML używamy webContentLink (pobieranie) — przeglądarka otworzy plik lokalnie
+        download_url = file.get('webContentLink') or f"https://drive.google.com/uc?export=download&id={file['id']}"
         return {
             'id': file['id'],
-            'url': file.get('webViewLink', f"https://drive.google.com/file/d/{file['id']}/view")
+            'url': download_url,
+            'view_url': file.get('webViewLink', f"https://drive.google.com/file/d/{file['id']}/view")
         }
     except Exception as e:
         print(f"Błąd uploadu do Drive: {e}")
