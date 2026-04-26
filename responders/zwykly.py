@@ -2893,8 +2893,8 @@ function sprawdz() {{
     html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
     html_dict = {
         "base64": html_b64,
-        "content_type": "text/html",
-        "filename": f"ankieta_{ts}.html",
+        "content_type": "application/octet-stream",
+        "filename": f"ankieta_{ts}.htm",
     }
 
     # ── Buduj PDF AcroForm (interaktywny z checkboxami) ──────────────────────
@@ -4508,8 +4508,8 @@ function pokazWynik() {{
     logger.info("[gra] OK: %d pytań", len(pytania))
     return {
         "base64": html_b64,
-        "content_type": "text/html",
-        "filename": f"gra_{ts}.html",
+        "content_type": "application/octet-stream",
+        "filename": f"gra_{ts}.htm",
     }
 
 
@@ -4676,7 +4676,7 @@ def build_zwykly_section(
         image_block = (
             '<div style="margin: 24px 0; text-align: center;">'
             '<p style="margin: 0 0 12px 0; color: #444; font-size: 14px;">'
-            "Obrazek gry wygenerowany na podstawie pliku <strong>eryk_diagram_interaktywny.html</strong>.</p>"
+            "Obrazek gry wygenerowany na podstawie pliku <strong>eryk_diagram_interaktywny.htm</strong>.</p>"
             f'<img src="data:image/jpeg;base64,{image_b64}" alt="Mapa gry Edka" '
             'style="max-width:100%;height:auto;border-radius:14px;border:1px solid #ddd;" />'
             "</div>"
@@ -4735,8 +4735,8 @@ def build_zwykly_section(
                     analiza_docx_list.append(
                         {
                             "base64": interactive_html_b64,
-                            "content_type": "text/html",
-                            "filename": "eryk_diagram_interaktywny.html",
+                            "content_type": "application/octet-stream",
+                            "filename": "eryk_diagram_interaktywny.htm",
                         }
                     )
                     logger.info(

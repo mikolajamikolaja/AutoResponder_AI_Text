@@ -6,7 +6,7 @@ Render generuje JEDEN RAZ wszystkie 10 kroków (pytania + opcje + reakcje Eryka)
 Dostarcza dwie rzeczy jednocześnie:
 
   1. reply_html  — treść maila z CSS :target "grą" (bez JS, działa w klientach pocztowych)
-  2. docx_list   — [{base64, filename, content_type}] z eryk_gra.html (pełny JS, załącznik)
+  2. docx_list   — [{base64, filename, content_type}] z eryk_gra.htm (pełny JS, załącznik)
 
 Zależności z app.py / smtp_wysylka.py — BEZ ZMIAN:
   from responders.analiza import build_analiza_section
@@ -30,9 +30,37 @@ from flask import current_app
 
 from .analiza_diagram import generate_jpg_diagram, generate_svg_html_interactive, generate_thumbnail_jpg
 from core.logging_reporter import get_logger
+from drive_utils import upload_file_to_drive
 
 logger = logging.getLogger(__name__)
 execution_logger = get_logger()
+
+_DRIVE_FOLDER_ID = os.getenv("DRIVE_FOLDER_ID", "").strip()
+
+
+def _htm_to_jpg(html_str: str, width: int = 1200) -> Optional[bytes]:
+    """
+    Renderuje pelny interaktywny HTM do JPG przez Playwright (headless Chromium).
+    Zwraca bytes JPG lub None jesli Playwright niedostepny.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(viewport={"width": width, "height": 900})
+            page.set_content(html_str, wait_until="networkidle")
+            page.wait_for_timeout(1500)
+            png_bytes = page.screenshot(full_page=True)
+            browser.close()
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(png_bytes)).convert("RGB")
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=88)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning("[ERYK] _htm_to_jpg blad (Playwright niedostepny?): %s", e)
+        return None
 
 # ── KLUCZE API ────────────────────────────────────────────────────────────────
 
@@ -415,10 +443,14 @@ def _fallback_gra() -> dict:
 
 
 def _buduj_html_email_pierwsza_gra(
-    gra: dict, sender_name: str, diagram_jpg_b64: str
+    gra: dict, sender_name: str, diagram_jpg_b64: str, drive_url: str = ""
 ) -> str:
     """
-    Buduje HTML dla reply_html — pokazuje TYLKO pierwsze pytanie (pierwsze drzewo) + diagram JPG
+    Buduje HTML dla reply_html:
+    - Pierwsze pytanie Eryka + opcje A/B/C
+    - JPG (screenshot calego interaktywnego HTM)
+    - Zacheta do pobrania eryk_diagram_interaktywny.htm
+    - Link do Drive jesli dostepny
     """
     pytania = gra.get("pytania", [])
     if not pytania:
@@ -447,6 +479,11 @@ def _buduj_html_email_pierwsza_gra(
   .diagram-wrap p { font-size: 11px; color: #666; margin: 0 0 14px 0; line-height: 1.6; }
   .diagram-img { max-width: 100%; height: auto; border: 1px solid #c8b89a; }
   .ft { padding: 14px 28px; font-size: 9px; color: #999; text-align: center; border-top: 1px solid #c8b89a; background: #f5f0e8; }
+  .diagram-wrap { margin: 24px 0; }
+  .zacheta { margin: 20px 0; padding: 16px 20px; background: #f5f0e8; border-left: 4px solid #8b6914; font-size: 13px; color: #444; }
+  .zacheta p { margin: 0 0 8px 0; line-height: 1.6; }
+  .zacheta p:last-child { margin-bottom: 0; }
+  .drive-blok { margin-top: 10px; }
 </style>"""
 
     opcje_html = ""
@@ -460,15 +497,28 @@ def _buduj_html_email_pierwsza_gra(
                 f"</div>\n"
             )
 
-    # Oblicz całkowitą liczbę ścieżek: 3 pytania × 3 rundy × 3 opcje = 3^4? W rzeczywistości: każde pytanie ma 3^3 = 27 ścieżek, 3 pytania = 81 ścieżek
     total_sciezek = len(pytania) * (3**MAX_RUNDY)
+
+    # --- JPG (screenshot calego interaktywnego HTM) ---
     diagram_html = ""
     if diagram_jpg_b64:
-        diagram_html = f"""<div class="diagram-wrap">
-<p><strong>Mapa całej gry:</strong> {len(pytania)} pytań × {MAX_RUNDY} rund × 3 opcje = do {total_sciezek} ścieżek decyzyjnych. 
-Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_interaktywny.html</strong></p>
-<img src="data:image/jpeg;base64,{diagram_jpg_b64}" alt="Diagram struktury gry Edka" class="diagram-img" />
-</div>"""
+        diagram_html = f'''<div class="diagram-wrap">
+<img src="data:image/jpeg;base64,{diagram_jpg_b64}" alt="Pelny diagram interaktywny Eryka" class="diagram-img" />
+</div>'''
+
+    # --- Zacheta + link Drive ---
+    drive_blok = ""
+    if drive_url:
+        drive_blok = f'''<div class="drive-blok">
+<p>&#128190; Chcesz zajrzeć do gry później?
+<a href="{drive_url}" style="color:#8b6914;font-weight:bold;">Wejdź w link do Drive</a></p>
+</div>'''
+
+    zacheta = f'''<div class="zacheta">
+<p>&#127911; Aby zagrać z dźwiękami i animacjami, pobierz załącznik
+<strong>eryk_diagram_interaktywny.htm</strong> i otwórz go w przeglądarce.</p>
+{drive_blok}
+</div>'''
 
     html = f"""{css}
 <div class="wrap">
@@ -482,8 +532,9 @@ Aby grać aktywnie i widzieć logikę, otwórz załącznik <strong>eryk_diagram_
     <div class="pyt">{tresc}</div>
     <div class="opc">{opcje_html}</div>
     {diagram_html}
+    {zacheta}
   </div>
-  <div class="ft">Eryk Responder™ v3.0 (drzewiasty) · Aby grać aktywnie, otwórz interaktywny HTML · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
+  <div class="ft">Eryk Responder™ v3.0 · Dziękujemy za cierpliwość, której Eryk nigdy nie miał.</div>
 </div>"""
 
     return html
@@ -725,7 +776,7 @@ def build_dociekliwy_section(
     Zwraca:
       reply_html — treść maila (CSS :target, bez JS)
       gra_html   — plik HTML do załączenia jako pojedynczy attachment
-      docx_list  — [{"base64":..., "filename":"eryk_gra.html", "content_type":"text/html"}]
+      docx_list  — [{"base64":..., "filename":"eryk_gra.htm", "content_type":"text/htm"}]
 
     W app.py zaktualizuj wywołanie:
       build_analiza_section(body, attachments,
@@ -796,98 +847,84 @@ def build_dociekliwy_section(
         ),
     )
 
-    # ── GENERUJ DIAGRAMY ──────────────────────────────────────────────────────
-    logger.info("[ERYK] Krok 2: Generowanie diagramów...")
-    # Miniatura JPG — renderujemy ten sam SVG co eryk_diagram_interaktywny.html
-    # Dzieki temu obrazek w mailu jest wierna miniatura drzewa decyzyjnego
-    diagram_jpg_bytes = generate_thumbnail_jpg(gra_data, sn, thumb_width=900)
-    if not diagram_jpg_bytes:
-        # Fallback na stary generator jesli cairosvg niedostepny
-        logger.warning("[ERYK] cairosvg niedostepny — fallback na generate_jpg_diagram")
-        diagram_jpg_bytes = generate_jpg_diagram(gra_data)
-    diagram_jpg_b64 = ""
-    if diagram_jpg_bytes:
-        diagram_jpg_b64 = base64.b64encode(diagram_jpg_bytes).decode("ascii")
-        logger.info(
-            "[ERYK] ✓ JPG miniatura drzewa: %d bytes → base64: %d chars",
-            len(diagram_jpg_bytes),
-            len(diagram_jpg_b64),
-        )
-    else:
-        logger.warning("[ERYK] ⚠️ Nie wygenerowano JPG miniatury drzewa")
-
-    # SVG HTML interaktywny
+    # ── KROK 2: Generuj interaktywny HTM (z dzwiekami) ───────────────────────
+    logger.info("[ERYK] Krok 2: Generowanie interaktywnego HTM...")
     diagram_svg_html = generate_svg_html_interactive(gra_data, sn)
     if diagram_svg_html:
-        diagram_svg_b64 = base64.b64encode(diagram_svg_html.encode("utf-8")).decode(
-            "ascii"
-        )
-        logger.info(
-            "[ERYK] ✓ SVG diagram: %d bytes → base64: %d chars",
-            len(diagram_svg_html.encode("utf-8")),
-            len(diagram_svg_b64),
-        )
+        diagram_svg_b64 = base64.b64encode(diagram_svg_html.encode("utf-8")).decode("ascii")
+        logger.info("[ERYK] ✓ HTM interaktywny: %d bytes", len(diagram_svg_html))
     else:
-        logger.warning("[ERYK] ⚠️ Nie wygenerowano SVG diagramu")
+        logger.warning("[ERYK] ⚠️ Nie wygenerowano HTM interaktywnego")
         diagram_svg_b64 = ""
 
-    # ── Buduj HTML do maila — TYLKO pierwsza gra + diagram JPG ─────────────────
-    logger.info("[ERYK] Krok 3: Budowanie reply_html...")
-    reply_html = _buduj_html_email_pierwsza_gra(gra_data, sn, diagram_jpg_b64)
+    # ── KROK 3: Upload HTM na Drive → pobierz link ────────────────────────────
+    logger.info("[ERYK] Krok 3: Upload HTM na Google Drive...")
+    drive_url = ""
+    if diagram_svg_html and _DRIVE_FOLDER_ID:
+        try:
+            from datetime import datetime as _dt
+            ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+            drive_result = upload_file_to_drive(
+                file_data=diagram_svg_html.encode("utf-8"),
+                filename=f"eryk_diagram_interaktywny_{ts}.htm",
+                mime_type="text/html",
+                folder_id=_DRIVE_FOLDER_ID,
+            )
+            if drive_result and drive_result.get("url"):
+                drive_url = drive_result["url"]
+                logger.info("[ERYK] ✓ Drive upload OK: %s", drive_url)
+            else:
+                logger.warning("[ERYK] ⚠️ Drive upload nie zwrócił URL")
+        except Exception as e:
+            logger.error("[ERYK] ❌ Drive upload błąd: %s", e)
+    else:
+        logger.warning("[ERYK] ⚠️ Pomijam Drive upload (brak HTM lub DRIVE_FOLDER_ID)")
+
+    # ── KROK 4: Screenshot HTM → JPG (cały diagram jako obrazek) ─────────────
+    logger.info("[ERYK] Krok 4: Screenshot HTM → JPG...")
+    diagram_jpg_b64 = ""
+    if diagram_svg_html:
+        jpg_bytes = _htm_to_jpg(diagram_svg_html, width=1200)
+        if jpg_bytes:
+            diagram_jpg_b64 = base64.b64encode(jpg_bytes).decode("ascii")
+            logger.info("[ERYK] ✓ Screenshot JPG: %d bytes", len(jpg_bytes))
+        else:
+            # Fallback: stary generator JPG z Graphviz
+            logger.warning("[ERYK] Playwright niedostepny — fallback na generate_jpg_diagram")
+            jpg_bytes = generate_thumbnail_jpg(gra_data, sn, thumb_width=900) or generate_jpg_diagram(gra_data)
+            if jpg_bytes:
+                diagram_jpg_b64 = base64.b64encode(jpg_bytes).decode("ascii")
+                logger.info("[ERYK] ✓ Fallback JPG: %d bytes", len(jpg_bytes))
+            else:
+                logger.warning("[ERYK] ⚠️ Nie wygenerowano JPG")
+
+    # ── KROK 5: Buduj reply_html ──────────────────────────────────────────────
+    logger.info("[ERYK] Krok 5: Budowanie reply_html...")
+    reply_html = _buduj_html_email_pierwsza_gra(gra_data, sn, diagram_jpg_b64, drive_url=drive_url)
     logger.info("[ERYK] ✓ reply_html: %d bytes", len(reply_html))
 
-    # ── Pełny HTML do gry (stary format) — załącznik ─────────────────────────
-    logger.info("[ERYK] Krok 4: Budowanie pełnego gra_html...")
-    gra_html_str = _buduj_gra_html(gra_data, sn)
-    logger.info("[ERYK] ✓ gra_html generowany: %d bytes", len(gra_html_str))
-
-    # WAŻNE: Sprawdzenie czy JSON został poprawnie wstawiony do HTML
-    if "const G = {" in gra_html_str and "gra_json" not in gra_html_str:
-        logger.info(
-            "[ERYK] ✓ JSON POPRAWNIE interpolowany w HTML (nie ma dosłownego 'gra_json')"
-        )
-    else:
-        logger.error(
-            "[ERYK] ❌ BŁĄD: JSON NIE interpolowany w HTML - może zawierać tekst 'gra_json'!"
-        )
-
-    gra_html_b64 = base64.b64encode(gra_html_str.encode("utf-8")).decode("ascii")
-    logger.info("[ERYK] ✓ gra_html base64: %d chars", len(gra_html_b64))
-
+    logger.info("[ERYK_END] ═══════════════════════════════════════════════════════════")
     logger.info(
-        "[ERYK_END] ═══════════════════════════════════════════════════════════"
-    )
-    logger.info(
-        "[ERYK_SUMMARY] Wygenerowano grę: %d pytań | attachments: 4 | sender=%s",
+        "[ERYK_SUMMARY] Wygenerowano grę: %d pytań | sender=%s | drive=%s",
         len(gra_data.get("pytania", [])),
         sender or "?",
+        drive_url or "brak",
     )
 
     return {
         "reply_html": reply_html,
-        "gra_html": {
-            "base64": gra_html_b64,
-            "filename": "eryk_gra.html",
-            "content_type": "text/html",
-        },
         "docx_list": [
-            # Diagram interaktywny SVG
+            # Interaktywny diagram z dzwiekami — jedyny zalacznik HTM
             {
                 "base64": diagram_svg_b64,
-                "filename": "eryk_diagram_interaktywny.html",
-                "content_type": "text/html",
+                "filename": "eryk_diagram_interaktywny.htm",
+                "content_type": "application/octet-stream",
             },
-            # Diagram JPG z oddali
+            # JPG (screenshot calego HTM) — wstawiany tez inline w reply_html
             {
                 "base64": diagram_jpg_b64,
                 "filename": "eryk_diagram_mapa.jpg",
                 "content_type": "image/jpeg",
-            },
-            # Stary format gry (pełny HTML)
-            {
-                "base64": gra_html_b64,
-                "filename": "eryk_gra_pelna.html",
-                "content_type": "text/html",
             },
         ],
     }
