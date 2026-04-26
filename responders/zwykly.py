@@ -4523,7 +4523,6 @@ def build_zwykly_section(
     sender_name: str = "",
     test_mode: bool = False,
     attachments: list = None,
-    skip_dociekliwy: bool = False,
 ) -> dict:
     """
     Zwykły responder - generuje odpowiedź tekstową i obrazki FLUX.
@@ -4535,7 +4534,6 @@ def build_zwykly_section(
     """
     from flask import current_app as flask_app
     import re
-    from responders.dociekliwy import build_dociekliwy_section
 
     logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2)")
     app_obj = flask_app._get_current_object()
@@ -4551,7 +4549,6 @@ def build_zwykly_section(
             "sender_name": sender_name,
             "test_mode": test_mode,
             "attachments_count": len(attachments or []),
-            "skip_dociekliwy": skip_dociekliwy,
         },
     )
     execution_logger.log_memory_usage()
@@ -4693,127 +4690,8 @@ def build_zwykly_section(
     htm_for_drive = None   # HTM do zapisu na Drive (podmieni placeholder w reply_html)
     drive_url = None       # URL pliku HTM na Drive (po wgraniu)
 
-    # Dociekliwy działa na podstawie body + opcjonalnych zalacznikow.
-    # NIE wymaga zalacznikow — analizuje tresc emaila nadawcy.
-    # Pomijamy tylko gdy app.py zaplanowal osobne wywolanie (skip_dociekliwy=True).
-    logger.info(
-        "[zwykly_dociekliwy_check] skip_dociekliwy=%s | Czy wykonać do_dociekliwy()?",
-        skip_dociekliwy,
-    )
-
-    if not skip_dociekliwy:
-        logger.info(
-            "[zwykly_dociekliwy_EXECUTING] ✓ Uruchamiam build_dociekliwy_section()..."
-        )
-        try:
-            analiza_res = build_dociekliwy_section(
-                body, attachments or [], sender=sender_email, sender_name=sender_name
-            )
-            logger.info(
-                "[zwykly_dociekliwy_SUCCESS] ✓ Dociekliwy zwrócił wynik: keys=%s",
-                list(analiza_res.keys()) if isinstance(analiza_res, dict) else "?",
-            )
-
-            if isinstance(analiza_res, dict):
-
-                # ── Dodaj WSZYSTKIE załączniki z dociekliwego do analiza_docx_list ──
-                for doc in analiza_res.get("docx_list", []):
-                    if not isinstance(doc, dict) or not doc.get("base64"):
-                        continue
-                    analiza_docx_list.append(doc)
-                    logger.info(
-                        "[zwykly_dociekliwy_ATTACH] ✓ Dodano załącznik z dociekliwego: %s (%s, %d bytes base64)",
-                        doc.get("filename", "?"),
-                        doc.get("content_type", "?"),
-                        len(doc["base64"]),
-                    )
-
-                # ── Upload HTM na Google Drive ─────────────────────────────────────
-                htm_for_drive = analiza_res.get("htm_for_drive")
-                drive_url = None
-                if htm_for_drive and htm_for_drive.get("base64"):
-                    try:
-                        from drive_utils import upload_file_to_drive
-                        import os as _os
-                        drive_folder_id = _os.getenv("DRIVE_FOLDER_ID", "")
-                        drive_result = upload_file_to_drive(
-                            file_data=htm_for_drive["base64"],
-                            filename=htm_for_drive["filename"],
-                            mime_type=htm_for_drive["content_type"],
-                            folder_id=drive_folder_id or None,
-                        )
-                        if drive_result and drive_result.get("id"):
-                            drive_url = f"https://drive.google.com/file/d/{drive_result['id']}/view"
-                            logger.info(
-                                "[zwykly_dociekliwy_DRIVE] ✓ HTM wgrany na Drive: %s",
-                                drive_url,
-                            )
-                        else:
-                            logger.warning(
-                                "[zwykly_dociekliwy_DRIVE] ⚠️ Upload HTM na Drive nie zwrócił ID"
-                            )
-                    except Exception as _drive_err:
-                        logger.error(
-                            "[zwykly_dociekliwy_DRIVE] ❌ Błąd uploadu HTM na Drive: %s",
-                            _drive_err,
-                        )
-
-                # ── Dołącz reply_html z dociekliwego na końcu treści maila ─────────
-                dociekliwy_reply = analiza_res.get("reply_html", "")
-                if dociekliwy_reply and dociekliwy_reply.strip():
-                    # Podmień placeholder linku Drive
-                    if drive_url:
-                        dociekliwy_reply = dociekliwy_reply.replace(
-                            "{DRIVE_LINK_PLACEHOLDER}", drive_url
-                        )
-                        logger.info(
-                            "[zwykly_dociekliwy_PLACEHOLDER] ✓ Podmieniono DRIVE_LINK_PLACEHOLDER → %s",
-                            drive_url,
-                        )
-                    else:
-                        # Fallback: brak linku Drive — zastąp href i tekst przycisku
-                        dociekliwy_reply = dociekliwy_reply.replace(
-                            "{DRIVE_LINK_PLACEHOLDER}", "#"
-                        )
-                        dociekliwy_reply = dociekliwy_reply.replace(
-                            "&#9654; Kliknij w link by otrzyma&#263; odpowied&#378;",
-                            "&#9654; (link Drive niedost&#281;pny)",
-                        )
-                        logger.warning(
-                            "[zwykly_dociekliwy_PLACEHOLDER] ⚠️ Brak drive_url — wstawiono fallback"
-                        )
-                    logger.info(
-                        "[zwykly_dociekliwy_REPLY] ✓ reply_html z dociekliwego: %d bytes",
-                        len(dociekliwy_reply),
-                    )
-                    separator = (
-                        '<hr style="border:none;border-top:2px solid #ccc;margin:32px 0;" />'
-                        '<div style="background:#f5f5f5;border-left:4px solid #888;'
-                        'padding:16px 20px;margin:0;font-size:14px;color:#333;">'
-                        '<strong style="display:block;margin-bottom:8px;color:#555;">'
-                        "\U0001f50d Dociekliwy:</strong>" + dociekliwy_reply + "</div>"
-                    )
-                    if '<div class="footer">' in reply_html:
-                        reply_html = reply_html.replace(
-                            '<div class="footer">',
-                            separator + '<div class="footer">',
-                            1,
-                        )
-                    else:
-                        reply_html = reply_html + separator
-
-
-        except Exception as e:
-            logger.error(
-                "[zwykly_dociekliwy_ERROR] ❌ Błąd w build_dociekliwy_section(): %s",
-                str(e),
-                exc_info=True,
-            )
-            logger.warning("[zwykly] dociekliwy failed: %s", e)
-    else:
-        logger.info(
-            "[zwykly_dociekliwy_SKIPPED] ⏭️  Pomijam dociekliwy — skip_dociekliwy=True (app.py oddzielnie go wywoła) | Brak sekcji 'analiza' w pipeline"
-        )
+    # Dociekliwy jest zawsze wywoływany osobno przez app.py jako sekcja 'analiza'.
+    # Zwykly NIE wywołuje dociekliwego — każdy responder wysyła osobny email.
 
     # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
     # Uruchamiamy po KROK 2, żeby nie rywalizować z tryptyk/ankieta/horo/rpg/gra

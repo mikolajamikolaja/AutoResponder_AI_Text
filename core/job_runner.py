@@ -210,33 +210,29 @@ def run_pipeline_async(
                         pass
                 continue
 
-            # ── Łączymy wyniki wszystkich sekcji ───────────────────────────────
+            # ── Wyślij osobny email dla tej sekcji ────────────────────────────
             if isinstance(result, dict):
-                # Zachowaj wynik pod kluczem sekcji — zbierz_zalaczniki_z_response
-                # iteruje po combined_results szukając sekcji jako zagnieżdżonych dict-ów
-                combined_results[section_key] = {
-                    k: v for k, v in result.items() if k != "reply_html"
-                }
-                for key, value in result.items():
-                    if key == "reply_html":
-                        # Łączymy reply_html z różnych sekcji
-                        existing_html = combined_results.get("reply_html", "")
-                        if existing_html and value:
-                            combined_results["reply_html"] = (
-                                existing_html + "<hr>" + value
-                            )
-                        elif value:
-                            combined_results["reply_html"] = value
-                    else:
-                        # Dla innych pól — jeśli nie istnieje, dodajemy
-                        if key not in combined_results:
-                            combined_results[key] = value
-                        # Dla list — łączymy
-                        elif isinstance(value, list) and isinstance(
-                            combined_results[key], list
-                        ):
-                            combined_results[key].extend(value)
+                combined_results[section_key] = result
             sections_done.append(section_key)
+
+            try:
+                _token_refresh(get_token_fn, flask_app, section_key)
+                _send_section_email(
+                    section_key=section_key,
+                    result=result,
+                    sender=sender,
+                    sender_name=sender_name,
+                    previous_subject=previous_subject,
+                    wyslij_odpowiedz_fn=wyslij_odpowiedz,
+                    zbierz_fn=zbierz_zalaczniki_z_response,
+                    flask_app=flask_app,
+                    logger=logger,
+                )
+                emails_sent += 1
+            except Exception as e:
+                flask_app.logger.error(
+                    "[async] Błąd wysyłki '%s': %s", section_key, e
+                )
 
             # ── Drive — zapisujemy każdą sekcję osobno ──────────────────────────
             if save_to_drive and drive_folder_id:
@@ -272,26 +268,8 @@ def run_pipeline_async(
             # Wszystkie sekcje zostaną połączone w jeden email na końcu.
             pass
 
-        # ── Wyślij JEDEN zbiorczy email na końcu pipeline ──────────────────────
-        try:
-            _token_refresh(get_token_fn, flask_app, "combined")
-            success = _send_combined_email(
-                combined_results,
-                sender,
-                sender_name,
-                previous_subject,
-                wyslij_odpowiedz,
-                zbierz_zalaczniki_z_response,
-                flask_app,
-                logger,
-            )
-            if success:
-                emails_sent += 1
-        except Exception as e:
-            flask_app.logger.error("[async] Błąd wysyłki combined email: %s", e)
-
         if on_pipeline_done:
-            on_pipeline_done(combined_results.get("reply_html", ""), emails_sent)
+            on_pipeline_done("", emails_sent)
 
             # ── Zwolnij pamięć natychmiast ──────────────────────────────────────
             if result is not None:

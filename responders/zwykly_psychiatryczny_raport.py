@@ -546,23 +546,130 @@ def _load_cfg() -> dict:
 
 
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
+    """
+    Podzielone na 3 osobne wywołania DeepSeek:
+      1a — dane_pacjenta + numer_historii + data_przyjecia  (max_tokens: 700)
+      1b — powod_przyjecia                                   (max_tokens: 1200)
+      1c — cytaty_z_przyjecia                               (max_tokens: 2500)
+    """
     sec = cfg.get("deepseek_1_pacjent", {})
     system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"SENDER_NAME (priorytet dla imienia): {sender_name or '(brak)'}\n\n"
-        f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
-        f"LIMIT DŁUGOŚCI: Każde pole tekstowe maksymalnie 300 znaków. Zwróć TYLKO czysty JSON."
+    email_fragment = body[:MAX_DLUGOSC_EMAIL]
+
+    # ── Call 1a — dane pacjenta + numer + data ────────────────────────────────
+    sec_1a = cfg.get("deepseek_1a_dane_pacjenta", sec)
+    system_1a = sec_1a.get("system", system)
+    schema_1a = json.dumps(
+        {
+            "numer_historii_choroby": sec.get("schema", {}).get(
+                "numer_historii_choroby", "Losowy numer NY-2026-XXXXX"
+            ),
+            "data_przyjecia": sec.get("schema", {}).get(
+                "data_przyjecia", "Data z emaila lub dzisiejsza DD.MM.YYYY"
+            ),
+            "dane_pacjenta": sec.get("schema", {}).get("dane_pacjenta", {}),
+        },
+        ensure_ascii=False,
+        indent=2,
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=3000)
-    result = _parse_json_safe(raw, "pacjent")
-    if not result or not isinstance(result, dict):
+    user_1a = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"SENDER_NAME (priorytet dla imienia): {sender_name or '(brak)'}\n\n"
+        f"SCHEMAT JSON do wypełnienia (TYLKO te klucze):\n{schema_1a}\n\n"
+        f"KRYTYCZNE: klucz 'dane_pacjenta' MUSI być zagnieżdżonym obiektem — "
+        f"ZAKAZ zwracania pól imie_nazwisko/wiek/adres na górnym poziomie JSON.\n"
+        f"LIMIT: każde pole max 300 znaków. Zwróć TYLKO czysty JSON."
+    )
+    raw_1a = call_deepseek(system_1a, user_1a, MODEL_TYLER, max_tokens=700)
+    result_1a = _parse_json_safe(raw_1a, "pacjent_1a_dane")
+    if not isinstance(result_1a, dict):
+        result_1a = {}
+    # Jeśli dane_pacjenta wróciły płaskie — zawiń je
+    if "imie_nazwisko" in result_1a and "dane_pacjenta" not in result_1a:
+        flat_keys = ["imie_nazwisko", "rodowod", "wiek", "adres", "zawod",
+                     "stan_cywilny", "numer_ubezpieczenia"]
+        result_1a["dane_pacjenta"] = {k: result_1a.pop(k) for k in flat_keys if k in result_1a}
+    current_app.logger.info(
+        "[psych-raport] 1a dane_pacjenta OK: %s",
+        bool(result_1a.get("dane_pacjenta")),
+    )
+
+    # ── Call 1b — powód przyjęcia ─────────────────────────────────────────────
+    sec_1b = cfg.get("deepseek_1b_powod_przyjecia", sec)
+    system_1b = sec_1b.get("system", system)
+    schema_1b = json.dumps(
+        {
+            "powod_przyjecia": sec.get("schema", {}).get(
+                "powod_przyjecia",
+                "MINIMUM 15 zdań. KAŻDE zdanie nawiązuje do konkretnego słowa z emaila.",
+            )
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_1b = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"SENDER_NAME: {sender_name or '(brak)'}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz powod_przyjecia):\n{schema_1b}\n\n"
+        f"powod_przyjecia: MINIMUM 15 zdań. KAŻDE zdanie nawiązuje do konkretnego słowa z emaila. "
+        f"Formalna dokumentacja medyczna z biurokratyczną powagą wobec nonsensu. Nihilizm w podtekście.\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw_1b = call_deepseek(system_1b, user_1b, MODEL_TYLER, max_tokens=1200)
+    result_1b = _parse_json_safe(raw_1b, "pacjent_1b_powod")
+    if not isinstance(result_1b, dict):
+        result_1b = {}
+    current_app.logger.info(
+        "[psych-raport] 1b powod_przyjecia OK: %s",
+        bool(result_1b.get("powod_przyjecia")),
+    )
+
+    # ── Call 1c — cytaty z przyjęcia ──────────────────────────────────────────
+    sec_1c = cfg.get("deepseek_1c_cytaty", sec)
+    system_1c = sec_1c.get("system", system)
+    schema_1c = json.dumps(
+        {
+            "cytaty_z_przyjecia": sec.get("schema", {}).get(
+                "cytaty_z_przyjecia",
+                "Lista MINIMUM 4 cytatów. Każdy = PARAFRAZA REALNEGO zdania z emaila + komentarz min. 15 zdań.",
+            )
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_1c = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"SENDER_NAME: {sender_name or '(brak)'}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz cytaty_z_przyjecia):\n{schema_1c}\n\n"
+        f"cytaty_z_przyjecia: DOKŁADNIE 4 obiekty. Każdy obiekt: "
+        f"'cytat' = PARAFRAZA REALNEGO zdania z emaila (ZAKAZ cytatu którego nadawca nie powiedział), "
+        f"'komentarz' = nota kliniczna MINIMUM 15 zdań nawiązująca do emaila.\n"
+        f"ABSOLUTNY ZAKAZ w komentarzu: Szwejk, Monty Python, Tyler Durden, Fight Club, "
+        f"kafkowski, absurdystyczny. Komentarz MUSI brzmieć jak autentyczna nota psychiatryczna.\n"
+        f"LIMIT: każdy komentarz max 400 znaków. Zwróć TYLKO czysty JSON."
+    )
+    raw_1c = call_deepseek(system_1c, user_1c, MODEL_TYLER, max_tokens=2500)
+    result_1c = _parse_json_safe(raw_1c, "pacjent_1c_cytaty")
+    if not isinstance(result_1c, dict):
+        result_1c = {}
+    current_app.logger.info(
+        "[psych-raport] 1c cytaty_z_przyjecia OK: %s",
+        bool(result_1c.get("cytaty_z_przyjecia")),
+    )
+
+    # ── Scal wyniki 3 callów ──────────────────────────────────────────────────
+    result = {}
+    result.update(result_1a)
+    result.update(result_1b)
+    result.update(result_1c)
+
+    if not result.get("dane_pacjenta"):
         fb = cfg.get("fallback_dane_pacjenta", {})
         current_app.logger.warning(
-            "[psych-raport] sekcja_pacjent → fallback (nie dict lub pusty)"
+            "[psych-raport] sekcja_pacjent → fallback (brak dane_pacjenta)"
         )
-        return fb
+        result.update(fb)
+
     return result
 
 
@@ -572,18 +679,68 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 
 
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
+    """
+    Podzielone na 2 osobne wywołania DeepSeek:
+      2a — depozyt przedmiotów          (max_tokens: 800)
+      2b — farmakologia (leki)          (max_tokens: 900)
+    """
     sec = cfg.get("deepseek_2_depozyt_leki", {})
     system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    email_fragment = body[:MAX_DLUGOSC_EMAIL]
     nouns_str = ", ".join(nouns_dict.values()) if nouns_dict else "(brak rzeczowników)"
-    user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"RZECZOWNIKI Z EMAILA (każdy musi mieć swój lek): {nouns_str}\n\n"
-        f"SCHEMAT JSON do wypełnienia:\n{schema}\n\n"
-        f"Pamiętaj: JEDEN LEK per rzeczownik, nazwa leku nawiązuje do rzeczownika. Zwróć TYLKO czysty JSON."
+
+    # ── Call 2a — depozyt ─────────────────────────────────────────────────────
+    sec_2a = cfg.get("deepseek_2a_depozyt", sec)
+    system_2a = sec_2a.get("system", system)
+    schema_2a = json.dumps(
+        {"depozyt": sec.get("schema", {}).get("depozyt", {})},
+        ensure_ascii=False,
+        indent=2,
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
-    result = _parse_json_safe(raw, "depozyt_leki")
+    user_2a = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"RZECZOWNIKI Z EMAILA (TYLKO fizycznie unoszalne): {nouns_str}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz depozyt):\n{schema_2a}\n\n"
+        f"ZASADY: tylko fizycznie unoszalne przedmioty lub ich miniatury. "
+        f"Każdy z żartobliwą cechą udziwnioną. Posiadanie opisz jako działające na niekorzyść pacjenta.\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw_2a = call_deepseek(system_2a, user_2a, MODEL_TYLER, max_tokens=800)
+    result_2a = _parse_json_safe(raw_2a, "depozyt_2a")
+    if not isinstance(result_2a, dict):
+        result_2a = {}
+    current_app.logger.info(
+        "[psych-raport] 2a depozyt OK: %s", bool(result_2a.get("depozyt"))
+    )
+
+    # ── Call 2b — farmakologia ────────────────────────────────────────────────
+    sec_2b = cfg.get("deepseek_2b_farmakologia", sec)
+    system_2b = sec_2b.get("system", system)
+    schema_2b = json.dumps(
+        {"farmakologia": sec.get("schema", {}).get("farmakologia", {})},
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_2b = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"RZECZOWNIKI Z EMAILA (każdy musi mieć swój lek): {nouns_str}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz farmakologia):\n{schema_2b}\n\n"
+        f"ZASADY: JEDEN lek per rzeczownik. Nazwa leku nawiązuje do rzeczownika. "
+        f"Dawkowanie ZAWSZE żartobliwe nawiązujące do emaila — NIGDY '1x dziennie'.\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw_2b = call_deepseek(system_2b, user_2b, MODEL_TYLER, max_tokens=900)
+    result_2b = _parse_json_safe(raw_2b, "depozyt_2b_farmakologia")
+    if not isinstance(result_2b, dict):
+        result_2b = {}
+    current_app.logger.info(
+        "[psych-raport] 2b farmakologia OK: %s", bool(result_2b.get("farmakologia"))
+    )
+
+    result = {}
+    result.update(result_2a)
+    result.update(result_2b)
+
     if not result or not isinstance(result, dict):
         return {
             "depozyt": {
@@ -693,37 +850,107 @@ def _sekcja_tydzien(
 
 
 def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
+    """
+    Podzielone na 2 osobne wywołania DeepSeek:
+      5a — stan_przy_wypisie + powod_wypisu + dzien_wypisu   (max_tokens: 1200)
+      5b — zalecenia_po_wypisie + opis_pozegnania             (max_tokens: 1200)
+    """
     sec = cfg.get("deepseek_5_wypis", {})
     system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
+    email_fragment = body[:MAX_DLUGOSC_EMAIL]
+
     try:
         base_date = datetime.strptime(data_przyjecia, "%d.%m.%Y")
         data_wypisu = (base_date + timedelta(days=14)).strftime("%d.%m.%Y")
     except Exception:
         data_wypisu = datetime.now().strftime("%d.%m.%Y")
-    user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"DATA WYPISU (dzień 15): {data_wypisu}\n\n"
-        f"SCHEMAT JSON:\n{schema}\n\n"
-        f"LIMIT DŁUGOŚCI: Każde pole tekstowe maksymalnie 300 znaków. Zwróć TYLKO czysty JSON."
-    )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=2500)
-    result = _parse_json_safe(raw, "wypis")
-    if not result or not isinstance(result, dict):
-        return {
+
+    wypis_schema = sec.get("schema", {}).get("wypis", {})
+
+    # ── Call 5a — stan + powód + dzień ───────────────────────────────────────
+    schema_5a = json.dumps(
+        {
             "wypis": {
-                "dzien_wypisu": f"Dzień 15, {data_wypisu}",
-                "stan_przy_wypisie": "Pacjent osiągnął akceptowalny poziom beznadziei.",
-                "powod_wypisu": "Wyczerpanie budżetu nadziei.",
-                "zalecenia_po_wypisie": [
-                    "Unikać optymizmu.",
-                    "Nie planować remontów.",
-                    "Nie pisać emaili.",
-                ],
-                "opis_pozegnania": "Pacjent wyszedł bez słowa. Drzwi zostawił otwarte.",
+                "dzien_wypisu": wypis_schema.get("dzien_wypisu", f"Dzień 15, {data_wypisu}"),
+                "stan_przy_wypisie": wypis_schema.get("stan_przy_wypisie", "4 zdania nawiązujące do emaila"),
+                "powod_wypisu": wypis_schema.get("powod_wypisu", "2-3 zdania nawiązujące do emaila"),
             }
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_5a = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"DATA WYPISU (dzień 15): {data_wypisu}\n\n"
+        f"SCHEMAT JSON (TYLKO klucze w wypis: dzien_wypisu, stan_przy_wypisie, powod_wypisu):\n{schema_5a}\n\n"
+        f"stan_przy_wypisie: 4 zdania. Absurdalna poprawa lub pogłębienie nihilizmu. Nawiązuje do emaila.\n"
+        f"powod_wypisu: 2-3 zdania oficjalnego uzasadnienia wypisu nawiązującego do emaila.\n"
+        f"LIMIT: każde pole max 300 znaków. Zwróć TYLKO czysty JSON."
+    )
+    raw_5a = call_deepseek(system, user_5a, MODEL_TYLER, max_tokens=1200)
+    result_5a = _parse_json_safe(raw_5a, "wypis_5a")
+    if not isinstance(result_5a, dict):
+        result_5a = {}
+    current_app.logger.info(
+        "[psych-raport] 5a wypis stan OK: %s",
+        bool(result_5a.get("wypis", {}).get("stan_przy_wypisie")),
+    )
+
+    # ── Call 5b — zalecenia + pożegnanie ─────────────────────────────────────
+    schema_5b = json.dumps(
+        {
+            "wypis": {
+                "zalecenia_po_wypisie": wypis_schema.get(
+                    "zalecenia_po_wypisie",
+                    "Lista 5-7 zaleceń absurdalnych nawiązujących do emaila",
+                ),
+                "opis_pozegnania": wypis_schema.get(
+                    "opis_pozegnania",
+                    "2-3 zdania opisu pożegnania pacjenta. Absurdalne. Nawiązuje do emaila.",
+                ),
+            }
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_5b = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"SCHEMAT JSON (TYLKO klucze w wypis: zalecenia_po_wypisie, opis_pozegnania):\n{schema_5b}\n\n"
+        f"zalecenia_po_wypisie: lista 5-7 konkretnych zaleceń absurdalnych nawiązujących do emaila. "
+        f"Każde zalecenie to jedno zdanie — brak ogólników.\n"
+        f"opis_pozegnania: 2-3 zdania opisujące jak pacjent wyszedł — absurdalnie, nawiązuje do emaila.\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw_5b = call_deepseek(system, user_5b, MODEL_TYLER, max_tokens=1200)
+    result_5b = _parse_json_safe(raw_5b, "wypis_5b")
+    if not isinstance(result_5b, dict):
+        result_5b = {}
+    current_app.logger.info(
+        "[psych-raport] 5b wypis zalecenia OK: %s",
+        bool(result_5b.get("wypis", {}).get("zalecenia_po_wypisie")),
+    )
+
+    # ── Scal wypis z obu callów ───────────────────────────────────────────────
+    wypis_merged = {}
+    wypis_merged.update(result_5a.get("wypis", {}))
+    wypis_merged.update(result_5b.get("wypis", {}))
+
+    if wypis_merged:
+        return {"wypis": wypis_merged}
+
+    return {
+        "wypis": {
+            "dzien_wypisu": f"Dzień 15, {data_wypisu}",
+            "stan_przy_wypisie": "Pacjent osiągnął akceptowalny poziom beznadziei.",
+            "powod_wypisu": "Wyczerpanie budżetu nadziei.",
+            "zalecenia_po_wypisie": [
+                "Unikać optymizmu.",
+                "Nie planować remontów.",
+                "Nie pisać emaili.",
+            ],
+            "opis_pozegnania": "Pacjent wyszedł bez słowa. Drzwi zostawił otwarte.",
         }
-    return result
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -732,22 +959,84 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 
 
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
+    """
+    Podzielone na 2 osobne wywołania DeepSeek:
+      6a — diagnoza_wstepna + diagnoza_dodatkowa   (max_tokens: 1200)
+      6b — objawy + choroba_wspolistniejaca        (max_tokens: 1000)
+    """
     sec = cfg.get("deepseek_6_diagnozy_lacina", {})
     system = sec.get("system", "")
-    schema = json.dumps(sec.get("schema", {}), ensure_ascii=False, indent=2)
-    user = (
-        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        + (
-            f"POPRZEDNI EMAIL (dla diagnozy_dodatkowej):\n{previous_body[:1000]}\n\n"
-            if previous_body
-            else ""
-        )
-        + f"SCHEMAT JSON:\n{schema}\n\n"
-        f"LIMIT DŁUGOŚCI: Każde pole tekstowe maksymalnie 300 znaków. Zwróć TYLKO czysty JSON."
+    email_fragment = body[:MAX_DLUGOSC_EMAIL]
+    prev_fragment = previous_body[:1000] if previous_body else ""
+
+    # ── Call 6a — diagnozy wstępna + dodatkowa ────────────────────────────────
+    sec_6a = cfg.get("deepseek_6a_diagnozy_glowne", sec)
+    system_6a = sec_6a.get("system", system)
+    schema_6a = json.dumps(
+        {
+            "diagnoza_wstepna": sec.get("schema", {}).get(
+                "diagnoza_wstepna",
+                {"nazwa_lacinska": "...", "nazwa_polska": "...", "kod_dsm": "...", "opis_kliniczny": "..."},
+            ),
+            "diagnoza_dodatkowa": sec.get("schema", {}).get(
+                "diagnoza_dodatkowa",
+                {"nazwa_lacinska": "...", "nazwa_polska": "...", "kod_dsm": "...", "opis_kliniczny": "..."},
+            ),
+        },
+        ensure_ascii=False,
+        indent=2,
     )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=2000)
-    result = _parse_json_safe(raw, "diagnozy")
-    if not result or not isinstance(result, dict):
+    user_6a = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        + (f"POPRZEDNI EMAIL (dla diagnozy_dodatkowej):\n{prev_fragment}\n\n" if prev_fragment else "")
+        + f"SCHEMAT JSON (TYLKO klucze diagnoza_wstepna i diagnoza_dodatkowa):\n{schema_6a}\n\n"
+        f"Diagnozy: łacińskie nazwy absurdalne, nawiązujące do emaila. Styl Szwejka.\n"
+        f"LIMIT: każde pole opis_kliniczny max 300 znaków. Zwróć TYLKO czysty JSON."
+    )
+    raw_6a = call_deepseek(system_6a, user_6a, MODEL_TYLER, max_tokens=1200)
+    result_6a = _parse_json_safe(raw_6a, "diagnozy_6a")
+    if not isinstance(result_6a, dict):
+        result_6a = {}
+    current_app.logger.info(
+        "[psych-raport] 6a diagnozy_wstepna OK: %s", bool(result_6a.get("diagnoza_wstepna"))
+    )
+
+    # ── Call 6b — objawy + choroba_wspolistniejaca ────────────────────────────
+    sec_6b = cfg.get("deepseek_6b_objawy", sec)
+    system_6b = sec_6b.get("system", system)
+    schema_6b = json.dumps(
+        {
+            "objawy": sec.get("schema", {}).get(
+                "objawy", "Lista 5-8 objawów klinicznych nawiązujących do emaila"
+            ),
+            "choroba_wspolistniejaca": sec.get("schema", {}).get(
+                "choroba_wspolistniejaca",
+                "Absurdalna choroba współistniejąca nawiązująca do emaila lub '__BRAK__'",
+            ),
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_6b = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"SCHEMAT JSON (TYLKO klucze objawy i choroba_wspolistniejaca):\n{schema_6b}\n\n"
+        f"objawy: lista 5-8 konkretnych objawów klinicznych nawiązujących do słów z emaila. "
+        f"Styl: formalna diagnostyka psychiatryczna + absurd Monty Pythona.\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw_6b = call_deepseek(system_6b, user_6b, MODEL_TYLER, max_tokens=1000)
+    result_6b = _parse_json_safe(raw_6b, "diagnozy_6b_objawy")
+    if not isinstance(result_6b, dict):
+        result_6b = {}
+    current_app.logger.info(
+        "[psych-raport] 6b objawy OK: %s", bool(result_6b.get("objawy"))
+    )
+
+    result = {}
+    result.update(result_6a)
+    result.update(result_6b)
+
+    if not result or not result.get("diagnoza_wstepna"):
         return {
             "diagnoza_wstepna": {
                 "nazwa_lacinska": "Syndroma Emaili Desperati",
@@ -777,10 +1066,12 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
     """
-    Podzielone na TRZY osobne wywołania DeepSeek:
-      deepseek_7a — zalecenia_tylera + rokowanie          (max_tokens: 1500)
-      deepseek_7b — notatki_pielegniarek                  (max_tokens: 2500)
-      deepseek_7c — notatki_sprzataczki + incydenty       (max_tokens: 2500)
+    Podzielone na PIĘĆ osobnych wywołań DeepSeek:
+      deepseek_7a_zalecenia  — zalecenia_tylera             (max_tokens: 1000)
+      deepseek_7a_rokowanie  — rokowanie                    (max_tokens: 800)
+      deepseek_7b            — notatki_pielegniarek         (max_tokens: 1800)
+      deepseek_7c_sprzataczka — notatki_sprzataczki        (max_tokens: 1000)
+      deepseek_7c_incydenty  — incydenty_specjalne          (max_tokens: 1000)
     Wyniki scalane w jeden dict.
     """
     sec_7 = cfg.get("deepseek_7_zalecenia_notatki", {})
@@ -794,106 +1085,155 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
                 f"Dzień {d.get('dzien', '?')}: {str(d['zdarzenie'])[:120]}"
             )
     zdarzenia_str = "\n".join(zdarzenia[:14]) if zdarzenia else "(brak)"
-
     email_fragment = body[:MAX_DLUGOSC_EMAIL]
 
-    # ── deepseek_7a — ZALECENIA + ROKOWANIE ──────────────────────────────────────
-    schema_7a = json.dumps(
+    # ── deepseek_7a_zalecenia — TYLKO zalecenia_tylera ───────────────────────
+    schema_7a_zal = json.dumps(
         {
             "zalecenia_tylera": sec_7.get("schema", {}).get(
                 "zalecenia_tylera",
                 {
                     "naglowek": "RACHUNEK ZA WYZWOLENIE — ZADANIE OBOWIĄZKOWE",
-                    "zadanie_1": "...",
+                    "zadanie_1": "Min. 5-6 zdań. Konkretny przedmiot/plan/rzecz z emaila.",
                     "podpis": "Tyler Durden",
                 },
-            ),
-            "rokowanie": sec_7.get("schema", {}).get(
-                "rokowanie", "Min. 5-6 zdań. Bezlitosne. Nawiązuje do emaila."
-            ),
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
-
-    user_7a = (
-        f"EMAIL PACJENTA (PRIORYTET — każde pole MUSI nawiązywać do treści emaila):\n{email_fragment}\n\n"
-        f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
-        f"SCHEMAT JSON (wypełnij TYLKO te klucze):\n{schema_7a}\n\n"
-        f"zalecenia_tylera.zadanie_1: min. 5-6 zdań, konkretny przedmiot/plan/rzecz z emaila.\n"
-        f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do emaila.\n"
-        f"Zwróć TYLKO czysty JSON."
-    )
-    raw_7a = call_deepseek(system_7, user_7a, MODEL_TYLER, max_tokens=1500)
-    result_7a = _parse_json_safe(raw_7a, "zalecenia_7a")
-    if not isinstance(result_7a, dict):
-        result_7a = {}
-
-    # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
-
-    # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────────
-    schema_7b = json.dumps(
-        {
-            "notatki_pielegniarek": sec_7.get("schema", {}).get(
-                "notatki_pielegniarek",
-                "Lista MINIMUM 10 obiektów: {imie_pielegniarki, data, tresc}",
             )
         },
         ensure_ascii=False,
         indent=2,
     )
-
-    user_7b = (
-        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+    user_7a_zal = (
+        f"EMAIL PACJENTA (każde pole MUSI nawiązywać do treści emaila):\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
-        f"SCHEMAT JSON (wypełnij TYLKO klucz notatki_pielegniarek):\n{schema_7b}\n\n"
-        f"notatki_pielegniarek: DOKŁADNIE 3 obiekty. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
-        f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
-        f"nawiązuje do KONKRETNYCH zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
-        f"KAŻDA notatka musi nawiązywać do INNEGO zdarzenia i INNEGO dnia.\n"
-        f"LIMIT DŁUGOŚCI: Pole tresc maksymalnie 400 znaków. Zwróć TYLKO czysty JSON."
+        f"SCHEMAT JSON (TYLKO klucz zalecenia_tylera):\n{schema_7a_zal}\n\n"
+        f"zalecenia_tylera.zadanie_1: min. 5-6 zdań, konkretny przedmiot/plan/rzecz z emaila.\n"
+        f"Zwróć TYLKO czysty JSON."
     )
-    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER, max_tokens=2500)
-    result_7b = _parse_json_safe(raw_7b, "zalecenia_7b")
-    if not isinstance(result_7b, dict):
-        result_7b = {}
+    raw_7a_zal = call_deepseek(system_7, user_7a_zal, MODEL_TYLER, max_tokens=1000)
+    result_7a_zal = _parse_json_safe(raw_7a_zal, "zalecenia_7a_zalecenia")
+    if not isinstance(result_7a_zal, dict):
+        result_7a_zal = {}
+    current_app.logger.info(
+        "[psych-raport] 7a_zalecenia OK: %s", bool(result_7a_zal.get("zalecenia_tylera"))
+    )
 
-    # ── deepseek_7c — NOTATKI SPRZĄTACZKI + INCYDENTY ────────────────────────────
-    schema_7c = json.dumps(
+    # ── deepseek_7a_rokowanie — TYLKO rokowanie ───────────────────────────────
+    schema_7a_rok = json.dumps(
         {
-            "notatki_sprzataczki": sec_7.get("schema", {}).get(
-                "notatki_sprzataczki", "Lista MINIMUM 10 obiektów: {data, tresc}"
-            ),
-            "incydenty_specjalne": sec_7.get("schema", {}).get(
-                "incydenty_specjalne", "Lista MINIMUM 10 incydentów po 4-5 zdań"
-            ),
+            "rokowanie": sec_7.get("schema", {}).get(
+                "rokowanie", "Min. 5-6 zdań. Bezlitosne. Nawiązuje do emaila."
+            )
         },
         ensure_ascii=False,
         indent=2,
     )
+    user_7a_rok = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz rokowanie):\n{schema_7a_rok}\n\n"
+        f"rokowanie: min. 5-6 zdań, bezlitosne, każde zdanie nawiązuje do konkretnego słowa z emaila. "
+        f"Styl: formalny raport psychiatryczny + nihilizm Tylera Durdena.\n"
+        f"Zwróć TYLKO czysty JSON."
+    )
+    raw_7a_rok = call_deepseek(system_7, user_7a_rok, MODEL_TYLER, max_tokens=800)
+    result_7a_rok = _parse_json_safe(raw_7a_rok, "zalecenia_7a_rokowanie")
+    if not isinstance(result_7a_rok, dict):
+        result_7a_rok = {}
+    current_app.logger.info(
+        "[psych-raport] 7a_rokowanie OK: %s", bool(result_7a_rok.get("rokowanie"))
+    )
 
-    user_7c = (
+    # ── deepseek_7b — NOTATKI PIELĘGNIAREK ───────────────────────────────────
+    schema_7b = json.dumps(
+        {
+            "notatki_pielegniarek": sec_7.get("schema", {}).get(
+                "notatki_pielegniarek",
+                "Lista MINIMUM 3 obiektów: {imie_pielegniarki, data, tresc}",
+            )
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_7b = (
         f"EMAIL PACJENTA:\n{email_fragment}\n\n"
         f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
-        f"SCHEMAT JSON (wypełnij TYLKO klucze notatki_sprzataczki i incydenty_specjalne):\n{schema_7c}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz notatki_pielegniarek):\n{schema_7b}\n\n"
+        f"notatki_pielegniarek: DOKŁADNIE 3 obiekty. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
+        f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
+        f"nawiązuje do KONKRETNYCH zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
+        f"KAŻDA notatka nawiązuje do INNEGO zdarzenia i INNEGO dnia.\n"
+        f"LIMIT: pole tresc max 400 znaków. Zwróć TYLKO czysty JSON."
+    )
+    raw_7b = call_deepseek(system_7, user_7b, MODEL_TYLER, max_tokens=1800)
+    result_7b = _parse_json_safe(raw_7b, "zalecenia_7b")
+    if not isinstance(result_7b, dict):
+        result_7b = {}
+    current_app.logger.info(
+        "[psych-raport] 7b notatki_pielegniarek OK: %s",
+        bool(result_7b.get("notatki_pielegniarek")),
+    )
+
+    # ── deepseek_7c_sprzataczka — TYLKO notatki_sprzataczki ──────────────────
+    schema_7c_sp = json.dumps(
+        {
+            "notatki_sprzataczki": sec_7.get("schema", {}).get(
+                "notatki_sprzataczki", "Lista 3 obiektów: {data, tresc}"
+            )
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_7c_sp = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz notatki_sprzataczki):\n{schema_7c_sp}\n\n"
         f"notatki_sprzataczki: DOKŁADNIE 3 obiekty. Każdy: data (DD.MM.YYYY), "
-        f"tresc (2-3 zdania — co znalazła sprzątając salę, gwarą polską, absurdalny humor biurokratycznej powagi wobec nonsensu, "
-        f"nawiązuje do emaila pacjenta). KAŻDA notatka musi mówić o INNYM znalezisku.\n"
+        f"tresc (2-3 zdania — co znalazła sprzątając salę, gwarą polską, absurdalny humor biurokratycznej powagi, "
+        f"nawiązuje do emaila pacjenta). KAŻDA notatka mówi o INNYM znalezisku.\n"
+        f"LIMIT: pole tresc max 400 znaków. Zwróć TYLKO czysty JSON."
+    )
+    raw_7c_sp = call_deepseek(system_7, user_7c_sp, MODEL_TYLER, max_tokens=1000)
+    result_7c_sp = _parse_json_safe(raw_7c_sp, "zalecenia_7c_sprzataczka")
+    if not isinstance(result_7c_sp, dict):
+        result_7c_sp = {}
+    current_app.logger.info(
+        "[psych-raport] 7c_sprzataczka OK: %s",
+        bool(result_7c_sp.get("notatki_sprzataczki")),
+    )
+
+    # ── deepseek_7c_incydenty — TYLKO incydenty_specjalne ────────────────────
+    schema_7c_inc = json.dumps(
+        {
+            "incydenty_specjalne": sec_7.get("schema", {}).get(
+                "incydenty_specjalne", "Lista 2 incydentów po 4-5 zdań"
+            )
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_7c_inc = (
+        f"EMAIL PACJENTA:\n{email_fragment}\n\n"
+        f"KLUCZOWE ZDARZENIA Z HOSPITALIZACJI:\n{zdarzenia_str}\n\n"
+        f"SCHEMAT JSON (TYLKO klucz incydenty_specjalne):\n{schema_7c_inc}\n\n"
         f"incydenty_specjalne: DOKŁADNIE 2 incydenty, każdy 4-5 zdań, NAPRAWDĘ absurdalnych i śmiesznych, "
         f"nawiązujących do emaila. KAŻDY incydent INNY motyw. "
         f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
-        f"LIMIT DŁUGOŚCI: Pole tresc/opis maksymalnie 400 znaków na obiekt. Zwróć TYLKO czysty JSON."
+        f"LIMIT: każdy incydent max 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_7c = call_deepseek(system_7, user_7c, MODEL_TYLER, max_tokens=2500)
-    result_7c = _parse_json_safe(raw_7c, "zalecenia_7c")
-    if not isinstance(result_7c, dict):
-        result_7c = {}
+    raw_7c_inc = call_deepseek(system_7, user_7c_inc, MODEL_TYLER, max_tokens=1000)
+    result_7c_inc = _parse_json_safe(raw_7c_inc, "zalecenia_7c_incydenty")
+    if not isinstance(result_7c_inc, dict):
+        result_7c_inc = {}
+    current_app.logger.info(
+        "[psych-raport] 7c_incydenty OK: %s",
+        bool(result_7c_inc.get("incydenty_specjalne")),
+    )
 
-    # ── Scal wyniki trzech wywołań ────────────────────────────────────────────
+    # ── Scal wyniki pięciu wywołań ────────────────────────────────────────────
     result = {}
-    result.update(result_7a)
+    result.update(result_7a_zal)
+    result.update(result_7a_rok)
     result.update(result_7b)
-    result.update(result_7c)
+    result.update(result_7c_sp)
+    result.update(result_7c_inc)
 
     if not result:
         return {
@@ -1013,35 +1353,66 @@ def _deepseek_tone_check(cfg: dict, raport: dict) -> dict:
 
 
 def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
+    """
+    Podzielone na 3 osobne wywołania DeepSeek:
+      cc_1 — sprawdź dane_pacjenta + cytaty_z_przyjecia   (max_tokens: 1500)
+      cc_2 — sprawdź diagnozy + depozyt + farmakologia    (max_tokens: 1500)
+      cc_3 — sprawdź zalecenia_tylera + rokowanie + wypis (max_tokens: 1500)
+    Każdy call dostaje tylko swój fragment raportu — nie cały.
+    """
     sec = cfg.get("deepseek_2_completeness_check", {})
     system = sec.get("system", "")
     instrukcje = "\n".join(sec.get("instrukcje", []))
+    email_fragment = body[:MAX_DLUGOSC_EMAIL]
 
     raport_slim = {k: v for k, v in raport.items() if k not in _DEEPSEEK_SKIP}
 
-    user = (
-        f"ORYGINALNY EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
-        f"RAPORT DO SPRAWDZENIA:\n{json.dumps(raport_slim, ensure_ascii=False, indent=2)}\n\n"
-        f"INSTRUKCJE:\n{instrukcje}\n\n"
-        f"Zwróć TYLKO czysty JSON z uzupełnionymi nawiązaniami do emaila."
-    )
-    current_app.logger.info(
-        "[psych-raport] DeepSeek completeness check START (slim=%d kluczy)",
-        len(raport_slim),
-    )
-    raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=2500)
-    if not raw:
-        current_app.logger.warning(
-            "[psych-raport] DeepSeek completeness → brak odpowiedzi, skip"
+    # Podział raportu na 3 grupy kluczy
+    keys_cc1 = {"dane_pacjenta", "numer_historii_choroby", "data_przyjecia", "powod_przyjecia"}
+    keys_cc2 = {"diagnoza_wstepna", "diagnoza_dodatkowa", "objawy", "choroba_wspolistniejaca",
+                "depozyt", "farmakologia"}
+    keys_cc3 = {"zalecenia_tylera", "rokowanie", "wypis", "leczenie_specjalne"}
+
+    def _run_cc(group_keys: set, label: str) -> dict:
+        fragment = {k: v for k, v in raport_slim.items() if k in group_keys}
+        if not fragment:
+            return {}
+        user = (
+            f"ORYGINALNY EMAIL PACJENTA:\n{email_fragment}\n\n"
+            f"FRAGMENT RAPORTU DO SPRAWDZENIA ({label}):\n"
+            f"{json.dumps(fragment, ensure_ascii=False, indent=2)}\n\n"
+            f"INSTRUKCJE:\n{instrukcje}\n\n"
+            f"Sprawdź TYLKO klucze podane powyżej. Pola '__BRAK__' — zostaw bez zmian.\n"
+            f"Zwróć TYLKO czysty JSON z poprawkami (ta sama struktura kluczy)."
         )
-        return raport
-    result = _parse_json_safe(raw, "deepseek_completeness")
-    if not result or not isinstance(result, dict):
-        return raport
-    merged = _merge_dicts(raport, result)
-    current_app.logger.info(
-        "[psych-raport] DeepSeek completeness OK — merge zastosowany"
-    )
+        current_app.logger.info(
+            "[psych-raport] completeness_check_%s START (%d kluczy)", label, len(fragment)
+        )
+        raw = call_deepseek(system, user, MODEL_TYLER, max_tokens=1500)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] completeness_check_%s → brak odpowiedzi", label
+            )
+            return {}
+        result = _parse_json_safe(raw, f"completeness_{label}")
+        if not isinstance(result, dict):
+            return {}
+        current_app.logger.info(
+            "[psych-raport] completeness_check_%s OK (%d kluczy)", label, len(result)
+        )
+        return result
+
+    merged = dict(raport)
+    for group_keys, label in [
+        (keys_cc1, "dane_cytaty"),
+        (keys_cc2, "diagnozy_depozyt"),
+        (keys_cc3, "zalecenia_wypis"),
+    ]:
+        result = _run_cc(group_keys, label)
+        if result:
+            merged = _merge_dicts(merged, result)
+
+    current_app.logger.info("[psych-raport] completeness_check DONE — 3 calle")
     return merged
 
 
