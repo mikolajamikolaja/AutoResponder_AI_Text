@@ -4712,27 +4712,20 @@ def build_zwykly_section(
             )
 
             if isinstance(analiza_res, dict):
-                diagram_jpg_b64 = None
-                interactive_html_b64 = None
 
+                # ── Dodaj WSZYSTKIE załączniki z dociekliwego do analiza_docx_list ──
                 for doc in analiza_res.get("docx_list", []):
                     if not isinstance(doc, dict) or not doc.get("base64"):
                         continue
-                    content_type = doc.get("content_type", "text/html")
-                    if content_type == "image/jpeg" and not diagram_jpg_b64:
-                        diagram_jpg_b64 = doc["base64"]
-                        logger.info(
-                            "[zwykly_dociekliwy_PROCESSED] ✓ Przetworzony JPG diagram: %d bytes (base64)",
-                            len(diagram_jpg_b64),
-                        )
-                    elif content_type == "text/html" and not interactive_html_b64:
-                        interactive_html_b64 = doc["base64"]
-                        logger.info(
-                            "[zwykly_dociekliwy_PROCESSED] ✓ Przetworzony SVG HTML: %d bytes (base64)",
-                            len(interactive_html_b64),
-                        )
+                    analiza_docx_list.append(doc)
+                    logger.info(
+                        "[zwykly_dociekliwy_ATTACH] ✓ Dodano załącznik z dociekliwego: %s (%s, %d bytes base64)",
+                        doc.get("filename", "?"),
+                        doc.get("content_type", "?"),
+                        len(doc["base64"]),
+                    )
 
-                # ── Upload HTM na Google Drive (zamiast załącznika do maila) ──
+                # ── Upload HTM na Google Drive ─────────────────────────────────────
                 htm_for_drive = analiza_res.get("htm_for_drive")
                 drive_url = None
                 if htm_for_drive and htm_for_drive.get("base64"):
@@ -4762,14 +4755,10 @@ def build_zwykly_section(
                             _drive_err,
                         )
 
-                # Nie dołączamy już HTM jako załącznik — trafia tylko na Drive
-
-                # Wstaw obrazek JPG inline — zlikwidowany (JPG usunięty z dociekliwego)
-
-                # Dolacz pierwsza odpowiedz tekstowa dociekliwego na koncu tresci maila
+                # ── Dołącz reply_html z dociekliwego na końcu treści maila ─────────
                 dociekliwy_reply = analiza_res.get("reply_html", "")
                 if dociekliwy_reply and dociekliwy_reply.strip():
-                    # Podmień placeholder linku Drive (przed wstawieniem do maila)
+                    # Podmień placeholder linku Drive
                     if drive_url:
                         dociekliwy_reply = dociekliwy_reply.replace(
                             "{DRIVE_LINK_PLACEHOLDER}", drive_url
@@ -4779,18 +4768,17 @@ def build_zwykly_section(
                             drive_url,
                         )
                     else:
-                        # Fallback: link niedostępny — ukryj przycisk i wstaw info
+                        # Fallback: brak linku Drive — zastąp href i tekst przycisku
                         dociekliwy_reply = dociekliwy_reply.replace(
                             "{DRIVE_LINK_PLACEHOLDER}", "#"
                         )
                         dociekliwy_reply = dociekliwy_reply.replace(
-                            "▶ Otwórz interaktywną grę Eryka",
-                            "(link niedostępny)",
+                            "&#9654; Kliknij w link by otrzyma&#263; odpowied&#378;",
+                            "&#9654; (link Drive niedost&#281;pny)",
                         )
                         logger.warning(
-                            "[zwykly_dociekliwy_PLACEHOLDER] ⚠️ Brak drive_url — wstawiono fallback '(link niedostępny)'"
+                            "[zwykly_dociekliwy_PLACEHOLDER] ⚠️ Brak drive_url — wstawiono fallback"
                         )
-                if dociekliwy_reply and dociekliwy_reply.strip():
                     logger.info(
                         "[zwykly_dociekliwy_REPLY] ✓ reply_html z dociekliwego: %d bytes",
                         len(dociekliwy_reply),
@@ -4810,6 +4798,7 @@ def build_zwykly_section(
                         )
                     else:
                         reply_html = reply_html + separator
+
 
         except Exception as e:
             logger.error(
