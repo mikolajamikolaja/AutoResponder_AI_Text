@@ -4633,13 +4633,49 @@ def build_zwykly_section(
     # Emotyka usunięta z odpowiedzi
     png_b64 = None
 
+    reply_html = build_html_reply(res_text)
+    analiza_docx_list = []
+    htm_for_drive = None   # HTM do zapisu na Drive (podmieni placeholder w reply_html)
+    drive_url = None       # URL pliku HTM na Drive (po wgraniu)
+
+    # Dociekliwy jest zawsze wywoływany osobno przez app.py jako sekcja 'analiza'.
+    # Zwykly NIE wywołuje dociekliwego — każdy responder wysyła osobny email.
+
+    # ── KROK 3: Raport psychiatryczny PRZED taskami pobocznymi ───────────────
+    # Raport ma ~18 callów DeepSeek — musi dostać czas jako pierwszy,
+    # żeby nie skończyć się na budżecie po ankiecie/horoskopie/grze.
+    try:
+        with app_obj.app_context():
+            r_res = build_raport(
+                body,
+                previous_body or "",
+                res_text,
+                nouns_dict,
+                sender_name,
+                session_vars.get("USER_GENDER", "patient"),
+                test_mode=test_mode,
+            )
+        if not isinstance(r_res, dict):
+            logger.error(
+                "[zwykly] Raport błąd: build_raport zwrócił %s zamiast dict",
+                type(r_res),
+            )
+            r_res = {}
+        raport_pdf = r_res.get("raport_pdf")
+        psych_photo_1 = r_res.get("psych_photo_1")
+        psych_photo_2 = r_res.get("psych_photo_2")
+        log_psych = r_res.get("log_psych")
+    except Exception as e:
+        logger.error("[zwykly] Raport błąd: %s", e)
+        log_psych = {"error": str(e)}
+
     # ── DEADLINE dla tasków pobocznych ────────────────────────────────────────
     # Render ma limit ~10 min. Każdy poniższy task to osobny call DeepSeek.
-    # Jeśli mamy mało czasu (>300s od startu) pomijamy kolejne taski.
+    # Jeśli mamy mało czasu pomijamy kolejne taski.
     import time as _time
 
     _start_ts = _time.monotonic()
-    _TASK_BUDGET_S = 240  # Max łączny czas na taski poboczne (4 min)
+    _TASK_BUDGET_S = 360  # Max łączny czas na taski poboczne (6 min)
 
     def _time_ok() -> bool:
         return (_time.monotonic() - _start_ts) < _TASK_BUDGET_S
@@ -4702,41 +4738,6 @@ def build_zwykly_section(
         return html.replace(
             '<div class="footer">', image_block + '<div class="footer">', 1
         )
-
-    reply_html = build_html_reply(res_text)
-    analiza_docx_list = []
-    htm_for_drive = None   # HTM do zapisu na Drive (podmieni placeholder w reply_html)
-    drive_url = None       # URL pliku HTM na Drive (po wgraniu)
-
-    # Dociekliwy jest zawsze wywoływany osobno przez app.py jako sekcja 'analiza'.
-    # Zwykly NIE wywołuje dociekliwego — każdy responder wysyła osobny email.
-
-    # ── KROK 3: Raport psychiatryczny SEKWENCYJNIE po tryptyku ───────────────
-    # Uruchamiamy po KROK 2, żeby nie rywalizować z tryptyk/ankieta/horo/rpg/gra
-    try:
-        with app_obj.app_context():
-            r_res = build_raport(
-                body,
-                previous_body or "",
-                res_text,
-                nouns_dict,
-                sender_name,
-                session_vars.get("USER_GENDER", "patient"),
-                test_mode=test_mode,
-            )
-        if not isinstance(r_res, dict):
-            logger.error(
-                "[zwykly] Raport błąd: build_raport zwrócił %s zamiast dict",
-                type(r_res),
-            )
-            r_res = {}
-        raport_pdf = r_res.get("raport_pdf")
-        psych_photo_1 = r_res.get("psych_photo_1")
-        psych_photo_2 = r_res.get("psych_photo_2")
-        log_psych = r_res.get("log_psych")
-    except Exception as e:
-        logger.error("[zwykly] Raport błąd: %s", e)
-        log_psych = {"error": str(e)}
 
     # ── FINALIZACJA ───────────────────────────────────────────────────────────
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", sender_name)[:30] or "Pacjent"

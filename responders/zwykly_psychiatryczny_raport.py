@@ -564,9 +564,9 @@ def _load_cfg() -> dict:
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
     """
     Podzielone na 3 osobne wywołania DeepSeek:
-      1a — dane_pacjenta + numer_historii + data_przyjecia  (max_tokens: 700)
-      1b — powod_przyjecia                                   (max_tokens: 1200)
-      1c — cytaty_z_przyjecia                               (max_tokens: 2500)
+      1a — dane_pacjenta + numer_historii + data_przyjecia  (max_tokens: 1050)
+      1b — powod_przyjecia                                   (max_tokens: 1800)
+      1c — cytaty_z_przyjecia                               (max_tokens: 3750)
     """
     sec = cfg.get("deepseek_1_pacjent", {})
     system = sec.get("system", "")
@@ -596,7 +596,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"ZAKAZ zwracania pól imie_nazwisko/wiek/adres na górnym poziomie JSON.\n"
         f"LIMIT: każde pole max 300 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_1a = call_deepseek(_s(system_1a), _u(user_1a), MODEL_TYLER, max_tokens=700)
+    raw_1a = call_deepseek(_s(system_1a), _u(user_1a), MODEL_TYLER, max_tokens=1050)
     result_1a = _parse_json_safe(raw_1a, "pacjent_1a_dane")
     if not isinstance(result_1a, dict):
         result_1a = {}
@@ -631,7 +631,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"Formalna dokumentacja medyczna z biurokratyczną powagą wobec nonsensu. Nihilizm w podtekście.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_1b = call_deepseek(_s(system_1b), _u(user_1b), MODEL_TYLER, max_tokens=1200)
+    raw_1b = call_deepseek(_s(system_1b), _u(user_1b), MODEL_TYLER, max_tokens=1800)
     result_1b = _parse_json_safe(raw_1b, "pacjent_1b_powod")
     if not isinstance(result_1b, dict):
         result_1b = {}
@@ -664,7 +664,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"kafkowski, absurdystyczny. Komentarz MUSI brzmieć jak autentyczna nota psychiatryczna.\n"
         f"LIMIT: każdy komentarz max 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_1c = call_deepseek(_s(system_1c), _u(user_1c), MODEL_TYLER, max_tokens=2500)
+    raw_1c = call_deepseek(_s(system_1c), _u(user_1c), MODEL_TYLER, max_tokens=3750)
     result_1c = _parse_json_safe(raw_1c, "pacjent_1c_cytaty")
     if not isinstance(result_1c, dict):
         result_1c = {}
@@ -697,8 +697,8 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
     """
     Podzielone na 2 osobne wywołania DeepSeek:
-      2a — depozyt przedmiotów          (max_tokens: 800)
-      2b — farmakologia (leki)          (max_tokens: 900)
+      2a — depozyt przedmiotów          (max_tokens: 1200)
+      2b — farmakologia (leki)          (max_tokens: 1350)
     """
     sec = cfg.get("deepseek_2_depozyt_leki", {})
     system = sec.get("system", "")
@@ -721,7 +721,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"Każdy z żartobliwą cechą udziwnioną. Posiadanie opisz jako działające na niekorzyść pacjenta.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_2a = call_deepseek(_s(system_2a), _u(user_2a), MODEL_TYLER, max_tokens=800)
+    raw_2a = call_deepseek(_s(system_2a), _u(user_2a), MODEL_TYLER, max_tokens=1200)
     result_2a = _parse_json_safe(raw_2a, "depozyt_2a")
     if not isinstance(result_2a, dict):
         result_2a = {}
@@ -745,7 +745,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         f"Dawkowanie ZAWSZE żartobliwe nawiązujące do emaila — NIGDY '1x dziennie'.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_2b = call_deepseek(_s(system_2b), _u(user_2b), MODEL_TYLER, max_tokens=900)
+    raw_2b = call_deepseek(_s(system_2b), _u(user_2b), MODEL_TYLER, max_tokens=1350)
     result_2b = _parse_json_safe(raw_2b, "depozyt_2b_farmakologia")
     if not isinstance(result_2b, dict):
         result_2b = {}
@@ -836,7 +836,7 @@ def _sekcja_tydzien(
     )
 
     section_name = f"tydzien{tydzien}_dni{'_'.join(str(d) for d in numery_dni)}"
-    raw = call_deepseek(system, _u(user), MODEL_TYLER, max_tokens=1500)
+    raw = call_deepseek(system, _u(user), MODEL_TYLER, max_tokens=2250)
     result = _parse_json_safe(raw, section_name)
 
     if isinstance(result, list):
@@ -868,8 +868,8 @@ def _sekcja_tydzien(
 def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
     """
     Podzielone na 2 osobne wywołania DeepSeek:
-      5a — stan_przy_wypisie + powod_wypisu + dzien_wypisu   (max_tokens: 1200)
-      5b — zalecenia_po_wypisie + opis_pozegnania             (max_tokens: 1200)
+      5a — stan_przy_wypisie + powod_wypisu + dzien_wypisu   (max_tokens: 1800)
+      5b — zalecenia_po_wypisie + opis_pozegnania             (max_tokens: 1800)
     """
     sec = cfg.get("deepseek_5_wypis", {})
     system = sec.get("system", "")
@@ -903,7 +903,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"powod_wypisu: 2-3 zdania oficjalnego uzasadnienia wypisu nawiązującego do emaila.\n"
         f"LIMIT: każde pole max 300 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_5a = call_deepseek(system, _u(user_5a), MODEL_TYLER, max_tokens=1200)
+    raw_5a = call_deepseek(system, _u(user_5a), MODEL_TYLER, max_tokens=1800)
     result_5a = _parse_json_safe(raw_5a, "wypis_5a")
     if not isinstance(result_5a, dict):
         result_5a = {}
@@ -937,7 +937,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
         f"opis_pozegnania: 2-3 zdania opisujące jak pacjent wyszedł — absurdalnie, nawiązuje do emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_5b = call_deepseek(system, _u(user_5b), MODEL_TYLER, max_tokens=1200)
+    raw_5b = call_deepseek(system, _u(user_5b), MODEL_TYLER, max_tokens=1800)
     result_5b = _parse_json_safe(raw_5b, "wypis_5b")
     if not isinstance(result_5b, dict):
         result_5b = {}
@@ -977,8 +977,8 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
     """
     Podzielone na 2 osobne wywołania DeepSeek:
-      6a — diagnoza_wstepna + diagnoza_dodatkowa   (max_tokens: 1200)
-      6b — objawy + choroba_wspolistniejaca        (max_tokens: 1000)
+      6a — diagnoza_wstepna + diagnoza_dodatkowa   (max_tokens: 1800)
+      6b — objawy + choroba_wspolistniejaca        (max_tokens: 1500)
     """
     sec = cfg.get("deepseek_6_diagnozy_lacina", {})
     system = sec.get("system", "")
@@ -1009,7 +1009,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         f"Diagnozy: łacińskie nazwy absurdalne, nawiązujące do emaila. Styl Szwejka.\n"
         f"LIMIT: każde pole opis_kliniczny max 300 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_6a = call_deepseek(_s(system_6a), _u(user_6a), MODEL_TYLER, max_tokens=1200)
+    raw_6a = call_deepseek(_s(system_6a), _u(user_6a), MODEL_TYLER, max_tokens=1800)
     result_6a = _parse_json_safe(raw_6a, "diagnozy_6a")
     if not isinstance(result_6a, dict):
         result_6a = {}
@@ -1040,7 +1040,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         f"Styl: formalna diagnostyka psychiatryczna + absurd Monty Pythona.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_6b = call_deepseek(_s(system_6b), _u(user_6b), MODEL_TYLER, max_tokens=1000)
+    raw_6b = call_deepseek(_s(system_6b), _u(user_6b), MODEL_TYLER, max_tokens=1500)
     result_6b = _parse_json_safe(raw_6b, "diagnozy_6b_objawy")
     if not isinstance(result_6b, dict):
         result_6b = {}
@@ -1083,11 +1083,11 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
     """
     Podzielone na PIĘĆ osobnych wywołań DeepSeek:
-      deepseek_7a_zalecenia  — zalecenia_tylera             (max_tokens: 1000)
-      deepseek_7a_rokowanie  — rokowanie                    (max_tokens: 800)
-      deepseek_7b            — notatki_pielegniarek         (max_tokens: 1800)
-      deepseek_7c_sprzataczka — notatki_sprzataczki        (max_tokens: 1000)
-      deepseek_7c_incydenty  — incydenty_specjalne          (max_tokens: 1000)
+      deepseek_7a_zalecenia  — zalecenia_tylera             (max_tokens: 1500)
+      deepseek_7a_rokowanie  — rokowanie                    (max_tokens: 1200)
+      deepseek_7b            — notatki_pielegniarek         (max_tokens: 2700)
+      deepseek_7c_sprzataczka — notatki_sprzataczki        (max_tokens: 1500)
+      deepseek_7c_incydenty  — incydenty_specjalne          (max_tokens: 1500)
     Wyniki scalane w jeden dict.
     """
     sec_7 = cfg.get("deepseek_7_zalecenia_notatki", {})
@@ -1125,7 +1125,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"zalecenia_tylera.zadanie_1: min. 5-6 zdań, konkretny przedmiot/plan/rzecz z emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a_zal = call_deepseek(_s(system_7), _u(user_7a_zal), MODEL_TYLER, max_tokens=1000)
+    raw_7a_zal = call_deepseek(_s(system_7), _u(user_7a_zal), MODEL_TYLER, max_tokens=1500)
     result_7a_zal = _parse_json_safe(raw_7a_zal, "zalecenia_7a_zalecenia")
     if not isinstance(result_7a_zal, dict):
         result_7a_zal = {}
@@ -1150,7 +1150,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Styl: formalny raport psychiatryczny + nihilizm Tylera Durdena.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a_rok = call_deepseek(_s(system_7), _u(user_7a_rok), MODEL_TYLER, max_tokens=800)
+    raw_7a_rok = call_deepseek(_s(system_7), _u(user_7a_rok), MODEL_TYLER, max_tokens=1200)
     result_7a_rok = _parse_json_safe(raw_7a_rok, "zalecenia_7a_rokowanie")
     if not isinstance(result_7a_rok, dict):
         result_7a_rok = {}
@@ -1179,7 +1179,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"KAŻDA notatka nawiązuje do INNEGO zdarzenia i INNEGO dnia.\n"
         f"LIMIT: pole tresc max 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_7b = call_deepseek(_s(system_7), _u(user_7b), MODEL_TYLER, max_tokens=1800)
+    raw_7b = call_deepseek(_s(system_7), _u(user_7b), MODEL_TYLER, max_tokens=2700)
     result_7b = _parse_json_safe(raw_7b, "zalecenia_7b")
     if not isinstance(result_7b, dict):
         result_7b = {}
@@ -1206,7 +1206,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"nawiązuje do emaila pacjenta). KAŻDA notatka mówi o INNYM znalezisku.\n"
         f"LIMIT: pole tresc max 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_7c_sp = call_deepseek(_s(system_7), _u(user_7c_sp), MODEL_TYLER, max_tokens=1000)
+    raw_7c_sp = call_deepseek(_s(system_7), _u(user_7c_sp), MODEL_TYLER, max_tokens=1500)
     result_7c_sp = _parse_json_safe(raw_7c_sp, "zalecenia_7c_sprzataczka")
     if not isinstance(result_7c_sp, dict):
         result_7c_sp = {}
@@ -1234,7 +1234,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"LIMIT: każdy incydent max 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_7c_inc = call_deepseek(_s(system_7), _u(user_7c_inc), MODEL_TYLER, max_tokens=1000)
+    raw_7c_inc = call_deepseek(_s(system_7), _u(user_7c_inc), MODEL_TYLER, max_tokens=1500)
     result_7c_inc = _parse_json_safe(raw_7c_inc, "zalecenia_7c_incydenty")
     if not isinstance(result_7c_inc, dict):
         result_7c_inc = {}
@@ -1296,7 +1296,7 @@ def _sekcja_flux_prompty(
         f"SCHEMAT JSON:\n{schema}\n\n"
         f"Zwróć TYLKO czysty JSON z dwoma promptami FLUX po angielsku."
     )
-    raw = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=1500)
+    raw = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=2250)
     result = _parse_json_safe(raw, "flux_prompty")
     if not result or not isinstance(result, dict):
         objects_critical = f"CRITICAL OBJECTS: {nouns_str}."
@@ -1371,9 +1371,9 @@ def _deepseek_tone_check(cfg: dict, raport: dict) -> dict:
 def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
     """
     Podzielone na 3 osobne wywołania DeepSeek:
-      cc_1 — sprawdź dane_pacjenta + cytaty_z_przyjecia   (max_tokens: 1500)
-      cc_2 — sprawdź diagnozy + depozyt + farmakologia    (max_tokens: 1500)
-      cc_3 — sprawdź zalecenia_tylera + rokowanie + wypis (max_tokens: 1500)
+      cc_1 — sprawdź dane_pacjenta + cytaty_z_przyjecia   (max_tokens: 2250)
+      cc_2 — sprawdź diagnozy + depozyt + farmakologia    (max_tokens: 2250)
+      cc_3 — sprawdź zalecenia_tylera + rokowanie + wypis (max_tokens: 2250)
     Każdy call dostaje tylko swój fragment raportu — nie cały.
     """
     sec = cfg.get("deepseek_2_completeness_check", {})
@@ -1404,7 +1404,7 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
         current_app.logger.info(
             "[psych-raport] completeness_check_%s START (%d kluczy)", label, len(fragment)
         )
-        raw = call_deepseek(system, _u(user), MODEL_TYLER, max_tokens=1500)
+        raw = call_deepseek(system, _u(user), MODEL_TYLER, max_tokens=2250)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] completeness_check_%s → brak odpowiedzi", label
@@ -1469,7 +1469,7 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
     )
 
     # 6 świadków × 5 zdań + gwara + kontekst = potrzeba dużo tokenów
-    raw = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=3000)
+    raw = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=4500)
     result = _parse_json_safe(raw, "relacje_swiadkow")
 
     if not result:
