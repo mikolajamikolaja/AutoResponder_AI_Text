@@ -1588,6 +1588,17 @@ def _generate_flux(
 
     current_app.logger.info("[psych-flux] %s — prompt %.120s...", label, prompt)
 
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "num_inference_steps": steps,
+            "guidance_scale": guidance,
+            "width": width,
+            "height": height,
+            "seed": random.randint(0, 2**32 - 1),
+        },
+    }
+
     for name, token in tokens:
         headers = {"Authorization": f"Bearer {token}", "Accept": "image/png"}
         try:
