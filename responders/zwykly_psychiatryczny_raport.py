@@ -209,8 +209,14 @@ def _normalize_json_text(raw: str) -> str:
     return raw.strip()
 
 
-_JSON_FORCE_SUFFIX = '\n\nOdpowiedź (zacznij od {):'
-_JSON_FORCE_SYSTEM = 'ZAWSZE zacznij odpowiedź od znaku {. Zakaz jakiegokolwiek tekstu przed {.'
+_JSON_FORCE_SUFFIX = '\n\nOdpowiedź TYLKO w formacie JSON. Pierwszym znakiem MUSI być {. Ostatnim znakiem MUSI być }. Absolutny zakaz jakiegokolwiek tekstu, prozy, wyjaśnień ani komentarzy przed { lub po }. Zacznij od { :'
+_JSON_FORCE_SYSTEM = (
+    'KRYTYCZNE: Twoja odpowiedź to WYŁĄCZNIE czysty JSON. '
+    'Pierwszym znakiem odpowiedzi MUSI być {. Ostatnim znakiem MUSI być }. '
+    'Absolutny zakaz pisania czegokolwiek przed { — żadnej prozy, żadnych wyjaśnień, żadnego "Oto JSON:", żadnych komentarzy. '
+    'Absolutny zakaz pisania czegokolwiek po } — żadnych podsumowań, żadnych uwag. '
+    'Cała odpowiedź = jeden obiekt JSON od { do }. Nic poza tym.'
+)
 
 
 def _u(user_prompt: str) -> str:
