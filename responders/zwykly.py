@@ -1660,11 +1660,17 @@ def _generate_flux_image(
     if not tokens:
         if hf_tokens.all_dead():
             logger.warning(
-                "[flux-tyler] Wszystkie tokenów HF na czarnej liście (402/401/403) — "
-                "pomijam generowanie obrazka"
+                "[flux-tyler] Wszystkie tokeny HF na czarnej liście (402/401/403) — "
+                "używam zastepczy.jpg zamiast FLUX"
             )
         else:
-            logger.error("[flux-tyler] Brak tokenów HF w zmiennych środowiskowych!")
+            logger.error("[flux-tyler] Brak tokenów HF w zmiennych środowiskowych — używam zastepczy.jpg")
+        # Fallback do zastępczego obrazka — tak jak test_mode
+        substitute = _load_substitute_image()
+        if substitute:
+            substitute = dict(substitute)
+            substitute["filename"] = f"tyler_panel{panel_index}_zastepczy.jpg"
+            return substitute
         return None
 
     seed = random.randint(0, 2**32 - 1)
@@ -1750,7 +1756,12 @@ def _generate_flux_image(
         except Exception as e:
             logger.warning("[flux-tyler] ❌ Token %s: wyjątek: %s", name, str(e)[:80])
 
-    logger.error("[flux-tyler] Wszystkie tokeny HF zawiodły dla panelu %d", panel_index)
+    logger.error("[flux-tyler] Wszystkie tokeny HF zawiodły dla panelu %d — używam zastepczy.jpg", panel_index)
+    substitute = _load_substitute_image()
+    if substitute:
+        substitute = dict(substitute)
+        substitute["filename"] = f"tyler_panel{panel_index}_zastepczy.jpg"
+        return substitute
     return None
 
 
