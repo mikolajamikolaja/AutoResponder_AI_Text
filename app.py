@@ -797,7 +797,7 @@ def webhook():
             elif name == "emocje":
                 def fn():
                     from responders.emocje import build_emocje_section
-                    return build_emocje_section(body=_body, sender_name=_sender_name, attachments=_attachments)
+                    return build_emocje_section(body=_body, sender_name=_sender_name, sender_email=_sender, attachments=_attachments)
                 return fn
             elif name == "generator_pdf":
                 def fn():

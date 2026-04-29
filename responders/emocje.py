@@ -59,10 +59,15 @@ def _fallback_prompt() -> dict:
             "Przeczytaj poniższą wiadomość i wygeneruj ciepłą, empatyczną odpowiedź pocieszenia.\n\n"
             "### WIADOMOŚĆ:\n{{MAIL}}\n\n"
             "### IMIĘ NADAWCY:\n{{SENDER_NAME}}\n\n"
+            "### WYMAGANIA ODPOWIEDZI:\n"
+            "- Pole 'pocieszenie' MUSI zawierać co najmniej 4-6 akapitów HTML (<p>...</p>)\n"
+            "- Każdy akapit powinien mieć 2-4 zdania\n"
+            "- NIE pisz tylko jednego zdania — to jest pełna odpowiedź na email\n"
+            "- Odpowiedź ma być ciepła, osobista, odwoływać się do konkretnych słów z wiadomości\n\n"
             "### SCHEMAT JSON:\n"
             "{\n"
             '  "metoda": "nazwa wybranej metody pocieszenia",\n'
-            '  "pocieszenie": "pełna odpowiedź HTML gotowa do wysłania",\n'
+            '  "pocieszenie": "<p>akapit 1...</p><p>akapit 2...</p><p>akapit 3...</p>...",\n'
             '  "nastroj": "smutek|lęk|frustracja|ból|neutralna|złość|samotność",\n'
             '  "intensywnosc": 0\n'
             "}"
@@ -132,6 +137,29 @@ def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict
 
 def _safe_label(text: str) -> str:
     return re.sub(r'[\\/*?:"<>|,. ]', "_", text)[:40]
+
+
+def _wyciagnij_imie(sender_name: str, sender_email: str = "") -> str:
+    """
+    Zwraca imię do wyświetlenia.
+    Jeśli sender_name jest pusty lub wygląda jak adres email — wyciąga
+    lokalną część emaila i kapitalizuje ją jako imię.
+    """
+    name = (sender_name or "").strip()
+
+    # Jeśli sender_name jest adresem email lub pustym — użyj emaila
+    if not name or "@" in name:
+        if sender_email:
+            local = sender_email.split("@")[0]
+            # Wyczyść cyfry i znaki specjalne, zostaw pierwsze słowo
+            local = re.sub(r"[._+\-]", " ", local).strip()
+            local = re.split(r"\s+", local)[0]  # tylko pierwsze słowo (imię)
+            local = re.sub(r"\d+", "", local).strip()  # usuń cyfry
+            if local:
+                return local.capitalize()
+        return ""  # brak imienia — powitanie zostanie pominięte
+
+    return name
 
 
 def _nastroj_do_koloru(nastroj: str) -> dict:
@@ -407,6 +435,7 @@ body{{background:#fdf8f3;font-family:'DM Mono',monospace;color:#2a1f14;padding:2
 def build_emocje_section(
     body: str,
     sender_name: str = "",
+    sender_email: str = "",
     attachments: list = None,
     test_mode: bool = False,
 ) -> dict:
@@ -435,11 +464,14 @@ def build_emocje_section(
             "docs": [],
         }
 
-    sl = _safe_label(sender_name or "mail")
+    # ── Wyciągnij imię — z sender_name lub z adresu email ────────────────────
+    imie = _wyciagnij_imie(sender_name, sender_email)
+
+    sl = _safe_label(imie or sender_email or "mail")
 
     # ── Wywołanie AI ──────────────────────────────────────────────────────────
 
-    result = _generuj_pocieszenie(mail_text, sender_name, prompt_data)
+    result = _generuj_pocieszenie(mail_text, imie, prompt_data)
 
     if not result:
         logger.warning("[emocje] AI nie zwróciło wyniku — używam fallbacku")
@@ -462,17 +494,17 @@ def build_emocje_section(
 
     # ── Miniatura JPG ─────────────────────────────────────────────────────────
 
-    jpg_b64 = _buduj_jpg_b64(nastroj, metoda, sender_name)
+    jpg_b64 = _buduj_jpg_b64(nastroj, metoda, imie)
 
     # ── reply_html ────────────────────────────────────────────────────────────
 
-    reply_html = _buduj_html_email(pocieszenie_html, sender_name, metoda, nastroj, jpg_b64)
+    reply_html = _buduj_html_email(pocieszenie_html, imie, metoda, nastroj, jpg_b64)
 
     # ── Załączniki ────────────────────────────────────────────────────────────
 
     # 1. SVG diagram
     try:
-        svg_content = _buduj_svg(pocieszenie_html, metoda, nastroj, sender_name)
+        svg_content = _buduj_svg(pocieszenie_html, metoda, nastroj, imie)
         svg_htm = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <title>Diagram pocieszenia</title>
@@ -500,7 +532,7 @@ def build_emocje_section(
 
     # 3. Pełny HTML
     try:
-        pelny = _buduj_pelny_html(pocieszenie_html, sender_name, metoda, nastroj)
+        pelny = _buduj_pelny_html(pocieszenie_html, imie, metoda, nastroj)
         docs.append({
             "base64": base64.b64encode(pelny.encode("utf-8")).decode("ascii"),
             "filename": f"pelna_{sl}.htm",
