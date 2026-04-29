@@ -1,28 +1,21 @@
 """
 responders/emocje.py
-Responder EMOCJE — analiza emocjonalna + empatyczna odpowiedź deeskalacyjna.
+Responder EMOCJE — empatyczny pocieszyciel.
 
-Zamiast słowników słów używa DeepSeek AI który:
-  1. Analizuje ton, napięcie i intencję maila
-  2. Generuje empatyczną odpowiedź która:
-     - trafia idealnie w ton emocjonalny nadawcy
-     - łagodzi napięcie i deeskaluje sytuację
-     - absolutnie nic nie obiecuje
-     - sprawia wrażenie głębokiego zrozumienia
+Zamiast analizy liczb i wykresów, ten responder:
+  1. Czyta wiadomość nadawcy
+  2. Dobiera jedną z 8 metod pocieszenia do kontekstu
+  3. Generuje ciepłą, empatyczną odpowiedź HTML (bez rad, bez obietnic)
+  4. Dołącza wizualizację SVG + miniaturę JPG + pełny HTML jako załączniki
 
-Załączniki (te same nazwy co poprzednio):
-  w1_radar_{label}.png        – wykres radarowy 5 wymiarów emocjonalnych
-  w3_kategorie_{label}.png    – słupki intensywności emocji
-  wK_kolo_{label}.png         – kołowy: dominująca emocja
-  wB_bilans_{label}.png       – bilans: napięcie vs spokój
-  wE_przyklady_{label}.png    – top frazy kluczowe z maila
-  wA_akapity_{label}.png      – timeline emocjonalny zdanie po zdaniu
-  raport_{label}.txt          – pełna analiza tekstowa
-  raport2_najwiecej_wyrazow_{label}.txt – odpowiedź AI jako tekst
+Załączniki:
+  diagram_{label}.htm   – interaktywny SVG z metodą pocieszenia
+  mapa_{label}.jpg      – miniatura JPG (ciepłe kolory)
+  pelna_{label}.htm     – pełny HTML gotowy do wglądu
 
 Zależności:
-  - matplotlib, numpy (wykresy)
   - core.ai_client (call_deepseek, MODEL_TYLER)
+  - prompts/emocje.json (wytyczne i prompty)
 """
 
 import io
@@ -32,14 +25,7 @@ import gc
 import json
 import base64
 import logging
-from collections import Counter
 from flask import current_app
-
-import numpy as np
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 from core.ai_client import call_deepseek, extract_clean_text, MODEL_TYLER
 
@@ -47,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
-PROMPT_JSON = os.path.join(PROMPTS_DIR, "emocje_prompt.json")
+PROMPT_JSON = os.path.join(PROMPTS_DIR, "emocje.json")
 
 
 # ── Ładowanie promptu ─────────────────────────────────────────────────────────
@@ -58,46 +44,33 @@ def _load_prompt() -> dict:
         with open(PROMPT_JSON, encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        logger.warning("[emocje] Brak emocje_prompt.json: %s — używam fallbacku", e)
+        logger.warning("[emocje] Brak emocje.json: %s — używam fallbacku", e)
         return _fallback_prompt()
 
 
 def _fallback_prompt() -> dict:
     return {
         "system": (
-            "Jesteś ekspertem analizy emocjonalnej korespondencji biznesowej. "
+            "Jesteś empatycznym towarzyszem. Twoje jedyne zadanie to pocieszyć osobę "
+            "która napisała wiadomość. NIE dajesz rad. NIE proponujesz rozwiązań. "
             "Odpowiadasz WYŁĄCZNIE w formacie JSON bez żadnego tekstu poza klamrami {}."
         ),
         "user_template": (
-            "Przeanalizuj poniższy mail i wygeneruj:\n"
-            "1. Analizę emocjonalną (5 wymiarów w skali 0-100)\n"
-            "2. Empatyczną odpowiedź deeskalacyjną\n\n"
-            "### MAIL DO ANALIZY:\n{{MAIL}}\n\n"
+            "Przeczytaj poniższą wiadomość i wygeneruj ciepłą, empatyczną odpowiedź pocieszenia.\n\n"
+            "### WIADOMOŚĆ:\n{{MAIL}}\n\n"
+            "### IMIĘ NADAWCY:\n{{SENDER_NAME}}\n\n"
             "### SCHEMAT JSON:\n"
             "{\n"
-            '  "analiza": {\n'
-            '    "napiecie": 0-100,\n'
-            '    "sentyment": -100 do 100 (ujemny=negatywny),\n'
-            '    "pewnosc_nadawcy": 0-100,\n'
-            '    "formalnosc": 0-100,\n'
-            '    "pilnosc": 0-100,\n'
-            '    "dominujaca_emocja": "złość|smutek|lęk|frustracja|rozczarowanie|neutralna|radość",\n'
-            '    "intencja": "eskalacja|żądanie|skarga|prośba|podziękowanie|informacja|odmowa",\n'
-            '    "kluczowe_frazy": ["fraza1", "fraza2", "fraza3", "fraza4", "fraza5"],\n'
-            '    "zdania_scores": [lista liczb -100 do 100, jedna per zdanie, max 15]\n'
-            "  },\n"
-            '  "odpowiedz": "pełna empatyczna odpowiedź HTML gotowa do wysłania"\n'
-            "}\n"
+            '  "metoda": "nazwa wybranej metody pocieszenia",\n'
+            '  "pocieszenie": "pełna odpowiedź HTML gotowa do wysłania",\n'
+            '  "nastroj": "smutek|lęk|frustracja|ból|neutralna|złość|samotność",\n'
+            '  "intensywnosc": 0\n'
+            "}"
         ),
-        "odpowiedz_instrukcja": (
-            "Odpowiedź musi: "
-            "1) zaczynać się od głębokiego uznania emocji nadawcy (bez 'rozumiem że'), "
-            "2) parafrazować ich sytuację własnymi słowami jakbyś był terapeutą, "
-            "3) wyrazić zaangażowanie i troskę używając ciepłych metafor, "
-            "4) absolutnie nic nie obiecywać — żadnych terminów, działań, zobowiązań, "
-            "5) zakończyć otwartym pytaniem które zachęca do dalszego dialogu. "
-            "Styl: ciepły, ludzki, empatyczny — jak najlepszy przyjaciel w korporacji. "
-            "Format: HTML z tagami <p>, <strong> — gotowy do wklejenia w mail."
+        "fallback_pocieszenie": (
+            "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>"
+            "<p>To co czujesz ma sens. Nie musisz teraz nic robić — wystarczy że jesteś.</p>"
+            "<p>Jestem z Tobą w tym.</p>"
         ),
     }
 
@@ -105,25 +78,38 @@ def _fallback_prompt() -> dict:
 # ── Call AI ───────────────────────────────────────────────────────────────────
 
 
-def _analyze_with_ai(mail_text: str, prompt_data: dict) -> dict | None:
-    """Wywołuje DeepSeek i zwraca sparsowany dict lub None."""
+def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict | None:
+    """Wywołuje DeepSeek i zwraca sparsowany dict z 'pocieszenie' lub None."""
     template = prompt_data.get("user_template", _fallback_prompt()["user_template"])
-    instrukcja = prompt_data.get("odpowiedz_instrukcja", "")
-
-    user_msg = template.replace("{{MAIL}}", mail_text[:4000])
-    if instrukcja:
-        user_msg += f"\n\n### INSTRUKCJA ODPOWIEDZI:\n{instrukcja}"
-
     system_msg = prompt_data.get("system", "Odpowiadaj WYŁĄCZNIE w JSON.")
+
+    user_msg = (
+        template
+        .replace("{{MAIL}}", body[:4000])
+        .replace("{{SENDER_NAME}}", sender_name or "nieznane")
+    )
+
+    # Dołącz metody pocieszenia jako kontekst jeśli są w JSON
+    metody = prompt_data.get("metody_pocieszenia", [])
+    if metody:
+        metody_txt = "\n### DOSTĘPNE METODY POCIESZENIA:\n"
+        for m in metody:
+            metody_txt += (
+                f"- [{m.get('id', '?')}] {m.get('nazwa', '')}: {m.get('opis', '')} "
+                f"(przykład: \"{m.get('przyklad', '')}\")\n"
+            )
+        user_msg += metody_txt
+
+    zasady = prompt_data.get("zasady_odpowiedzi", [])
+    if zasady:
+        user_msg += "\n### ZASADY:\n" + "\n".join(f"- {z}" for z in zasady)
 
     raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
     if not raw:
         logger.error("[emocje] DeepSeek nie odpowiedział")
         return None
 
-    # Wyczyść i sparsuj JSON
     clean = extract_clean_text(raw) if callable(extract_clean_text) else raw
-    # Usuń markdown fences jeśli są
     clean = re.sub(r"```json\s*", "", clean)
     clean = re.sub(r"```\s*", "", clean)
     clean = clean.strip()
@@ -131,517 +117,416 @@ def _analyze_with_ai(mail_text: str, prompt_data: dict) -> dict | None:
     try:
         return json.loads(clean)
     except json.JSONDecodeError:
-        # Spróbuj wyciągnąć JSON z tekstu
         m = re.search(r"\{.*\}", clean, re.DOTALL)
         if m:
             try:
                 return json.loads(m.group())
             except Exception:
                 pass
-        logger.error(
-            "[emocje] Nie można sparsować JSON z odpowiedzi AI: %s...", clean[:200]
-        )
+        logger.error("[emocje] Nie można sparsować JSON: %s...", clean[:200])
         return None
 
 
-# ── Ekstrakcja tekstu z załączników ──────────────────────────────────────────
-
-
-def _extract_text(raw_bytes: bytes, name: str) -> str:
-    name_lower = (name or "").lower()
-    if name_lower.endswith(".txt"):
-        for enc in ("utf-8", "cp1250", "latin-1"):
-            try:
-                return raw_bytes.decode(enc)
-            except Exception:
-                pass
-    if name_lower.endswith(".docx"):
-        try:
-            from docx import Document
-            import io as _io
-
-            doc = Document(_io.BytesIO(raw_bytes))
-            return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        except Exception:
-            pass
-    if name_lower.endswith(".pdf"):
-        try:
-            import pdfplumber
-
-            text = ""
-            with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
-                for page in pdf.pages:
-                    t = page.extract_text()
-                    if t:
-                        text += t + "\n"
-            if text.strip():
-                return text
-        except Exception:
-            pass
-    return ""
-
-
-# ── Helpers wykresów ──────────────────────────────────────────────────────────
-
-
-def _fig_to_b64(fig) -> str:
-    buf = io.BytesIO()
-    fig.savefig(buf, format="PNG", dpi=80, bbox_inches="tight")
-    buf.seek(0)
-    result = base64.b64encode(buf.read()).decode("ascii")
-    buf.close()
-    plt.close(fig)
-    plt.close("all")
-    gc.collect()
-    return result
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _safe_label(text: str) -> str:
     return re.sub(r'[\\/*?:"<>|,. ]', "_", text)[:40]
 
 
-# ── Wykresy ───────────────────────────────────────────────────────────────────
-
-
-def _plot_w1_radar(analiza: dict, title: str) -> str:
-    """W1 — radar 5 wymiarów emocjonalnych."""
-    labels = ["Napięcie", "Pilność", "Pewność\nnadawcy", "Formalność", "Intensywność"]
-    vals = [
-        analiza.get("napiecie", 0),
-        analiza.get("pilnosc", 0),
-        analiza.get("pewnosc_nadawcy", 0),
-        analiza.get("formalnosc", 0),
-        max(
-            0, (analiza.get("sentyment", 0) * -1 + 100) / 2
-        ),  # negatywny sentyment → intensywność
-    ]
-
-    n = len(labels)
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
-    vals_c = vals + [vals[0]]
-    angles_c = angles + [angles[0]]
-
-    fig = plt.figure(figsize=(6, 6))
-    ax = plt.subplot(111, polar=True)
-
-    color = "#E24B4A" if analiza.get("napiecie", 0) > 60 else "#378ADD"
-    ax.plot(angles_c, vals_c, linewidth=2, color=color)
-    ax.fill(angles_c, vals_c, alpha=0.2, color=color)
-    ax.set_xticks(angles)
-    ax.set_xticklabels(labels, fontsize=9)
-    ax.set_ylim(0, 100)
-    ax.set_title(f"Profil emocjonalny maila\n{title}", y=1.1, fontsize=11)
-    ax.grid(True, alpha=0.4)
-    fig.tight_layout()
-    return _fig_to_b64(fig)
-
-
-def _plot_w3_kategorie(analiza: dict, title: str) -> str:
-    """W3 — słupki intensywności 5 wymiarów."""
-    dims = {
-        "Napięcie": analiza.get("napiecie", 0),
-        "Pilność": analiza.get("pilnosc", 0),
-        "Pewność": analiza.get("pewnosc_nadawcy", 0),
-        "Formalność": analiza.get("formalnosc", 0),
-        "Sentyment\n(abs)": abs(analiza.get("sentyment", 0)),
+def _nastroj_do_koloru(nastroj: str) -> dict:
+    """Mapuje nastrój na paletę kolorów."""
+    palety = {
+        "smutek":     {"bg": "#eeedfe", "border": "#afa9ec", "ink": "#534ab7", "accent": "#534ab7"},
+        "ból":        {"bg": "#eeedfe", "border": "#afa9ec", "ink": "#534ab7", "accent": "#534ab7"},
+        "lęk":        {"bg": "#faeeda", "border": "#fac775", "ink": "#854f0b", "accent": "#854f0b"},
+        "frustracja": {"bg": "#fcebeb", "border": "#f09595", "ink": "#a32d2d", "accent": "#a32d2d"},
+        "złość":      {"bg": "#fcebeb", "border": "#f09595", "ink": "#a32d2d", "accent": "#a32d2d"},
+        "samotność":  {"bg": "#fbeaf0", "border": "#f0a8c4", "ink": "#993556", "accent": "#993556"},
+        "neutralna":  {"bg": "#d4f0e8", "border": "#7ecab8", "ink": "#1d8a6e", "accent": "#1d8a6e"},
     }
-    labels = list(dims.keys())
-    vals = list(dims.values())
+    return palety.get(nastroj, palety["neutralna"])
 
-    colors = []
-    for v in vals:
-        if v > 70:
-            colors.append("#E24B4A")
-        elif v > 40:
-            colors.append("#EF9F27")
-        else:
-            colors.append("#378ADD")
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    bars = ax.bar(range(len(labels)), vals, color=colors, width=0.55)
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, fontsize=10)
-    ax.set_ylim(0, 110)
-    ax.set_ylabel("Intensywność (0–100)")
-    ax.set_title(f"Intensywność wymiarów emocjonalnych\n{title}", fontsize=11)
-    for bar, val in zip(bars, vals):
+def _metoda_do_tagu(metoda: str) -> str:
+    """Zwraca czytelną nazwę metody po polsku."""
+    mapy = {
+        "walidacja_emocji":      "metoda 01 · walidacja emocji",
+        "obecnosc":              "metoda 02 · obecność",
+        "normalizacja":          "metoda 03 · normalizacja",
+        "odzwierciedlenie":      "metoda 04 · odzwierciedlenie",
+        "przestrzen_na_cisze":   "metoda 05 · przestrzeń na ciszę",
+        "docenienie_odwagi":     "metoda 06 · docenienie odwagi",
+        "bez_srebrnych_podszewek": "metoda 07 · bez srebrnych podszewek",
+        "cieplo_przez_konkret":  "metoda 08 · ciepło przez konkret",
+    }
+    return mapy.get(metoda, f"metoda · {metoda.replace('_', ' ')}")
+
+
+# ── Generowanie SVG ───────────────────────────────────────────────────────────
+
+
+def _buduj_svg(pocieszenie_html: str, metoda: str, nastroj: str, sender_name: str) -> str:
+    """Generuje interaktywny SVG-diagram pocieszenia."""
+    kolory = _nastroj_do_koloru(nastroj)
+    tag = _metoda_do_tagu(metoda)
+
+    # Wyciągnij czysty tekst z HTML odpowiedzi
+    czysty = re.sub(r"<[^>]+>", " ", pocieszenie_html)
+    czysty = re.sub(r"\s+", " ", czysty).strip()
+    # Przytnij do 200 znaków dla podglądu w SVG
+    podglad = czysty[:200] + ("…" if len(czysty) > 200 else "")
+    # Escapuj do XML
+    podglad_xml = (
+        podglad
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    imie = (sender_name or "Nadawca").replace("&", "&amp;")
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 520" width="360" height="520">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&amp;family=Fraunces:ital,wght@0,300;0,600;1,300;1,600&amp;display=swap');
+      .mono {{ font-family: 'DM Mono', monospace; }}
+      .serif {{ font-family: 'Fraunces', serif; }}
+    </style>
+  </defs>
+
+  <!-- tło -->
+  <rect width="360" height="520" fill="#fdf8f3" rx="16"/>
+
+  <!-- header -->
+  <rect x="12" y="12" width="336" height="72" fill="{kolory['bg']}" rx="14" stroke="{kolory['border']}" stroke-width="1.5"/>
+  <text x="180" y="38" text-anchor="middle" font-family="Fraunces, serif" font-size="15" font-weight="600" fill="{kolory['ink']}">Pocieszenie dla {imie}</text>
+  <text x="180" y="56" text-anchor="middle" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.65">{tag}</text>
+  <text x="180" y="74" text-anchor="middle" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.5">nastrój: {nastroj}</text>
+
+  <!-- strzałka -->
+  <line x1="180" y1="84" x2="180" y2="104" stroke="#d3cfc8" stroke-width="1"/>
+  <polygon points="175,104 185,104 180,112" fill="#d3cfc8"/>
+
+  <!-- metoda card -->
+  <rect x="12" y="114" width="336" height="52" fill="{kolory['bg']}" rx="10" stroke="{kolory['border']}" stroke-width="1.5"/>
+  <text x="24" y="134" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.6" font-weight="500">{tag.upper()}</text>
+  <text x="24" y="152" font-family="Fraunces, serif" font-size="13" font-weight="600" fill="{kolory['ink']}">DeepSeek — jedno wywołanie AI</text>
+
+  <!-- strzałka -->
+  <line x1="180" y1="166" x2="180" y2="186" stroke="#d3cfc8" stroke-width="1"/>
+  <polygon points="175,186 185,186 180,194" fill="#d3cfc8"/>
+
+  <!-- odpowiedź box -->
+  <rect x="12" y="196" width="336" height="260" fill="#ffffff" rx="12" stroke="#d3cfc8" stroke-width="1"/>
+  <text x="24" y="218" font-family="DM Mono, monospace" font-size="9" fill="#8a7a6a" opacity="0.7">ODPOWIEDŹ POCIESZENIA</text>
+  <foreignObject x="20" y="224" width="320" height="224">
+    <body xmlns="http://www.w3.org/1999/xhtml" style="font-family:DM Mono,monospace;font-size:10px;color:#2a1f14;line-height:1.6;word-wrap:break-word;margin:0;padding:0;">
+      {podglad_xml}
+    </body>
+  </foreignObject>
+
+  <!-- strzałka -->
+  <line x1="180" y1="456" x2="180" y2="472" stroke="#d3cfc8" stroke-width="1"/>
+  <polygon points="175,472 185,472 180,480" fill="#d3cfc8"/>
+
+  <!-- footer -->
+  <rect x="12" y="482" width="336" height="26" fill="{kolory['bg']}" rx="8" stroke="{kolory['border']}" stroke-width="1"/>
+  <text x="180" y="499" text-anchor="middle" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.7">return · reply_html · pocieszenie gotowe</text>
+</svg>"""
+    return svg
+
+
+# ── Generowanie JPG (przez PNG z matplotlib) ──────────────────────────────────
+
+
+def _buduj_jpg_b64(nastroj: str, metoda: str, sender_name: str) -> str | None:
+    """Generuje prostą miniaturę JPG jako base64."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import numpy as np
+
+        kolory = _nastroj_do_koloru(nastroj)
+        bg_hex = kolory["bg"]
+        ink_hex = kolory["ink"]
+        tag = _metoda_do_tagu(metoda)
+
+        fig, ax = plt.subplots(figsize=(4, 2.8))
+        fig.patch.set_facecolor(bg_hex)
+        ax.set_facecolor(bg_hex)
+        ax.axis("off")
+
         ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 2,
-            str(int(val)),
-            ha="center",
-            va="bottom",
-            fontsize=10,
-            fontweight="bold",
+            0.5, 0.78,
+            f"Pocieszenie · {sender_name or 'Nadawca'}",
+            ha="center", va="center",
+            fontsize=9, fontweight="bold",
+            color=ink_hex,
+            transform=ax.transAxes,
         )
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    return _fig_to_b64(fig)
-
-
-def _plot_wK_kolo(analiza: dict, title: str) -> str:
-    """WK — kołowy: rozkład emocji (napięcie / spokój / formalność)."""
-    napiecie = analiza.get("napiecie", 0)
-    pilnosc = analiza.get("pilnosc", 0)
-    formalnosc = analiza.get("formalnosc", 0)
-    spokoj = max(0, 100 - napiecie - pilnosc / 2)
-
-    vals = [napiecie, pilnosc, formalnosc, spokoj]
-    labels = ["Napięcie", "Pilność", "Formalność", "Spokój"]
-    colors = ["#E24B4A", "#EF9F27", "#7F77DD", "#1D9E75"]
-
-    # Usuń zera
-    pairs = [(l, v, c) for l, v, c in zip(labels, vals, colors) if v > 1]
-    if not pairs:
-        return None
-    labels, vals, colors = zip(*pairs)
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    wedges, _, autotexts = ax.pie(
-        vals,
-        labels=labels,
-        colors=colors,
-        autopct="%1.0f%%",
-        startangle=90,
-        wedgeprops={"linewidth": 0.8, "edgecolor": "white"},
-        textprops={"fontsize": 11},
-    )
-    for at in autotexts:
-        at.set_fontsize(10)
-
-    dominant = analiza.get("dominujaca_emocja", "")
-    ax.text(
-        0,
-        0,
-        dominant,
-        ha="center",
-        va="center",
-        fontsize=12,
-        fontweight="bold",
-        color="#2C2C2A",
-    )
-    ax.set_title(f"Ukierunkowanie emocjonalne\n{title}", fontsize=11)
-    fig.tight_layout()
-    return _fig_to_b64(fig)
-
-
-def _plot_wb_bilans(analiza: dict, title: str) -> str:
-    """WB — bilans: napięcie vs spokój vs neutralne."""
-    napiecie = analiza.get("napiecie", 50)
-    spokoj = max(0, 100 - napiecie)
-    sent = analiza.get("sentyment", 0)
-
-    pos = max(0, sent)
-    neg = max(0, -sent)
-    neu = max(0, 100 - pos - neg)
-
-    vals = [neg, pos, neu]
-    labels = ["Negatywne", "Pozytywne", "Neutralne"]
-    colors = ["#E24B4A", "#1D9E75", "#888780"]
-    explode = (0.05, 0.05, 0.0)
-
-    total = sum(vals)
-    if total == 0:
-        vals = [50, 10, 40]
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    wedges, _, autotexts = ax.pie(
-        vals,
-        labels=labels,
-        colors=colors,
-        autopct="%1.1f%%",
-        explode=explode,
-        startangle=90,
-        wedgeprops={"linewidth": 1, "edgecolor": "white"},
-        textprops={"fontsize": 12},
-    )
-    bilans_txt = (
-        "NEGATYWNY" if neg > pos else ("POZYTYWNY" if pos > neg else "NEUTRALNY")
-    )
-    kolor = "#E24B4A" if neg > pos else ("#1D9E75" if pos > neg else "#888780")
-    ax.text(
-        0,
-        0,
-        bilans_txt,
-        ha="center",
-        va="center",
-        fontsize=13,
-        fontweight="bold",
-        color=kolor,
-    )
-    ax.set_title(f"Bilans emocjonalny\n{title}", fontsize=11)
-    fig.tight_layout()
-    return _fig_to_b64(fig)
-
-
-def _plot_we_przyklady(analiza: dict, title: str) -> str:
-    """WE — kluczowe frazy z maila jako poziomy wykres."""
-    frazy = analiza.get("kluczowe_frazy", [])
-    if not frazy:
-        return None
-
-    # Długość frazy jako proxy "wagi" — dłuższa = ważniejsza dla AI
-    vals = [min(100, 40 + len(f) * 3) for f in frazy]
-    n = len(frazy)
-    colors = ["#E24B4A", "#EF9F27", "#378ADD", "#1D9E75", "#7F77DD"][:n]
-
-    fig, ax = plt.subplots(figsize=(9, max(3, n * 0.8 + 1)))
-    bars = ax.barh(range(n), vals, color=colors, height=0.55)
-    ax.set_yticks(range(n))
-    ax.set_yticklabels(frazy, fontsize=10)
-    ax.invert_yaxis()
-    ax.set_xlim(0, 120)
-    ax.set_xlabel("Znaczenie w kontekście emocjonalnym")
-    ax.set_title(f"Kluczowe frazy emocjonalne\n{title}", fontsize=11)
-    for bar, val, fraza in zip(bars, vals, frazy):
         ax.text(
-            val + 1,
-            bar.get_y() + bar.get_height() / 2,
-            str(int(val)),
-            va="center",
-            fontsize=9,
+            0.5, 0.52,
+            tag,
+            ha="center", va="center",
+            fontsize=7.5,
+            color=ink_hex,
+            alpha=0.7,
+            transform=ax.transAxes,
         )
-    ax.grid(axis="x", alpha=0.3)
-    fig.tight_layout()
-    return _fig_to_b64(fig)
+        ax.text(
+            0.5, 0.28,
+            f"nastrój: {nastroj}",
+            ha="center", va="center",
+            fontsize=7,
+            color=ink_hex,
+            alpha=0.5,
+            transform=ax.transAxes,
+        )
 
+        rect = mpatches.FancyBboxPatch(
+            (0.04, 0.04), 0.92, 0.92,
+            boxstyle="round,pad=0.02",
+            linewidth=1.2,
+            edgecolor=kolory["border"],
+            facecolor="none",
+            transform=ax.transAxes,
+        )
+        ax.add_patch(rect)
 
-def _plot_wa_akapity(analiza: dict, title: str) -> str:
-    """WA — timeline emocjonalny zdanie po zdaniu."""
-    scores = analiza.get("zdania_scores", [])
-    if not scores:
+        buf = io.BytesIO()
+        fig.savefig(buf, format="jpeg", dpi=90, bbox_inches="tight", facecolor=bg_hex)
+        buf.seek(0)
+        result = base64.b64encode(buf.read()).decode("ascii")
+        buf.close()
+        plt.close(fig)
+        plt.close("all")
+        gc.collect()
+        return result
+    except Exception as e:
+        logger.warning("[emocje] Błąd generowania JPG: %s", e)
         return None
 
-    x = list(range(1, len(scores) + 1))
-    pos = [max(0, s) for s in scores]
-    neg = [max(0, -s) for s in scores]
 
-    fig, ax = plt.subplots(figsize=(min(max(7, len(x) * 0.5 + 2), 16), 4))
-    width = 0.4
-    ax.bar(
-        [i - width / 2 for i in x],
-        pos,
-        width=width,
-        color="#1D9E75",
-        label="Pozytywne",
-        alpha=0.85,
-    )
-    ax.bar(
-        [i + width / 2 for i in x],
-        neg,
-        width=width,
-        color="#E24B4A",
-        label="Negatywne",
-        alpha=0.85,
-    )
-    ax.set_xticks(x)
-    ax.set_xticklabels([f"Z.{i}" for i in x], rotation=45, fontsize=8)
-    ax.set_ylabel("Intensywność emocji")
-    ax.set_title(f"Emocje per zdanie — przepływ narracyjny\n{title}", fontsize=11)
-    ax.legend(fontsize=9)
-    ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    return _fig_to_b64(fig)
+# ── Budowanie HTML maila ───────────────────────────────────────────────────────
 
 
-# ── Raporty TXT ───────────────────────────────────────────────────────────────
+def _buduj_html_email(
+    pocieszenie_html: str,
+    sender_name: str,
+    metoda: str,
+    nastroj: str,
+    jpg_b64: str | None,
+) -> str:
+    """Buduje reply_html z ciepłym layoutem."""
+    kolory = _nastroj_do_koloru(nastroj)
+    tag = _metoda_do_tagu(metoda)
+    imie = sender_name or ""
+
+    powitanie = f"<p>Drogi/a {imie},</p>" if imie else ""
+
+    img_tag = ""
+    if jpg_b64:
+        img_tag = (
+            f'<div style="margin:16px 0;text-align:center;">'
+            f'<img src="data:image/jpeg;base64,{jpg_b64}" '
+            f'style="border-radius:12px;max-width:280px;border:1px solid {kolory["border"]};" '
+            f'alt="Diagram pocieszenia"/>'
+            f'</div>'
+        )
+
+    html = f"""<div style="font-family:'DM Mono',monospace;color:#2a1f14;max-width:560px;margin:0 auto;padding:20px 14px;">
+  <div style="background:{kolory['bg']};border:1.5px solid {kolory['border']};border-radius:16px;padding:18px 20px;text-align:center;margin-bottom:20px;">
+    <h1 style="font-family:Fraunces,serif;font-size:18px;font-weight:600;color:{kolory['ink']};margin:0 0 6px 0;">Jestem tutaj</h1>
+    <p style="font-size:10px;color:{kolory['ink']};opacity:0.65;margin:0;">{tag}</p>
+  </div>
+
+  {img_tag}
+
+  <div style="line-height:1.75;font-size:13px;color:#2a1f14;">
+    {powitanie}
+    {pocieszenie_html}
+  </div>
+
+  <div style="margin-top:24px;padding-top:14px;border-top:1px solid #d3cfc8;font-size:10px;color:#8a7a6a;text-align:center;">
+    <em>nastrój: {nastroj}</em>
+  </div>
+</div>"""
+    return html
 
 
-def _build_raport_txt(label: str, analiza: dict, odpowiedz: str) -> str:
-    linia = "=" * 60
-    linia2 = "-" * 60
-    napiecie = analiza.get("napiecie", 0)
-    sent = analiza.get("sentyment", 0)
-    bilans = "POZYTYWNY" if sent > 20 else ("NEGATYWNY" if sent < -20 else "NEUTRALNY")
-
-    lines = [
-        linia,
-        "ANALIZA EMOCJONALNA KORESPONDENCJI BIZNESOWEJ (AI)",
-        f"Źródło: {label}",
-        linia,
-        f"Napięcie:             {napiecie}/100",
-        f"Sentyment:            {sent:+d}/100",
-        f"Pilność:              {analiza.get('pilnosc', 0)}/100",
-        f"Pewność nadawcy:      {analiza.get('pewnosc_nadawcy', 0)}/100",
-        f"Formalność:           {analiza.get('formalnosc', 0)}/100",
-        f"Dominująca emocja:    {analiza.get('dominujaca_emocja', '—')}",
-        f"Intencja:             {analiza.get('intencja', '—')}",
-        f"Bilans emocjonalny:   {bilans}",
-        "",
-        linia2,
-        "KLUCZOWE FRAZY EMOCJONALNE:",
-        linia2,
-    ]
-    for i, f in enumerate(analiza.get("kluczowe_frazy", []), 1):
-        lines.append(f"  {i}. {f}")
-
-    lines += [
-        "",
-        linia2,
-        "WYGENEROWANA ODPOWIEDŹ:",
-        linia2,
-        odpowiedz or "(brak)",
-        "",
-        linia,
-        "Raport wygenerowany przez DeepSeek AI — system analizy emocjonalnej.",
-        linia,
-    ]
-    return "\n".join(lines)
+# ── Budowanie pełnego HTML pliku ───────────────────────────────────────────────
 
 
-def _build_ranking_txt(label: str, odpowiedz: str) -> str:
-    """Drugi raport — odpowiedź AI jako czysty tekst."""
-    clean = re.sub(r"<[^>]+>", " ", odpowiedz or "")
-    clean = re.sub(r"\s+", " ", clean).strip()
-    lines = [
-        f"# Odpowiedź AI — {label}",
-        "# Wygenerowano automatycznie przez DeepSeek",
-        "",
-        clean,
-    ]
-    return "\n".join(lines)
+def _buduj_pelny_html(
+    pocieszenie_html: str,
+    sender_name: str,
+    metoda: str,
+    nastroj: str,
+) -> str:
+    """Buduje pełny samodzielny plik HTML do podglądu."""
+    kolory = _nastroj_do_koloru(nastroj)
+    tag = _metoda_do_tagu(metoda)
+    imie = sender_name or "Nadawca"
 
-
-# ── HTML dla maila ────────────────────────────────────────────────────────────
-
-
-def _build_reply_html(label: str, analiza: dict, odpowiedz_html: str) -> str:
-    napiecie = analiza.get("napiecie", 0)
-    sent = analiza.get("sentyment", 0)
-    intencja = analiza.get("intencja", "—")
-    emocja = analiza.get("dominujaca_emocja", "—")
-    bilans = (
-        "pozytywne ✅" if sent > 20 else ("negatywne ⚠️" if sent < -20 else "neutralne")
-    )
-
-    return (
-        f"{odpowiedz_html or ''}"
-        f"<hr>"
-        f"<p style='font-size:12px;color:#888;'>"
-        f"<em>Analiza AI: napięcie {napiecie}/100 · emocja: {emocja} · "
-        f"intencja: {intencja} · bilans: {bilans}</em></p>"
-    )
+    return f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pocieszenie · {imie}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,wght@0,300;0,600;1,300;1,600&display=swap');
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#fdf8f3;font-family:'DM Mono',monospace;color:#2a1f14;padding:24px 16px 60px;}}
+.header{{background:{kolory['bg']};border:1.5px solid {kolory['border']};border-radius:16px;padding:20px;text-align:center;margin-bottom:20px;}}
+.header h1{{font-family:Fraunces,serif;font-size:20px;font-weight:600;color:{kolory['ink']};}}
+.header p{{font-size:10px;color:{kolory['ink']};opacity:0.65;margin-top:6px;}}
+.body{{background:#fff;border:1px solid #d3cfc8;border-radius:14px;padding:22px 20px;line-height:1.8;font-size:13px;}}
+.footer{{margin-top:20px;text-align:center;font-size:10px;color:#8a7a6a;}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Jestem tutaj · {imie}</h1>
+  <p>{tag} · nastrój: {nastroj}</p>
+</div>
+<div class="body">
+  {pocieszenie_html}
+</div>
+<div class="footer">Wygenerowano przez DeepSeek AI — system pocieszenia empatycznego.</div>
+</body>
+</html>"""
 
 
 # ── Główna funkcja responderu ─────────────────────────────────────────────────
 
 
 def build_emocje_section(
-    body: str, sender_name: str = "", attachments: list = None, test_mode: bool = False
+    body: str,
+    sender_name: str = "",
+    attachments: list = None,
+    test_mode: bool = False,
 ) -> dict:
     """
-    Emocje responder — analiza AI + empatyczna odpowiedź deeskalacyjna.
-    Zwraca dict z reply_html, images (PNG), docs (TXT).
+    Emocje responder — empatyczny pocieszyciel.
+
+    Zwraca dict z:
+      reply_html  – HTML gotowy do wysłania jako mail
+      images      – lista (pusta — brak wykresów)
+      docs        – lista HTM/SVG jako załączniki
     """
     prompt_data = _load_prompt()
-
-    images = []
     docs = []
-    reply_html = ""
-    sources = []
 
-    if body and body.strip():
-        sources.append(("Treść_maila", body))
+    # ── Walidacja wejścia ─────────────────────────────────────────────────────
 
-    for att in attachments or []:
-        att_b64 = att.get("base64")
-        att_name = att.get("name", "dokument")
-        if not att_b64:
-            continue
-        try:
-            raw = base64.b64decode(att_b64)
-            txt = _extract_text(raw, att_name)
-            if txt and txt.strip():
-                sources.append((att_name, txt))
-        except Exception as e:
-            logger.warning("[emocje] Błąd załącznika %s: %s", att_name, e)
-
-    if not sources:
+    mail_text = (body or "").strip()
+    if not mail_text:
+        fallback = prompt_data.get(
+            "fallback_pocieszenie",
+            "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>",
+        )
         return {
-            "reply_html": "<p>Brak tekstu do analizy emocjonalnej.</p>",
+            "reply_html": fallback,
             "images": [],
             "docs": [],
         }
 
-    for label, text in sources:
+    sl = _safe_label(sender_name or "mail")
+
+    # ── Wywołanie AI ──────────────────────────────────────────────────────────
+
+    result = _generuj_pocieszenie(mail_text, sender_name, prompt_data)
+
+    if not result:
+        logger.warning("[emocje] AI nie zwróciło wyniku — używam fallbacku")
+        fallback = prompt_data.get(
+            "fallback_pocieszenie",
+            "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>",
+        )
+        return {
+            "reply_html": fallback,
+            "images": [],
+            "docs": [],
+        }
+
+    pocieszenie_html = result.get(
+        "pocieszenie",
+        prompt_data.get("fallback_pocieszenie", "<p>Jestem tutaj.</p>"),
+    )
+    metoda = result.get("metoda", "obecnosc")
+    nastroj = result.get("nastroj", "neutralna")
+
+    # ── Miniatura JPG ─────────────────────────────────────────────────────────
+
+    jpg_b64 = _buduj_jpg_b64(nastroj, metoda, sender_name)
+
+    # ── reply_html ────────────────────────────────────────────────────────────
+
+    reply_html = _buduj_html_email(pocieszenie_html, sender_name, metoda, nastroj, jpg_b64)
+
+    # ── Załączniki ────────────────────────────────────────────────────────────
+
+    # 1. SVG diagram
+    try:
+        svg_content = _buduj_svg(pocieszenie_html, metoda, nastroj, sender_name)
+        svg_htm = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>Diagram pocieszenia</title>
+</head><body style="margin:0;background:#fdf8f3;display:flex;justify-content:center;padding:20px;">
+{svg_content}
+</body></html>"""
+        docs.append({
+            "base64": base64.b64encode(svg_htm.encode("utf-8")).decode("ascii"),
+            "filename": f"diagram_{sl}.htm",
+            "content_type": "text/html",
+        })
+    except Exception as e:
+        logger.warning("[emocje] Błąd SVG: %s", e)
+
+    # 2. Miniatura JPG
+    if jpg_b64:
         try:
-            # ── Analiza AI ────────────────────────────────────────────────────
-            result = _analyze_with_ai(text, prompt_data)
-
-            if not result:
-                logger.warning("[emocje] AI nie zwróciło wyniku dla '%s'", label)
-                continue
-
-            analiza = result.get("analiza", {})
-            odpowiedz = result.get("odpowiedz", "<p>Brak odpowiedzi.</p>")
-            sl = _safe_label(label)
-
-            # ── 6 wykresów PNG (te same nazwy plików co poprzednio) ───────────
-            plot_fns = [
-                (_plot_w1_radar, f"w1_radar_{sl}.png"),
-                (_plot_w3_kategorie, f"w3_kategorie_{sl}.png"),
-                (_plot_wK_kolo, f"wK_kolo_{sl}.png"),
-                (_plot_wb_bilans, f"wB_bilans_{sl}.png"),
-                (_plot_we_przyklady, f"wE_przyklady_{sl}.png"),
-                (_plot_wa_akapity, f"wA_akapity_{sl}.png"),
-            ]
-
-            for fn, fname in plot_fns:
-                try:
-                    b64 = fn(analiza, label)
-                    if b64:
-                        images.append(
-                            {
-                                "base64": b64,
-                                "filename": fname,
-                                "content_type": "image/png",
-                            }
-                        )
-                except Exception as e:
-                    logger.warning("[emocje] Błąd wykresu %s: %s", fname, e)
-                finally:
-                    plt.close("all")
-                    gc.collect()
-
-            # ── Raporty TXT (te same nazwy co poprzednio) ─────────────────────
-            raport = _build_raport_txt(label, analiza, odpowiedz)
-            docs.append(
-                {
-                    "base64": base64.b64encode(raport.encode("utf-8")).decode("ascii"),
-                    "filename": f"raport_{sl}.txt",
-                    "content_type": "text/plain",
-                }
-            )
-
-            ranking = _build_ranking_txt(label, odpowiedz)
-            docs.append(
-                {
-                    "base64": base64.b64encode(ranking.encode("utf-8")).decode("ascii"),
-                    "filename": f"raport2_najwiecej_wyrazow_{sl}.txt",
-                    "content_type": "text/plain",
-                }
-            )
-
-            reply_html += _build_reply_html(label, analiza, odpowiedz)
-
+            docs.append({
+                "base64": jpg_b64,
+                "filename": f"mapa_{sl}.jpg",
+                "content_type": "image/jpeg",
+            })
         except Exception as e:
-            logger.exception("[emocje] Błąd analizy '%s': %s", label, e)
-        finally:
-            plt.close("all")
-            gc.collect()
+            logger.warning("[emocje] Błąd JPG doc: %s", e)
 
-    if not reply_html:
-        reply_html = "<p>Nie udało się wygenerować analizy emocjonalnej.</p>"
+    # 3. Pełny HTML
+    try:
+        pelny = _buduj_pelny_html(pocieszenie_html, sender_name, metoda, nastroj)
+        docs.append({
+            "base64": base64.b64encode(pelny.encode("utf-8")).decode("ascii"),
+            "filename": f"pelna_{sl}.htm",
+            "content_type": "text/html",
+        })
+    except Exception as e:
+        logger.warning("[emocje] Błąd pełnego HTML: %s", e)
+
+    # ── Cleanup ───────────────────────────────────────────────────────────────
+
+    try:
+        import matplotlib.pyplot as plt
+        plt.close("all")
+    except Exception:
+        pass
+    gc.collect()
 
     logger.info(
-        "[emocje] źródeł=%d | wykresów=%d | raportów=%d",
-        len(sources),
-        len(images),
+        "[emocje] metoda=%s | nastrój=%s | załączników=%d",
+        metoda,
+        nastroj,
         len(docs),
     )
 
     return {
         "reply_html": reply_html,
-        "images": images,
+        "images": [],
         "docs": docs,
     }
