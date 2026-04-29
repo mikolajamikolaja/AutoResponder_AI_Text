@@ -26,7 +26,7 @@ HF_API_URL        = "https://router.huggingface.co/hf-inference/models/black-for
 HF_STEPS          = 1
 HF_GUIDANCE       = 1
 HF_TIMEOUT        = 55
-TYLER_JPG_QUALITY = 95  # Kompresja JPG paneli tryptyku (95% = minimalna strata)
+TYLER_JPG_QUALITY = 90  # Kompresja JPG paneli tryptyku (95% = minimalna strata)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAPOWANIE EMOCJI → NAZWY PLIKÓW

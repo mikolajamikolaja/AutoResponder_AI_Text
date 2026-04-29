@@ -4560,6 +4560,8 @@ def build_zwykly_section(
     - Jeśli test_mode=True (pochodzi z KEYWORDS_TEST via app.py disable_flux),
       to zwracamy zastępczy obrazek zamiast generować FLUX.
     - To oszczędza tokeny HF_TOKEN bez zmiany logiki respondentów.
+
+    Render nie ma zewnętrznego limitu czasu — wszystkie sekcje zawsze się wykonują.
     """
     from flask import current_app as flask_app
     import re
@@ -4652,9 +4654,8 @@ def build_zwykly_section(
     # Dociekliwy jest zawsze wywoływany osobno przez app.py jako sekcja 'analiza'.
     # Zwykly NIE wywołuje dociekliwego — każdy responder wysyła osobny email.
 
-    # ── KROK 3: Raport psychiatryczny PRZED taskami pobocznymi ───────────────
-    # Raport ma ~18 callów DeepSeek — musi dostać czas jako pierwszy,
-    # żeby nie skończyć się na budżecie po ankiecie/horoskopie/grze.
+    # ── KROK 3: Raport psychiatryczny ────────────────────────────────────────
+    # Wywoływany przed taskami pobocznymi — ma priorytet na zasoby DeepSeek.
     try:
         with app_obj.app_context():
             r_res = build_raport(
@@ -4680,46 +4681,24 @@ def build_zwykly_section(
         logger.error("[zwykly] Raport błąd: %s", e)
         log_psych = {"error": str(e)}
 
-    # ── DEADLINE dla tasków pobocznych ────────────────────────────────────────
-    # Render ma limit ~10 min. Każdy poniższy task to osobny call DeepSeek.
-    # Jeśli mamy mało czasu pomijamy kolejne taski.
-    import time as _time
-
-    _start_ts = _time.monotonic()
-    _TASK_BUDGET_S = 360  # Max łączny czas na taski poboczne (6 min)
-
-    def _time_ok() -> bool:
-        return (_time.monotonic() - _start_ts) < _TASK_BUDGET_S
-
+    # ── Taski poboczne — bez limitu czasowego (Render działa bez ograniczeń) ──
     try:
-        if _time_ok():
-            ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
-        else:
-            logger.warning("[zwykly] SKIP ankieta — przekroczono budżet czasu")
+        ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
     except Exception:
         pass
 
     try:
-        if _time_ok():
-            horoskop_pdf = _build_horoskop(body, res_text)
-        else:
-            logger.warning("[zwykly] SKIP horoskop — przekroczono budżet czasu")
+        horoskop_pdf = _build_horoskop(body, res_text)
     except Exception:
         pass
 
     try:
-        if _time_ok():
-            karta_rpg_pdf = _build_karta_rpg(body, res_text)
-        else:
-            logger.warning("[zwykly] SKIP karta_rpg — przekroczono budżet czasu")
+        karta_rpg_pdf = _build_karta_rpg(body, res_text)
     except Exception:
         pass
 
     try:
-        if _time_ok():
-            gra_html = _build_gra_html(body, res_text)
-        else:
-            logger.warning("[zwykly] SKIP gra_html — przekroczono budżet czasu")
+        gra_html = _build_gra_html(body, res_text)
     except Exception:
         pass
 
