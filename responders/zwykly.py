@@ -24,7 +24,7 @@ ZMIANY W TEJ WERSJI:
 import os
 import re
 import io
-import json
+import zipfileimport json
 import html as html_module
 import base64
 import random
@@ -152,6 +152,22 @@ from core.config import (
 )
 
 from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER: pakowanie pliku do ZIP (Gmail blokuje .html, .htm, .svg)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _to_zip(content: bytes, inner_filename: str, zip_filename: str) -> dict:
+    """Pakuje bytes do ZIP i zwraca dict {base64, content_type, filename}."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(inner_filename, content)
+    return {
+        "base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "content_type": "application/zip",
+        "filename": zip_filename,
+    }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WYMUSZANIE STARTU JSON od '{'
@@ -292,12 +308,12 @@ def _build_combined_reply_html(sections: list[str]) -> str:
         </div>
         <div class="content">{content}</div>
         <div class="footer">
-            <p style="margin: 0 0 10px 0;">Odpowiedź wygenerowana automatycznie przez system Script + Render.<br><span style="font-size: 11px; color: #088a08;">Projekt dostępny na GitHub:<br><a href=\"https://github.com/legionowopawel/AutoResponder_AI_Text\" style=\"color: #088a08; text-decoration: none;\">AutoResponder_AI_Text</a></span></p>
+            <p style="margin: 0 0 10px 0;">Odpowiedź wygenerowana automatycznie przez system Script + Render.<br><span style="font-size: 11px; color: #088a08;">Projekt dostępny na GitHub:<br><a href="https://github.com/legionowopawel/AutoResponder_AI_Text" style="color: #088a08; text-decoration: none;">AutoResponder_AI_Text</a></span></p>
+            <p style="margin: 0; font-size: 11px; color: #088a08;">Portfolio:<br><a href="https://legionowopawel.github.io/AutoResponder_AI_Text/" style="color: #088a08; text-decoration: none;">legionowopawel.github.io/AutoResponder_AI_Text</a></p>
         </div>
     </div>
 </body>
 </html>"""
-
 
 def _wrap_section_html(content: str, title: str | None = None) -> str:
     if not content:
@@ -3159,12 +3175,7 @@ function sprawdz() {{
 </body>
 </html>"""
 
-    html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
-    html_dict = {
-        "base64": html_b64,
-        "content_type": "application/octet-stream",
-        "filename": f"ankieta_{ts}.htm",
-    }
+    html_dict = _to_zip(html.encode("utf-8"), f"ankieta_{ts}.html", f"ankieta_{ts}.zip")
 
     # ── Buduj PDF AcroForm (interaktywny z checkboxami) ──────────────────────
     try:
@@ -4447,14 +4458,9 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
         fill="{kolor_tekst}" text-anchor="middle" opacity="0.3" letter-spacing="3">PROJEKT TYLER DURDEN</text>
 </svg>"""
 
-    svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     logger.info("[plakat] OK")
-    return {
-        "base64": svg_b64,
-        "content_type": "image/svg+xml",
-        "filename": f"plakat_{ts}.svg",
-    }
+    return _to_zip(svg.encode("utf-8"), f"plakat_{ts}.svg", f"plakat_{ts}.zip")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4563,14 +4569,9 @@ def _build_flow_diagram_svg(exec_logger) -> dict | None:
         fill="#666666" text-anchor="middle">Wygenerowano: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</text>
 </svg>"""
 
-        svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         logger.info("[flow_diagram] OK")
-        return {
-            "base64": svg_b64,
-            "content_type": "image/svg+xml",
-            "filename": f"flow_diagram_{ts}.svg",
-        }
+        return _to_zip(svg.encode("utf-8"), f"flow_diagram_{ts}.svg", f"flow_diagram_{ts}.zip")
 
     except Exception as e:
         logger.warning("[flow_diagram] Błąd: %s", e)
@@ -4804,11 +4805,7 @@ function pokazWynik() {{
     html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     logger.info("[gra] OK: %d pytań", len(pytania))
-    return {
-        "base64": html_b64,
-        "content_type": "application/octet-stream",
-        "filename": f"gra_{ts}.htm",
-    }
+    return _to_zip(html.encode("utf-8"), f"gra_{ts}.html", f"gra_{ts}.zip")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

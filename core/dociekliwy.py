@@ -23,8 +23,6 @@ import json
 import base64
 import logging
 import time
-import zipfile
-import io
 from typing import Optional
 
 import requests
@@ -921,24 +919,6 @@ def build_dociekliwy_section(
         drive_link or "brak",
     )
 
-    # ── Załącznik ZIP z grą HTML (Gmail blokuje .html/.htm) ──────────────────
-    zip_attachment = None
-    if diagram_svg_b64:
-        try:
-            html_bytes = base64.b64decode(diagram_svg_b64)
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("eryk_gra.html", html_bytes)
-            zip_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            zip_attachment = {
-                "base64": zip_b64,
-                "filename": "eryk_gra.zip",
-                "content_type": "application/zip",
-            }
-            logger.info("[ERYK] ✓ ZIP załącznik gry: eryk_gra.zip")
-        except Exception as e:
-            logger.error("[ERYK] Błąd tworzenia ZIP: %s", e)
-
     return {
         "reply_html": reply_html,
         "htm_for_drive": {
@@ -947,5 +927,5 @@ def build_dociekliwy_section(
             "content_type": "text/html",
         },
         "drive_link": drive_link,
-        "docx_list": [zip_attachment] if zip_attachment else [],  # ZIP zamiast HTML — Gmail nie blokuje
+        "docx_list": [],  # brak zalacznikow — link do Drive w body wystarczy
     }

@@ -101,6 +101,12 @@ def build_html_reply(body_text: str) -> str:
                     </a>
                 </span>
             </p>
+            <p style="margin: 0; font-size: 11px; color: #088a08;">
+                Portfolio:<br>
+                <a href="https://legionowopawel.github.io/AutoResponder_AI_Text/" style="color: #088a08; text-decoration: none;">
+                    legionowopawel.github.io/AutoResponder_AI_Text
+                </a>
+            </p>
         </div>
     </div>
 </body>

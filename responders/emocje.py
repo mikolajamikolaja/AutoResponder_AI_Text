@@ -25,6 +25,7 @@ import gc
 import json
 import base64
 import logging
+import zipfile
 from flask import current_app
 
 from core.ai_client import call_deepseek, extract_clean_text, MODEL_TYLER
@@ -152,6 +153,14 @@ def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _html_to_zip(html_content: str, inner_filename: str) -> str:
+    """Pakuje HTML do ZIP i zwraca base64. Gmail nie blokuje .zip."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(inner_filename, html_content.encode("utf-8"))
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _safe_label(text: str) -> str:
@@ -521,7 +530,7 @@ def build_emocje_section(
 
     # ── Załączniki ────────────────────────────────────────────────────────────
 
-    # 1. SVG diagram
+    # 1. SVG diagram → ZIP (Gmail blokuje .htm/.html)
     try:
         svg_content = _buduj_svg(pocieszenie_html, metoda, nastroj, imie)
         svg_htm = f"""<!DOCTYPE html>
@@ -531,14 +540,14 @@ def build_emocje_section(
 {svg_content}
 </body></html>"""
         docs.append({
-            "base64": base64.b64encode(svg_htm.encode("utf-8")).decode("ascii"),
-            "filename": f"diagram_{sl}.htm",
-            "content_type": "text/html",
+            "base64": _html_to_zip(svg_htm, f"diagram_{sl}.html"),
+            "filename": f"diagram_{sl}.zip",
+            "content_type": "application/zip",
         })
     except Exception as e:
         logger.warning("[emocje] Błąd SVG: %s", e)
 
-    # 2. Miniatura JPG
+    # 2. Miniatura JPG (Gmail przepuszcza .jpg bez problemu)
     if jpg_b64:
         try:
             docs.append({
@@ -549,13 +558,13 @@ def build_emocje_section(
         except Exception as e:
             logger.warning("[emocje] Błąd JPG doc: %s", e)
 
-    # 3. Pełny HTML
+    # 3. Pełny HTML → ZIP (Gmail blokuje .htm/.html)
     try:
         pelny = _buduj_pelny_html(pocieszenie_html, imie, metoda, nastroj)
         docs.append({
-            "base64": base64.b64encode(pelny.encode("utf-8")).decode("ascii"),
-            "filename": f"pelna_{sl}.htm",
-            "content_type": "text/html",
+            "base64": _html_to_zip(pelny, f"pelna_{sl}.html"),
+            "filename": f"pelna_{sl}.zip",
+            "content_type": "application/zip",
         })
     except Exception as e:
         logger.warning("[emocje] Błąd pełnego HTML: %s", e)
