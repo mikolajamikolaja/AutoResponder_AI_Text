@@ -1699,12 +1699,18 @@ function _markHandledInSheet(sheetId, msgId) {
  * _checkUnprocessedMessages
  *
  * Czyta zakładkę "Historia" w HISTORY_SHEET_ID.
- * Szuka wierszy ODEBRANO (kol. E) bez odpowiadającego WYSŁANO (kol. F)
- * dla tego samego message_id — w ciągu ostatnich 24 godzin.
+ * Szuka wierszy ODEBRANO (kol. E) bez PRZYJETO (kol. E) ani WYSŁANO (kol. F)
+ * dla tego samego message_id — w ciągu ostatnich 72 godzin.
+ *
+ * ARCHITEKTURA RETRY (v13):
+ *   Render zapisuje PRZYJETO (kol. E) NATYCHMIAST po odebraniu webhooka,
+ *   zanim w ogóle zacznie pipeline. GAS widzi PRZYJETO i NIE retryuje — nawet
+ *   jeśli WYSŁANO (kol. F) jeszcze nie ma bo pipeline trwa kilka minut.
+ *   Retry następuje tylko gdy brakuje PRZYJETO, czyli Render w ogóle nie odebrał.
  *
  * Zasady:
  *  - Pomija banned senders — nawet jeśli mają stary wpis ODEBRANO w Sheets
- *  - Traktuje WYSŁANO, ERROR:*, EMPTY:* i GAS_FALLBACK jako "obsłużone" przez Render
+ *  - PRZYJETO (kol. E), WYSŁANO (kol. F), ERROR:*, EMPTY:*, GAS_FALLBACK = obsłużone
  *  - Wysyła retry do Render z flagą is_retry=true i czeka 25s na odpowiedź
  *  - Przy nieudanym retry wysyła alert e-mail do ADMIN_EMAIL
  *  - v12: MAX_RETRIES_PER_MSG — po przekroczeniu limitu wiadomość jest oznaczana
@@ -1778,13 +1784,15 @@ function _checkUnprocessedMessages(webhookUrl) {
     }
 
     // Obsłużone = Render podjął próbę (sukces lub błąd — nie ponawiamy)
-    // v12: GAS_FALLBACK i WYSŁANO:GAS_FALLBACK również traktowane jako obsłużone
-    // PRZYJETO = Render przyjął zadanie i zaraz zacznie — nie rób retry
-    if (statusRend === "WYSŁANO" ||
-        statusRend === "PRZYJETO" ||
+    // v13: PRZYJETO w kol. E (status_gas) = Render natychmiast potwierdza odbiór webhooka.
+    //      GAS widzi PRZYJETO i NIE retryuje, nawet jeśli pipeline trwa kilka minut
+    //      i WYSŁANO (kol. F) jeszcze nie ma.
+    // GAS_FALLBACK i WYSŁANO:GAS_FALLBACK również traktowane jako obsłużone.
+    if (statusGas === "PRZYJETO" ||
+        statusRend === "WYSŁANO" ||
         statusRend.indexOf("GAS_FALLBACK") !== -1 ||
-        responder.indexOf("ERROR:") === 0 ||
-        responder.indexOf("EMPTY:") === 0) {
+        statusRend.startsWith("ERROR:") ||
+        statusRend.startsWith("EMPTY:")) {
       handledIds[msgId] = true;
     }
   }

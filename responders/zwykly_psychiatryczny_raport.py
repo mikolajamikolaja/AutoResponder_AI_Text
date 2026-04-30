@@ -1210,6 +1210,9 @@ def _build_docx(
     # ══════════════════════════════════════════════════════════════════════════
     heading("I. DANE PACJENTA", 2, RED, 11)
     dp = raport.get("dane_pacjenta", {})
+    # BUGFIX: dane_pacjenta może być stringiem jeśli AI zwróciło błędny typ
+    if not isinstance(dp, dict):
+        dp = {}
     field("Imię i nazwisko", dp.get("imie_nazwisko", ""))
     field("Wiek", dp.get("wiek", ""))
     field("Adres", dp.get("adres", ""))
@@ -1318,7 +1321,10 @@ def _build_docx(
     # ══════════════════════════════════════════════════════════════════════════
     heading("V. FARMAKOLOGIA — PEŁNA LISTA LEKÓW ZASTOSOWANYCH", 2, RED, 11)
     farm = raport.get("farmakologia", {})
-    leki_lista = farm.get("leki", []) if isinstance(farm, dict) else []
+    # BUGFIX: farmakologia może być stringiem
+    if not isinstance(farm, dict):
+        farm = {}
+    leki_lista = farm.get("leki", [])
 
     # Filtruj leki z wartością __BRAK__
     leki_lista = [
@@ -1423,6 +1429,9 @@ def _build_docx(
     # ══════════════════════════════════════════════════════════════════════════
     heading("VII. KARTA WYPISU", 2, RED, 11)
     wypis = raport.get("wypis", {})
+    # BUGFIX: wypis może być stringiem
+    if not isinstance(wypis, dict):
+        wypis = {}
     if isinstance(wypis, dict):
         field("Dzień wypisu", wypis.get("dzien_wypisu", ""))
         field("Powód wypisu", wypis.get("powod_wypisu", ""))
@@ -1727,7 +1736,9 @@ def build_raport(
     data_przyjecia = sekcja_pacjent.get(
         "data_przyjecia", datetime.now().strftime("%d.%m.%Y")
     )
-    leki_lista = sekcja_dep_leki.get("farmakologia", {}).get("leki", [])
+    # BUGFIX: farmakologia może być stringiem gdy AI zwróci błędny typ — guard przed .get()
+    _farm_tmp = sekcja_dep_leki.get("farmakologia", {})
+    leki_lista = _farm_tmp.get("leki", []) if isinstance(_farm_tmp, dict) else []
 
     # Runda 2 — dni hospitalizacji
     dni_1_7 = []
@@ -1801,12 +1812,19 @@ def build_raport(
         "diagnoza_wstepna", "diagnoza_dodatkowa", "choroba_wspolistniejaca",
         "zalecenia_tylera", "depozyt", "farmakologia", "wypis", "dane_pacjenta",
     }
+    # Klucze które NIE powinny nadpisywać wartości już ustawionych przez wcześniejsze sekcje
+    PROTECTED_KEYS = {"dane_pacjenta", "depozyt", "farmakologia", "wypis"}
     for sekcja in (sekcja_diagnozy, sekcja_zalecenia):
         if not isinstance(sekcja, dict):
             continue
         for k, v in sekcja.items():
             if k in DICT_KEYS and not isinstance(v, dict):
-                raport[k] = {}
+                # Nie nadpisuj poprawnego dict'a z wcześniejszej sekcji pustym {}
+                if k not in raport or not isinstance(raport.get(k), dict):
+                    raport[k] = {}
+            elif k in PROTECTED_KEYS and isinstance(raport.get(k), dict) and raport[k]:
+                # Nie nadpisuj niepustego dict'a z wcześniejszej sekcji danymi z diagnozy/zalecen
+                pass
             else:
                 raport[k] = v
 

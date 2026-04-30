@@ -42,7 +42,7 @@ from core.responder_manager import ResponderManager, PipelineBuilder
 from core.job_runner import run_pipeline_async, build_section_order
 from core.resource_manager import ResourceManager
 from core.validator import Validator
-from core.sheets_logger import log_odebrano, log_wyslano
+from core.sheets_logger import log_odebrano, log_wyslano, log_przyjeto
 
 app = Flask(__name__)
 
@@ -842,14 +842,16 @@ def webhook():
                 app.logger.warning("Błąd podczas log_odebrano: %s", e)
 
         # Logowanie "PRZYJETO" — natychmiast blokuje retry w GAS zanim pipeline skończy.
-        # GAS uruchamia się co minutę i szuka ODEBRANO bez WYSŁANO/PRZYJETO.
-        # Pipeline może trwać kilka minut (FLUX, DeepSeek) — bez tego wpisu
-        # GAS zdąży wysłać 3 retry zanim Render skończy pierwsze zadanie.
+        # GAS przy następnym uruchomieniu szuka ODEBRANO bez PRZYJETO (kol. E).
+        # Jeśli PRZYJETO jest — GAS nie retryuje, nawet jeśli WYSŁANO jeszcze nie ma.
+        # Pipeline może trwać kilka minut (FLUX, DeepSeek) — ten wpis chroni przed
+        # wielokrotnym przetwarzaniem tej samej wiadomości.
+        # log_przyjeto() wpisuje do kol. E (status_gas = PRZYJETO), NIE do kol. F.
         if history_sheet_id and message_id:
             try:
-                log_wyslano(history_sheet_id, message_id, "PRZYJETO", "")
+                log_przyjeto(history_sheet_id, message_id)
             except Exception as e:
-                app.logger.warning("Błąd podczas log PRZYJETO: %s", e)
+                app.logger.warning("Błąd podczas log_przyjeto: %s", e)
 
         # ── Uruchomienie Pipeline w tle ──────────────────────────────────────
         _state_pipeline_start(
