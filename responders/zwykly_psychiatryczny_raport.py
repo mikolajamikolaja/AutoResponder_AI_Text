@@ -52,22 +52,53 @@ RAPORT_JSON = os.path.join(PROMPTS_DIR, "zwykly_raport.json")
 SUBSTITUTE_IMAGE_PATH = os.path.join(BASE_DIR, "images", "zastepczy.jpg")
 
 
-def _strip_json_text(raw: str) -> str:
-    text = raw.strip()
-    text = re.sub(r"^```[a-zA-Z0-9]*\s*", "", text, flags=re.M)
-    text = re.sub(r"```\s*$", "", text, flags=re.M)
-    return text.strip()
+def _strip_json_markdown(raw: str) -> str:
+    if not raw:
+        return ""
+    # Szukamy wszystkiego między pierwszą a ostatnią klamrą/nawiasem
+    match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
+    if match:
+        return match.group(1)
+    # Jeśli brak klamer, czyścimy z markdownu i białych znaków
+    clean = raw.strip().lstrip("`, \n\t")
+    if clean.lower().startswith("json"):
+        clean = clean[4:].strip()
+    return clean
 
 
-def _fix_unicode_escapes(raw: str) -> str:
-    """Naprawia nieprawidłowe sekwencje escape Unicode w JSON."""
-    # Usuwa niekompletne \uXXXX (mniej niż 4 cyfry hex)
-    raw = re.sub(r"\\u[0-9a-fA-F]{0,3}(?![0-9a-fA-F])", "", raw)
-    # Usuwa pojedyncze backslash na końcu linii (mogą powodować problemy)
-    raw = re.sub(r"\\\s*$", "", raw, flags=re.M)
-    # Zamienia nieprawidłowe escape sequences na bezpieczne wersje
-    raw = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r"\\\\", raw)
-    return raw
+def _parse_json_safe(raw: str, section: str):
+    if not raw or len(raw.strip()) < 2:
+        return {}
+
+    clean = _strip_json_markdown(raw)
+
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        # Fallback: jeśli to czysty tekst, zapakuj go jako treść
+        if len(clean) > 5 and "{" not in clean:
+            logger.warning(
+                f"[psych-raport] Sekcja {section} to surowy tekst -> wrapping"
+            )
+            return {"content": clean}
+
+        # Próba ratowania uciętego JSONa
+        if not clean.endswith("}"):
+            try:
+                return json.loads(clean + "}")
+            except:
+                pass
+        logger.warning(f"[psych-raport] Krytyczny błąd JSON w sekcji {section}")
+        return {"error": "Błąd struktury", "raw": clean[:200]}
+
+
+def _call_with_retry(system, user, max_tokens=1000):
+    res = call_deepseek(system, user, MODEL_TYLER, max_tokens=max_tokens)
+    # Jeśli odpowiedź jest podejrzanie krótka (np. tylko klamra otwierająca)
+    if not res or len(res.strip()) <= 5:
+        logger.warning(f"[psych-raport] Odpowiedź ucięta, retry z 2x max_tokens")
+        res = call_deepseek(system, user, MODEL_TYLER, max_tokens=max_tokens * 2)
+    return res
 
 
 def _extract_python_dicts(raw: str) -> list | None:
@@ -84,7 +115,7 @@ def _extract_python_dicts(raw: str) -> list | None:
     n = len(raw)
     while i < n:
         # Znajdź następne '{'
-        while i < n and raw[i] != '{':
+        while i < n and raw[i] != "{":
             i += 1
         if i >= n:
             break
@@ -101,7 +132,7 @@ def _extract_python_dicts(raw: str) -> list | None:
                 escape = False
                 j += 1
                 continue
-            if ch == '\\' and in_str:
+            if ch == "\\" and in_str:
                 escape = True
                 j += 1
                 continue
@@ -109,14 +140,15 @@ def _extract_python_dicts(raw: str) -> list | None:
                 if ch in ('"', "'"):
                     in_str = True
                     str_char = ch
-                elif ch == '{':
+                elif ch == "{":
                     depth += 1
-                elif ch == '}':
+                elif ch == "}":
                     depth -= 1
                     if depth == 0:
                         fragment = raw[start : j + 1]
                         try:
                             import ast as _ast
+
                             obj = _ast.literal_eval(fragment)
                             if isinstance(obj, dict):
                                 results.append(obj)
@@ -209,13 +241,13 @@ def _normalize_json_text(raw: str) -> str:
     return raw.strip()
 
 
-_JSON_FORCE_SUFFIX = '\n\nOdpowiedź TYLKO w formacie JSON. Pierwszym znakiem MUSI być {. Ostatnim znakiem MUSI być }. Absolutny zakaz jakiegokolwiek tekstu, prozy, wyjaśnień ani komentarzy przed { lub po }. Zacznij od { :'
+_JSON_FORCE_SUFFIX = "\n\nOdpowiedź TYLKO w formacie JSON. Pierwszym znakiem MUSI być {. Ostatnim znakiem MUSI być }. Absolutny zakaz jakiegokolwiek tekstu, prozy, wyjaśnień ani komentarzy przed { lub po }. Zacznij od { :"
 _JSON_FORCE_SYSTEM = (
-    'KRYTYCZNE: Twoja odpowiedź to WYŁĄCZNIE czysty JSON. '
-    'Pierwszym znakiem odpowiedzi MUSI być {. Ostatnim znakiem MUSI być }. '
+    "KRYTYCZNE: Twoja odpowiedź to WYŁĄCZNIE czysty JSON. "
+    "Pierwszym znakiem odpowiedzi MUSI być {. Ostatnim znakiem MUSI być }. "
     'Absolutny zakaz pisania czegokolwiek przed { — żadnej prozy, żadnych wyjaśnień, żadnego "Oto JSON:", żadnych komentarzy. '
-    'Absolutny zakaz pisania czegokolwiek po } — żadnych podsumowań, żadnych uwag. '
-    'Cała odpowiedź = jeden obiekt JSON od { do }. Nic poza tym.'
+    "Absolutny zakaz pisania czegokolwiek po } — żadnych podsumowań, żadnych uwag. "
+    "Cała odpowiedź = jeden obiekt JSON od { do }. Nic poza tym."
 )
 
 
@@ -228,7 +260,7 @@ def _s(system_prompt: str) -> str:
     """Dodaje wymóg startu od '{' do system promptu."""
     if not system_prompt:
         return _JSON_FORCE_SYSTEM
-    return system_prompt + '\n' + _JSON_FORCE_SYSTEM
+    return system_prompt + "\n" + _JSON_FORCE_SYSTEM
 
 
 def _wrap_section_list(section: str, data: object) -> object:
@@ -322,12 +354,12 @@ def _repair_truncated_json(raw: str) -> str:
 
 # Wymagane klucze dla każdej sekcji — jeśli brakuje po naprawie, logujemy WARNING
 _REQUIRED_KEYS: dict[str, list[str]] = {
-    "pacjent":               ["dane_pacjenta", "powod_przyjecia"],
-    "diagnozy":              ["diagnoza_wstepna", "objawy"],
-    "wypis":                 ["wypis"],
-    "zalecenia_7a":          ["zalecenia_tylera", "rokowanie"],
-    "zalecenia_7b":          ["notatki_pielegniarek"],
-    "zalecenia_7c":          ["notatki_sprzataczki", "incydenty_specjalne"],
+    "pacjent": ["dane_pacjenta", "powod_przyjecia"],
+    "diagnozy": ["diagnoza_wstepna", "objawy"],
+    "wypis": ["wypis"],
+    "zalecenia_7a": ["zalecenia_tylera", "rokowanie"],
+    "zalecenia_7b": ["notatki_pielegniarek"],
+    "zalecenia_7c": ["notatki_sprzataczki", "incydenty_specjalne"],
     "deepseek_completeness": [],  # merge dict — nie walidujemy
 }
 
@@ -434,13 +466,15 @@ def _merge_dicts(base: dict, override: dict) -> dict:
 
 
 def _load_substitute_image() -> dict | None:
-    if not os.path.exists(SUBSTITUTE_IMAGE_PATH):
-        current_app.logger.warning(
-            "[psych-test] Brak pliku zastępczego: %s", SUBSTITUTE_IMAGE_PATH
+    # Ścieżka do obrazka zastępczego
+    full_path = SUBSTITUTE_IMAGE_PATH
+    logger.error(f"[psych-raport] Ścieżka do obrazka zastępczego: {full_path}")
+    if not os.path.exists(full_path):
+        logger.error(
+            f"[psych-raport] Plik obrazka zastępczego nie istnieje: {full_path}"
         )
-        return None
     try:
-        with open(SUBSTITUTE_IMAGE_PATH, "rb") as f:
+        with open(full_path, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("ascii")
         return {
             "base64": b64,
@@ -608,9 +642,18 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         result_1a = {}
     # Jeśli dane_pacjenta wróciły płaskie — zawiń je
     if "imie_nazwisko" in result_1a and "dane_pacjenta" not in result_1a:
-        flat_keys = ["imie_nazwisko", "rodowod", "wiek", "adres", "zawod",
-                     "stan_cywilny", "numer_ubezpieczenia"]
-        result_1a["dane_pacjenta"] = {k: result_1a.pop(k) for k in flat_keys if k in result_1a}
+        flat_keys = [
+            "imie_nazwisko",
+            "rodowod",
+            "wiek",
+            "adres",
+            "zawod",
+            "stan_cywilny",
+            "numer_ubezpieczenia",
+        ]
+        result_1a["dane_pacjenta"] = {
+            k: result_1a.pop(k) for k in flat_keys if k in result_1a
+        }
     current_app.logger.info(
         "[psych-raport] 1a dane_pacjenta OK: %s",
         bool(result_1a.get("dane_pacjenta")),
@@ -665,7 +708,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         f"SCHEMAT JSON (TYLKO klucz cytaty_z_przyjecia):\n{schema_1c}\n\n"
         f"cytaty_z_przyjecia: DOKŁADNIE 4 obiekty. Każdy obiekt: "
         f"'cytat' = PARAFRAZA REALNEGO zdania z emaila (ZAKAZ cytatu którego nadawca nie powiedział), "
-        f"'komentarz' = nota kliniczna MINIMUM 15 zdań nawiązująca do emaila.\n"
+        f"'komentarz' = nota kliniczna MINIMUM 15 zdań nawiązujących do emaila.\n"
         f"ABSOLUTNY ZAKAZ w komentarzu: Szwejk, Monty Python, Tyler Durden, Fight Club, "
         f"kafkowski, absurdystyczny. Komentarz MUSI brzmieć jak autentyczna nota psychiatryczna.\n"
         f"LIMIT: każdy komentarz max 400 znaków. Zwróć TYLKO czysty JSON."
@@ -893,9 +936,15 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
     schema_5a = json.dumps(
         {
             "wypis": {
-                "dzien_wypisu": wypis_schema.get("dzien_wypisu", f"Dzień 15, {data_wypisu}"),
-                "stan_przy_wypisie": wypis_schema.get("stan_przy_wypisie", "4 zdania nawiązujące do emaila"),
-                "powod_wypisu": wypis_schema.get("powod_wypisu", "2-3 zdania nawiązujące do emaila"),
+                "dzien_wypisu": wypis_schema.get(
+                    "dzien_wypisu", f"Dzień 15, {data_wypisu}"
+                ),
+                "stan_przy_wypisie": wypis_schema.get(
+                    "stan_przy_wypisie", "4 zdania nawiązujące do emaila"
+                ),
+                "powod_wypisu": wypis_schema.get(
+                    "powod_wypisu", "2-3 zdania nawiązujące do emaila"
+                ),
             }
         },
         ensure_ascii=False,
@@ -998,11 +1047,21 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
         {
             "diagnoza_wstepna": sec.get("schema", {}).get(
                 "diagnoza_wstepna",
-                {"nazwa_lacinska": "...", "nazwa_polska": "...", "kod_dsm": "...", "opis_kliniczny": "..."},
+                {
+                    "nazwa_lacinska": "...",
+                    "nazwa_polska": "...",
+                    "kod_dsm": "...",
+                    "opis_kliniczny": "...",
+                },
             ),
             "diagnoza_dodatkowa": sec.get("schema", {}).get(
                 "diagnoza_dodatkowa",
-                {"nazwa_lacinska": "...", "nazwa_polska": "...", "kod_dsm": "...", "opis_kliniczny": "..."},
+                {
+                    "nazwa_lacinska": "...",
+                    "nazwa_polska": "...",
+                    "kod_dsm": "...",
+                    "opis_kliniczny": "...",
+                },
             ),
         },
         ensure_ascii=False,
@@ -1010,7 +1069,11 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
     )
     user_6a = (
         f"EMAIL PACJENTA:\n{email_fragment}\n\n"
-        + (f"POPRZEDNI EMAIL (dla diagnozy_dodatkowej):\n{prev_fragment}\n\n" if prev_fragment else "")
+        + (
+            f"POPRZEDNI EMAIL (dla diagnozy_dodatkowej):\n{prev_fragment}\n\n"
+            if prev_fragment
+            else ""
+        )
         + f"SCHEMAT JSON (TYLKO klucze diagnoza_wstepna i diagnoza_dodatkowa):\n{schema_6a}\n\n"
         f"Diagnozy: łacińskie nazwy absurdalne, nawiązujące do emaila. Styl Szwejka.\n"
         f"LIMIT: każde pole opis_kliniczny max 300 znaków. Zwróć TYLKO czysty JSON."
@@ -1020,7 +1083,8 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
     if not isinstance(result_6a, dict):
         result_6a = {}
     current_app.logger.info(
-        "[psych-raport] 6a diagnozy_wstepna OK: %s", bool(result_6a.get("diagnoza_wstepna"))
+        "[psych-raport] 6a diagnozy_wstepna OK: %s",
+        bool(result_6a.get("diagnoza_wstepna")),
     )
 
     # ── Call 6b — objawy + choroba_wspolistniejaca ────────────────────────────
@@ -1131,12 +1195,15 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"zalecenia_tylera.zadanie_1: min. 5-6 zdań, konkretny przedmiot/plan/rzecz z emaila.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a_zal = call_deepseek(_s(system_7), _u(user_7a_zal), MODEL_TYLER, max_tokens=1500)
+    raw_7a_zal = call_deepseek(
+        _s(system_7), _u(user_7a_zal), MODEL_TYLER, max_tokens=1500
+    )
     result_7a_zal = _parse_json_safe(raw_7a_zal, "zalecenia_7a_zalecenia")
     if not isinstance(result_7a_zal, dict):
         result_7a_zal = {}
     current_app.logger.info(
-        "[psych-raport] 7a_zalecenia OK: %s", bool(result_7a_zal.get("zalecenia_tylera"))
+        "[psych-raport] 7a_zalecenia OK: %s",
+        bool(result_7a_zal.get("zalecenia_tylera")),
     )
 
     # ── deepseek_7a_rokowanie — TYLKO rokowanie ───────────────────────────────
@@ -1156,7 +1223,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Styl: formalny raport psychiatryczny + nihilizm Tylera Durdena.\n"
         f"Zwróć TYLKO czysty JSON."
     )
-    raw_7a_rok = call_deepseek(_s(system_7), _u(user_7a_rok), MODEL_TYLER, max_tokens=1200)
+    raw_7a_rok = call_deepseek(
+        _s(system_7), _u(user_7a_rok), MODEL_TYLER, max_tokens=1200
+    )
     result_7a_rok = _parse_json_safe(raw_7a_rok, "zalecenia_7a_rokowanie")
     if not isinstance(result_7a_rok, dict):
         result_7a_rok = {}
@@ -1181,7 +1250,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"SCHEMAT JSON (TYLKO klucz notatki_pielegniarek):\n{schema_7b}\n\n"
         f"notatki_pielegniarek: DOKŁADNIE 3 obiekty. Każdy: imie_pielegniarki, data (DD.MM.YYYY), "
         f"tresc (3-4 zdania gwarą polską — śląska/mazurska/podlaska mieszanka, ciepła dosadna kobieta ze wsi, "
-        f"nawiązuje do KONKRETNYCH zachowań pacjenta z emaila i zdarzenia z hospitalizacji).\n"
+        f"nawiązuje do KONKRETNYCH zachowań pacjenta z emaila i zdarzeń z hospitalizacji).\n"
         f"KAŻDA notatka nawiązuje do INNEGO zdarzenia i INNEGO dnia.\n"
         f"LIMIT: pole tresc max 400 znaków. Zwróć TYLKO czysty JSON."
     )
@@ -1212,7 +1281,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"nawiązuje do emaila pacjenta). KAŻDA notatka mówi o INNYM znalezisku.\n"
         f"LIMIT: pole tresc max 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_7c_sp = call_deepseek(_s(system_7), _u(user_7c_sp), MODEL_TYLER, max_tokens=1500)
+    raw_7c_sp = call_deepseek(
+        _s(system_7), _u(user_7c_sp), MODEL_TYLER, max_tokens=1500
+    )
     result_7c_sp = _parse_json_safe(raw_7c_sp, "zalecenia_7c_sprzataczka")
     if not isinstance(result_7c_sp, dict):
         result_7c_sp = {}
@@ -1240,7 +1311,9 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
         f"Format: 'Protokół Incydentu [nr]: [tytuł]. [4-5 zdań]'.\n"
         f"LIMIT: każdy incydent max 400 znaków. Zwróć TYLKO czysty JSON."
     )
-    raw_7c_inc = call_deepseek(_s(system_7), _u(user_7c_inc), MODEL_TYLER, max_tokens=1500)
+    raw_7c_inc = call_deepseek(
+        _s(system_7), _u(user_7c_inc), MODEL_TYLER, max_tokens=1500
+    )
     result_7c_inc = _parse_json_safe(raw_7c_inc, "zalecenia_7c_incydenty")
     if not isinstance(result_7c_inc, dict):
         result_7c_inc = {}
@@ -1390,9 +1463,20 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
     raport_slim = {k: v for k, v in raport.items() if k not in _DEEPSEEK_SKIP}
 
     # Podział raportu na 3 grupy kluczy
-    keys_cc1 = {"dane_pacjenta", "numer_historii_choroby", "data_przyjecia", "powod_przyjecia"}
-    keys_cc2 = {"diagnoza_wstepna", "diagnoza_dodatkowa", "objawy", "choroba_wspolistniejaca",
-                "depozyt", "farmakologia"}
+    keys_cc1 = {
+        "dane_pacjenta",
+        "numer_historii_choroby",
+        "data_przyjecia",
+        "powod_przyjecia",
+    }
+    keys_cc2 = {
+        "diagnoza_wstepna",
+        "diagnoza_dodatkowa",
+        "objawy",
+        "choroba_wspolistniejaca",
+        "depozyt",
+        "farmakologia",
+    }
     keys_cc3 = {"zalecenia_tylera", "rokowanie", "wypis", "leczenie_specjalne"}
 
     def _run_cc(group_keys: set, label: str) -> dict:
@@ -1408,7 +1492,9 @@ def _deepseek_completeness_check(cfg: dict, raport: dict, body: str) -> dict:
             f"Zwróć TYLKO czysty JSON z poprawkami (ta sama struktura kluczy)."
         )
         current_app.logger.info(
-            "[psych-raport] completeness_check_%s START (%d kluczy)", label, len(fragment)
+            "[psych-raport] completeness_check_%s START (%d kluczy)",
+            label,
+            len(fragment),
         )
         raw = call_deepseek(system, _u(user), MODEL_TYLER, max_tokens=2250)
         if not raw:

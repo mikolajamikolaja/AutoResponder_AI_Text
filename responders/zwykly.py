@@ -155,8 +155,10 @@ from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens
 # ─────────────────────────────────────────────────────────────────────────────
 # WYMUSZANIE STARTU JSON od '{'
 # ─────────────────────────────────────────────────────────────────────────────
-_JSON_FORCE_SUFFIX = '\n\nOdpowiedź (zacznij od {):'
-_JSON_FORCE_SYSTEM = 'ZAWSZE zacznij odpowiedź od znaku {. Zakaz jakiegokolwiek tekstu przed {.'
+_JSON_FORCE_SUFFIX = "\n\nOdpowiedź (zacznij od {):"
+_JSON_FORCE_SYSTEM = (
+    "ZAWSZE zacznij odpowiedź od znaku {. Zakaz jakiegokolwiek tekstu przed {."
+)
 
 
 def _ju(user_prompt: str) -> str:
@@ -168,7 +170,7 @@ def _js(system_prompt: str) -> str:
     """Dodaje wymóg startu od '{' do system promptu."""
     if not system_prompt:
         return _JSON_FORCE_SYSTEM
-    return system_prompt + '\n' + _JSON_FORCE_SYSTEM
+    return system_prompt + "\n" + _JSON_FORCE_SYSTEM
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -213,18 +215,17 @@ def _extract_first_json_object(text: str) -> str:
 
 
 def _strip_json_markdown(raw: str) -> str:
-    """
-    Usuwa opakowanie ```json ... ``` lub ``` ... ``` z odpowiedzi AI.
-    Wyciąga PIERWSZY kompletny blok { ... } lub [ ... ] z tekstu.
-    Naprawia błąd 'Extra data' gdy model zwrócił dwa obiekty JSON.
-    Zwraca czysty string gotowy do json.loads().
-    """
-    clean = raw.strip()
-    # Usuń znaczniki ```json lub ``` (z dowolnym językiem)
-    clean = re.sub(r"```[a-zA-Z]*", "", clean)
-    clean = re.sub(r"```", "", clean)
-    clean = clean.strip()
-    return _extract_first_json_object(clean)
+    if not raw:
+        return ""
+    # Szukamy wszystkiego między pierwszą a ostatnią klamrą/nawiasem
+    match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
+    if match:
+        return match.group(1)
+    # Jeśli brak klamer, czyścimy z markdownu i białych znaków
+    clean = raw.strip().lstrip("`, \n\t")
+    if clean.lower().startswith("json"):
+        clean = clean[4:].strip()
+    return clean
 
 
 def _load_prompt_json() -> dict:
@@ -752,7 +753,8 @@ def _extract_nouns_deepseek(body: str) -> dict:
         # Guard: jeśli model zwrócił tekst zamiast JSON
         if not clean.strip().startswith("{"):
             logger.warning(
-                "[rzeczowniki] Odpowiedź nie jest JSON — fallback regex | raw: %.120s", raw
+                "[rzeczowniki] Odpowiedź nie jest JSON — fallback regex | raw: %.120s",
+                raw,
             )
             return {}
         result = json.loads(clean)
@@ -1080,7 +1082,7 @@ def _extract_tyler_sentences(response_text: str) -> dict:
     panel3 = None
     for line in lines:
         if "okrzyk" in line.lower():
-            panel3 = re.sub(r"^okrzyk[^:]*:\s*", "", line, flags=re.IGNORECASE).strip()[
+            panel3 = re.sub(r"okrzyk[^:]*:\s*", "", line, flags=re.IGNORECASE).strip()[
                 :120
             ]
             break
@@ -1664,7 +1666,9 @@ def _generate_flux_image(
                 "używam zastepczy.jpg zamiast FLUX"
             )
         else:
-            logger.error("[flux-tyler] Brak tokenów HF w zmiennych środowiskowych — używam zastepczy.jpg")
+            logger.error(
+                "[flux-tyler] Brak tokenów HF w zmiennych środowiskowych — używam zastepczy.jpg"
+            )
         # Fallback do zastępczego obrazka — tak jak test_mode
         substitute = _load_substitute_image()
         if substitute:
@@ -1756,7 +1760,10 @@ def _generate_flux_image(
         except Exception as e:
             logger.warning("[flux-tyler] ❌ Token %s: wyjątek: %s", name, str(e)[:80])
 
-    logger.error("[flux-tyler] Wszystkie tokeny HF zawiodły dla panelu %d — używam zastepczy.jpg", panel_index)
+    logger.error(
+        "[flux-tyler] Wszystkie tokeny HF zawiodły dla panelu %d — używam zastepczy.jpg",
+        panel_index,
+    )
     substitute = _load_substitute_image()
     if substitute:
         substitute = dict(substitute)
@@ -1872,7 +1879,9 @@ def _generate_triptych_prompts_batch(
         # zamiast {"prompts": ["p1","p2",...]}
         if clean.strip().startswith("["):
             prompts = json.loads(clean)
-            logger.info("[tryptyk-batch] Model zwrócił tablicę bezpośrednio — akceptuję")
+            logger.info(
+                "[tryptyk-batch] Model zwrócił tablicę bezpośrednio — akceptuję"
+            )
         else:
             data = json.loads(clean)
             prompts = data.get("prompts", [])
@@ -2226,7 +2235,7 @@ def _build_debug_txt(
         v = session_vars.get(k, "")
         lines.append(f'  [{k}] = "{v}"')
 
-    # ── PRZYPORZĄDKOWANIA PANELI ──────────────────────────────────────────────
+    # ── PRZYPORZĄDKOWANIE PANELI ──────────────────────────────────────────────
     lines += [
         "",
         "---------------------------------------------",
@@ -2660,13 +2669,11 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
             if c.stringWidth(test, FN, 9) <= col_width:
                 cur_z = test
             else:
-                c.drawString(left_margin, y, cur_z)
-                y -= 4.5 * mm
-                y = check_page_break(y)
+                c.drawCentredString(W / 2, y, f'"{cur_z}"')
+                y -= 4 * mm
                 cur_z = w
         if cur_z:
-            c.drawString(left_margin, y, cur_z)
-            y -= 8 * mm
+            c.drawCentredString(W / 2, y, f'"{cur_z}"')
 
     # ── ŻYCIORYS ──────────────────────────────────────────────────────────────────
     zyciorys = cv_data.get("zyciorys", "")
@@ -2708,7 +2715,7 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
             if c.stringWidth(test, FN, 8) <= safe_w8:
                 line = test
             else:
-                c.drawString(left_margin, y, f"— {line}")
+                c.drawCentredString(W / 2, y, f"— {line}")
                 y -= 4 * mm
                 line = w
         if line:
@@ -2797,7 +2804,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         f"Odpowiedź Tylera do nadawcy:\n{res_text}\n\n"
         f"Email nadawcy (kontekst):\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
         f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
-        f"Wygeneruj DOKŁADNIE 5 pytań (nie 10). Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
     raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=3000)
@@ -2940,189 +2947,107 @@ function sprawdz() {{
         c.setTitle(tytul)
         lm, rm = 15 * mm, W - 15 * mm
         cw = rm - lm
+        RED = (0.6, 0.1, 0.1)
+        DARK = (0.1, 0.1, 0.1)
+        GRAY = (0.4, 0.4, 0.4)
 
-        def wrap_draw_a(txt, x, y, font, size, max_w, color=(0.1, 0.1, 0.1)):
-            c.setFont(font, size)
-            c.setFillColorRGB(*color)
-            words = str(txt).split()
-            line = ""
-            used = 0
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, font, size) <= max_w:
-                    line = test
-                else:
-                    c.drawString(x, y - used, line)
-                    used += size + 3
-                    line = w
-            if line:
-                c.drawString(x, y - used, line)
-                used += size + 3
-            return used
-
-        def new_page_if_needed(y, need=30 * mm):
-            if y < need:
-                c.showPage()
-                return H - 20 * mm
-            return y
+        # Obramowanie karty
+        c.setStrokeColorRGB(*RED)
+        c.setLineWidth(3)
+        c.rect(8 * mm, 8 * mm, W - 16 * mm, H - 16 * mm, fill=0, stroke=1)
+        c.setLineWidth(1)
+        c.rect(10 * mm, 10 * mm, W - 20 * mm, H - 20 * mm, fill=0, stroke=1)
 
         # Nagłówek
-        c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.rect(0, H - 30 * mm, W, 30 * mm, fill=1, stroke=0)
-        c.setFont(FB, 14)
-        c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W / 2, H - 14 * mm, tytul[:60])
+        c.setFillColorRGB(*DARK)
+        c.rect(10 * mm, H - 40 * mm, W - 20 * mm, 30 * mm, fill=1, stroke=0)
+        c.setFont(FB, 8)
+        c.setFillColorRGB(0.6, 0.6, 0.6)
+        c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA")
+
         c.setFont(FN, 8)
         c.setFillColorRGB(0.7, 0.7, 0.7)
-        c.drawCentredString(W / 2, H - 22 * mm, data.get("wprowadzenie", "")[:100])
+        c.drawCentredString(
+            W / 2,
+            H - 21 * mm,
+            f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia",
+        )
 
-        y = H - 38 * mm
-        form = c.acroForm
+        # Linia dekoracyjna
+        c.setStrokeColorRGB(0.7, 0.1, 0.1)
+        c.setLineWidth(2)
+        c.line(lm, H - 30 * mm, rm, H - 30 * mm)
 
-        correct_answers = {}  # nr → poprawna litera
+        # Tytuł horoskopu
+        znak = data.get("znak_zodiaku", "Nieznany")
+        motto = data.get("motto", "")
+        c.setFont(FB, 13)
+        c.setFillColorRGB(0.6, 0.1, 0.1)
+        c.drawCentredString(W / 2, H - 37 * mm, f"HOROSKOP: {znak.upper()}")
+        c.setFont(FN, 9)
+        c.setFillColorRGB(0.3, 0.3, 0.3)
+        c.drawCentredString(W / 2, H - 43 * mm, motto[:80])
 
-        for p in pytania[:5]:
-            nr = str(p.get("nr", "?"))
-            cytat = p.get("cytat_tylera", "")
-            pytanie_txt = p.get("pytanie", "")
-            odp = p.get("odpowiedzi", {})
-            if isinstance(odp, list):
-                odp = {
-                    str(item.get("klucz", item.get("key", chr(97 + i)))): str(
-                        item.get("tresc", item.get("text", ""))
-                    )
-                    for i, item in enumerate(odp)
-                }
-            elif not isinstance(odp, dict):
-                odp = {}
+        c.setStrokeColorRGB(0.3, 0.3, 0.3)
+        c.setLineWidth(0.5)
+        c.line(lm, H - 46 * mm, rm, H - 46 * mm)
 
-            correct_answers[nr] = "b"  # zawsze b — jak w oryginalnym HTML
+        y = H - 52 * mm
+        dni = data.get("dni", [])
 
-            y = new_page_if_needed(y, 60 * mm)
+        for dzien in dni:
+            if y < 30 * mm:
+                c.showPage()
+                y = H - 20 * mm
 
-            # Numer i pytanie
-            c.setFont(FB, 9)
-            c.setFillColorRGB(0.6, 0.1, 0.1)
-            c.drawString(lm, y, f"Pytanie {nr}:")
-            y -= 5 * mm
-            used = wrap_draw_a(pytanie_txt, lm, y, FN, 9, cw, (0.1, 0.1, 0.1))
-            y -= used + 2 * mm
+            naglowek = dzien.get("naglowek", "").upper()
+            data_dnia = dzien.get("data", "")
+            tresc = dzien.get("tresc", "")
+            rada = dzien.get("rada_tylera", "")
 
-            # Cytat
-            if cytat:
-                used = wrap_draw_a(
-                    f'"{cytat}"', lm + 3 * mm, y, FN, 8, cw - 6 * mm, (0.4, 0.4, 0.4)
-                )
-                y -= used + 2 * mm
-
-            # Odpowiedzi z checkboxami AcroForm
-            for key in ["a", "b", "c"]:
-                val = odp.get(key, "")
-                if not val:
-                    continue
-                y = new_page_if_needed(y, 12 * mm)
-
-                field_name = f"q{nr}_{key}"
-                from reportlab.lib.colors import Color as RLColor
-
-                form.checkbox(
-                    name=field_name,
-                    tooltip=f"Pytanie {nr}, odpowiedz {key}",
-                    x=lm,
-                    y=y - 3 * mm,
-                    buttonStyle="check",
-                    borderColor=RLColor(0.5, 0.1, 0.1),
-                    fillColor=RLColor(1, 1, 1),
-                    textColor=RLColor(0.5, 0.1, 0.1),
-                    forceBorder=True,
-                    size=10,
-                )
-
-                used = wrap_draw_a(
-                    f"{key}) {val}",
-                    lm + 7 * mm,
-                    y,
-                    FN,
-                    9,
-                    cw - 7 * mm,
-                    (0.15, 0.15, 0.15),
-                )
-                y -= max(used, 6 * mm) + 1 * mm
-
+            # Data
+            c.setFont(FB, 8)
+            c.setFillColorRGB(0.5, 0.5, 0.5)
+            c.drawString(lm, y, data_dnia)
             y -= 4 * mm
-            c.setStrokeColorRGB(0.7, 0.7, 0.7)
+
+            # Nagłówek dnia — styl tabloidu
+            c.setFont(FB, 11)
+            c.setFillColorRGB(0.05, 0.05, 0.05)
+            h = wrap_draw(naglowek, lm, y, FB, 11, cw, (0.05, 0.05, 0.05))
+            y -= h + 1 * mm
+
+            # Treść
+            h = wrap_draw(tresc, lm, y, FN, 9, cw, (0.2, 0.2, 0.2))
+            y -= h + 1 * mm
+
+            # Rada Tylera
+            c.setFont(FN, 8)
+            c.setFillColorRGB(0.6, 0.1, 0.1)
+            c.drawString(lm, y, f"Rada Tylera: {rada}")
+            y -= 4 * mm
+
+            # Separator
+            c.setStrokeColorRGB(0.8, 0.8, 0.8)
             c.setLineWidth(0.3)
             c.line(lm, y, rm, y)
             y -= 4 * mm
 
-        # Pole na wynik i przycisk Podlicz
-        y = new_page_if_needed(y, 25 * mm)
+        # Przepowiednia ogólna
+        if y < 30 * mm:
+            c.showPage()
+            y = H - 20 * mm
+
+        c.setStrokeColorRGB(0.6, 0.1, 0.1)
+        c.setLineWidth(1)
+        c.line(lm, y + 2 * mm, rm, y + 2 * mm)
+        y -= 4 * mm
+        c.setFont(FB, 10)
+        c.setFillColorRGB(0.6, 0.1, 0.1)
+        c.drawString(lm, y, "PRZEPOWIEDNIA TYGODNIA:")
         y -= 5 * mm
-
-        from reportlab.lib.colors import Color as RLColor
-
-        form.textfield(
-            name="wynik",
-            tooltip="Wynik",
-            x=lm,
-            y=y - 8 * mm,
-            width=80 * mm,
-            height=8 * mm,
-            fontSize=10,
-            borderColor=RLColor(0.5, 0.1, 0.1),
-            fillColor=RLColor(0.98, 0.95, 0.95),
-            textColor=RLColor(0.1, 0.1, 0.1),
-            value="Nacisnij Podlicz...",
-            fieldFlags="readOnly",
-        )
-
-        correct_js = ", ".join(
-            f'"{nr}": "{ans}"' for nr, ans in correct_answers.items()
-        )
-        total_pytań = len(pytania[:5])
-        js_code = (
-            f"var poprawne = {{{correct_js}}};\n"
-            f"var wynik = 0;\n"
-            f"var total = {total_pytań};\n"
-            "for (var nr in poprawne) {\n"
-            '    var checked_field = this.getField("q" + nr + "_" + poprawne[nr]);\n'
-            '    if (checked_field && checked_field.value === "Yes") { wynik++; }\n'
-            "}\n"
-            'var komentarz = wynik >= total * 0.8 ? "Jestes gotowy." : wynik >= total * 0.5 ? "Prawie." : "Rozczarowujace.";\n'
-            'this.getField("wynik").value = "Wynik: " + wynik + " / " + total + " — " + komentarz;'
-        )
-
-        # ── Przycisk PODLICZ — rysowany manualnie (reportlab nie ma form.button) ──
-        from reportlab.lib.colors import Color as RLColor
-
-        btn_x = lm + 85 * mm
-        btn_y = y - 8 * mm
-        btn_w = 40 * mm
-        btn_h = 8 * mm
-        # Tło przycisku
-        c.setFillColorRGB(0.5, 0.1, 0.1)
-        c.setStrokeColorRGB(0.5, 0.1, 0.1)
-        c.roundRect(btn_x, btn_y, btn_w, btn_h, 2, fill=1, stroke=1)
-        # Napis na przycisku
-        c.setFont(FB, 9)
-        c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(btn_x + btn_w / 2, btn_y + btn_h * 0.3, "PODLICZ")
-        # Link JS (działa w Acrobat) — użyj anotacji URI jako fallback
-        # Prawdziwy JS trigger — dodajemy przez AcroForm pushbutton bez form.button
-        try:
-            from reportlab.pdfbase.pdfdoc import (
-                PDFArray,
-                PDFDictionary,
-                PDFName,
-                PDFString,
-            )
-        except ImportError:
-            pass  # nie dodajemy JS — przycisk jest dekoracyjny, wynik liczy HTML
-
-        y -= 15 * mm
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.4, 0.4, 0.4)
-        c.drawCentredString(W / 2, y, data.get("zakonczenie", "— Tyler Durden"))
+        prz = data.get("przepowiednia_ogolna", "")
+        wrap_draw(prz, lm, y, FN, 9, cw, (0.1, 0.1, 0.1))
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -3131,7 +3056,7 @@ function sprawdz() {{
             "content_type": "application/pdf",
             "filename": f"ankieta_{ts}.pdf",
         }
-        logger.info("[ankieta] OK AcroForm: %d pytan", len(pytania[:5]))
+        logger.info("[ankieta] OK AcroForm: %d pytań", len(pytania[:5]))
         return html_dict, pdf_dict
 
     except Exception as e:
@@ -3225,33 +3150,23 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         c = rl_canvas.Canvas(buf, pagesize=A4)
         lm, rm = 12 * mm, W - 12 * mm
         cw = rm - lm
+        RED = (0.6, 0.1, 0.1)
+        DARK = (0.1, 0.1, 0.1)
+        GRAY = (0.4, 0.4, 0.4)
 
-        def wrap_draw(txt, x, y, font, size, max_w, color=(0.1, 0.1, 0.1)):
-            c.setFont(font, size)
-            c.setFillColorRGB(*color)
-            words = str(txt).split()
-            line = ""
-            lines_drawn = 0
-            for w in words:
-                test = (line + " " + w).strip()
-                if c.stringWidth(test, font, size) <= max_w:
-                    line = test
-                else:
-                    c.drawString(x, y - lines_drawn * (size + 2), line)
-                    lines_drawn += 1
-                    line = w
-            if line:
-                c.drawString(x, y - lines_drawn * (size + 2), line)
-                lines_drawn += 1
-            return lines_drawn * (size + 2)
+        # Obramowanie karty
+        c.setStrokeColorRGB(*RED)
+        c.setLineWidth(3)
+        c.rect(8 * mm, 8 * mm, W - 16 * mm, H - 16 * mm, fill=0, stroke=1)
+        c.setLineWidth(1)
+        c.rect(10 * mm, 10 * mm, W - 20 * mm, H - 20 * mm, fill=0, stroke=1)
 
-        # ── NAGŁÓWEK gazety ───────────────────────────────────────────────────
-        c.setFillColorRGB(0.05, 0.05, 0.05)
-        c.rect(0, H - 28 * mm, W, 28 * mm, fill=1, stroke=0)
-
-        c.setFont(FB, 20)
-        c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(W / 2, H - 14 * mm, "GAZETA NIHILISTYCZNA")
+        # Nagłówek
+        c.setFillColorRGB(*DARK)
+        c.rect(10 * mm, H - 40 * mm, W - 20 * mm, 30 * mm, fill=1, stroke=0)
+        c.setFont(FB, 8)
+        c.setFillColorRGB(0.6, 0.6, 0.6)
+        c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA")
 
         c.setFont(FN, 8)
         c.setFillColorRGB(0.7, 0.7, 0.7)
@@ -3813,6 +3728,7 @@ def _build_raport_psychiatryczny(
         for wrong, right in KEY_MAP_RAPORT.items():
             if wrong in data and right not in data:
                 data[right] = data.pop(wrong)
+                logger.info("[raport] znormalizowano '%s' → '%s'", wrong, right)
         if isinstance(data.get("dane_pacjenta"), str):
             data["dane_pacjenta"] = {"imie_nazwisko": data["dane_pacjenta"]}
         if not data.get("dane_pacjenta"):
@@ -3948,7 +3864,7 @@ def _build_raport_psychiatryczny(
             run_dd.font.color.rgb = RGBColor(0x4D, 0x4D, 0x4D)
         doc.add_paragraph()
 
-        # ── Zalecenia ─────────────────────────────────────────────────────────
+        # ── Zalecenia Terapeutyczne ─────────────────────────────────────────────────
         sekcja("Zalecenia Terapeutyczne")
         lista_punktow(data.get("zalecenia", []))
         doc.add_paragraph()
@@ -4648,8 +4564,8 @@ def build_zwykly_section(
 
     reply_html = build_html_reply(res_text)
     analiza_docx_list = []
-    htm_for_drive = None   # HTM do zapisu na Drive (podmieni placeholder w reply_html)
-    drive_url = None       # URL pliku HTM na Drive (po wgraniu)
+    htm_for_drive = None  # HTM do zapisu na Drive (podmieni placeholder w reply_html)
+    drive_url = None  # URL pliku HTM na Drive (po wgraniu)
 
     # Dociekliwy jest zawsze wywoływany osobno przez app.py jako sekcja 'analiza'.
     # Zwykly NIE wywołuje dociekliwego — każdy responder wysyła osobny email.
@@ -4713,58 +4629,20 @@ def build_zwykly_section(
     except Exception:
         pass
 
-    def _build_html_reply_with_image(body_text: str, image_b64: str) -> str:
-        html = build_html_reply(body_text)
-        if not image_b64:
-            return html
-        image_block = (
-            '<div style="margin: 24px 0; text-align: center;">'
-            '<p style="margin: 0 0 12px 0; color: #444; font-size: 14px;">'
-            "Obrazek gry wygenerowany na podstawie pliku <strong>eryk_diagram_interaktywny.htm</strong>.</p>"
-            f'<img src="data:image/jpeg;base64,{image_b64}" alt="Mapa gry Edka" '
-            'style="max-width:100%;height:auto;border-radius:14px;border:1px solid #ddd;" />'
-            "</div>"
-        )
-        return html.replace(
-            '<div class="footer">', image_block + '<div class="footer">', 1
-        )
+    def _get_safe_photo(img_data, label):
+        if img_data and isinstance(img_data, dict) and img_data.get("base64"):
+            return img_data
 
-    # ── FINALIZACJA ───────────────────────────────────────────────────────────
-    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", sender_name)[:30] or "Pacjent"
-
-    # Raport psychiatryczny (DOCX) dodaj do docx_list zeby smtp_wysylka go wyslal jako zalacznik
-    if raport_pdf and isinstance(raport_pdf, dict) and raport_pdf.get("base64"):
-        analiza_docx_list.append(raport_pdf)
-
-    # ── Diagram SVG — generuj NA KOŃCU gdy logger ma wszystkie dane sesji ────────
-    flow_diagram_svg = None
-    try:
-        from core.logging_reporter import get_logger as _get_exec_logger
-
-        _exec_log = _get_exec_logger()
-        # Uzupełnij metadata loggera danymi z tej sesji
-        _exec_log.set_metadata(
-            "api_calls", [e for e in _exec_log.entries if e.get("type") == "API_CALL"]
-        )
-        _exec_log.set_metadata(
-            "sections_completed",
-            [
-                e["data"].get("section", "")
-                for e in _exec_log.entries
-                if e.get("type") == "SECTION_RESULT"
-                and e.get("data", {}).get("success")
-            ],
-        )
-        flow_diagram_svg = _build_flow_diagram_svg(_exec_log)
-    except Exception as _svg_err:
-        logger.warning("[zwykly] flow_diagram_svg błąd: %s", _svg_err)
+    # Sekcja zabezpieczająca obrazy przed wysyłką:
+    p1 = _get_safe_photo(results.get("psych_photo_1"), "pacjent")
+    p2 = _get_safe_photo(results.get("psych_photo_2"), "przedmioty")
 
     return {
         "reply_html": reply_html,
-        "raport_pdf": raport_pdf,
-        "psych_photo_1": psych_photo_1,
-        "psych_photo_2": psych_photo_2,
-        "log_psych": log_psych,
+        "emotka_png": results.get("emotka_b64", ""),
+        "pdf_emocji": results.get("pdf_b64", ""),
+        "psych_photo_1": p1,
+        "psych_photo_2": p2,
         "triptych": triptych_images,
         "ankieta_html": ankieta_html,
         "horoskop_pdf": horoskop_pdf,
