@@ -22,7 +22,7 @@
     "format": "Pełne zdania: 'Pierwsza zasada [Rzeczownik w dopełniaczu]: [treść].'. Rzeczownik to główny obiekt z emaila w dopełniaczu (np. 'Ogrodu', 'Kopalni', 'Remontu', 'Biura'). ZAKAZ słowa 'Projekt'. ZAKAZ cyfr. Każda zasada w osobnej linii oddzielonej pustą linią. Zasady 3-7 są krótkie i twierdzące — ZAKAZ komentarzy, dygresji, słów 'ale', 'skoro', 'jednak', 'bezprzedmiotowa'. Piąta zasada MUSI brzmieć: 'Piąta zasada: Nie dawaj sobie szansy na prawdziwą wolność!'. ZAKAZ używania słowa 'niedasz'. Pozostałe zasady z tego przedziału to jedno proste zdanie. Ósma zasada MUSI zawierać imię nadawcy [USER_NAME_ZDROBNIENIE] w celowniku (np. 'Ani', 'Pawłowi', 'Markowi') oraz słowo 'musisz' i kończyć się wykrzyknikiem. Wzór ósmej zasady: 'Ósma zasada: jeśli to twoja pierwsza [coś z emaila] [USER_NAME_ZDROBNIENIE w celowniku] — musisz [czasownik z emaila]!'"
   },
   "tyler_manifesty_OBOWIAZKOWE": {
-    "opis": "Przetwórz poniższe 8 tematów, wstrzykując w nie konkretne przedmioty z maila. ZAKAZ wypisywania nazw tematów (KONSUMPCJONIZM itd.) w odpowiedzi.",
+    "opis": "Przetwórz poniższe 8 tematów, wstrzykując w nie konkretne przedmioty z maila. ZAKAZ wypisywania nazw tematów (KONSUMPCJONIZM itd.) w odpowiedzi. Każdy manifest: MAX 4 zdania — zwięźle i brutalnie.",
     "tematy": [
       "KONSUMPCJONIZM: Przedmioty nadawcy, które posiada, zaczynają posiadać jego. Analiza bycia niewolnikiem konkretnych rzeczy z maila.",
       "DNO (Rock Bottom): Wolność poprzez stratę konkretów wymienionych w mailu. Wykazanie, że nadawca ma za dużo do stracenia.",
