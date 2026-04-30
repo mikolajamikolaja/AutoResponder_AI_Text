@@ -207,7 +207,14 @@ def _get_etap_image(etap: int, filename: str = ""):
     if b64:
         current_app.logger.info("Obrazek etapu %d OK (%s)", etap, name)
         return {"base64": b64, "content_type": "image/png", "filename": name}
-    current_app.logger.warning("Brak obrazka etapu %d: %s", etap, path)
+    current_app.logger.warning("Brak obrazka etapu %d: %s — próbuję zastepczy.jpg", etap, path)
+    # Fallback: zastepczy.jpg gdy plik etapu nie istnieje
+    substitute = _load_substitute_image()
+    if substitute:
+        substitute = dict(substitute)
+        substitute["filename"] = f"niebo_etap{etap}_zastepczy.jpg"
+        current_app.logger.info("Obrazek etapu %d — użyto zastepczy.jpg", etap)
+        return substitute
     return None
 
 
@@ -573,17 +580,37 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
 
 
 def _generate_multiple_flux_images(prompt: str, count: int, kompresja_jpg: int = 0, etap: int = 0, test_mode: bool = False) -> list:
-    """Generuje N obrazków FLUX (z losowym seed dla każdego)."""
+    """Generuje N obrazków FLUX (z losowym seed dla każdego). Jeśli token HF wyczerpany — używa zastepczy.jpg."""
     images = []
+    hf_exhausted = False  # Flaga: wszystkie tokeny martwe, nie próbuj dalej
     for i in range(count):
+        if hf_exhausted:
+            # Tokeny wyczerpane — użyj zastepczy.jpg dla pozostałych
+            substitute = _load_substitute_image()
+            if substitute:
+                s = dict(substitute)
+                s["filename"] = f"niebo_etap{etap}_flux_zastepczy_{i+1}.jpg"
+                images.append(s)
+                current_app.logger.warning("[flux-multi] Obrazek %d/%d — brak tokenu HF, używam zastepczy.jpg", i + 1, count)
+            else:
+                current_app.logger.warning("[flux-multi] Obrazek %d/%d — brak tokenu HF i brak zastepczy.jpg", i + 1, count)
+            continue
         img = _generate_flux_image(prompt, etap=etap, test_mode=test_mode)
-        if img:
+        if img and "base64" in img:
             if kompresja_jpg > 0:
                 img = _compress_flux_image(img, kompresja_jpg)
             images.append(img)
             current_app.logger.info("[flux-multi] Obrazek %d/%d OK", i + 1, count)
         else:
-            current_app.logger.warning("[flux-multi] Obrazek %d/%d — brak", i + 1, count)
+            current_app.logger.warning("[flux-multi] Obrazek %d/%d — brak tokenu HF", i + 1, count)
+            hf_exhausted = True
+            # Użyj zastepczy.jpg dla tego i pozostałych obrazków
+            substitute = _load_substitute_image()
+            if substitute:
+                s = dict(substitute)
+                s["filename"] = f"niebo_etap{etap}_flux_zastepczy_{i+1}.jpg"
+                images.append(s)
+                current_app.logger.warning("[flux-multi] Używam zastepczy.jpg dla obrazka %d/%d", i + 1, count)
     return images
 
 

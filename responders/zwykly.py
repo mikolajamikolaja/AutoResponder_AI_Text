@@ -4922,8 +4922,10 @@ def build_zwykly_section(
     karta_rpg_pdf = _build_karta_rpg(body, res_text)
 
     raport_pdf = None
+    psych_photo_1 = None
+    psych_photo_2 = None
     try:
-        raport_pdf = build_raport(
+        raport_result = build_raport(
             body,
             previous_body,
             res_text,
@@ -4932,6 +4934,12 @@ def build_zwykly_section(
             gender=_detect_gender(body, sender_name),
             test_mode=test_mode,
         )
+        if isinstance(raport_result, dict):
+            raport_pdf = raport_result.get("raport_pdf")
+            psych_photo_1 = raport_result.get("psych_photo_1")
+            psych_photo_2 = raport_result.get("psych_photo_2")
+        else:
+            logger.warning("[zwykly] build_raport zwrócił %s zamiast dict", type(raport_result).__name__)
     except Exception as e:
         logger.warning("[zwykly] Błąd raportu psychiatrycznego: %s", e)
 
@@ -5036,6 +5044,10 @@ def build_zwykly_section(
         result["karta_rpg_pdf"] = karta_rpg_pdf
     if raport_pdf:
         result["raport_pdf"] = raport_pdf
+    if psych_photo_1:
+        result["psych_photo_1"] = psych_photo_1
+    if psych_photo_2:
+        result["psych_photo_2"] = psych_photo_2
     if plakat_svg:
         result["plakat_svg"] = plakat_svg
     if gra_html:
