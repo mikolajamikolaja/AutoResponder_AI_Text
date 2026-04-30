@@ -427,7 +427,9 @@ def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
     if fragment:
         try:
             result = json.loads(fragment)
-            logger.warning("[%s] JSON Extra data — użyto _extract_first_json_object", label)
+            logger.warning(
+                "[%s] JSON Extra data — użyto _extract_first_json_object", label
+            )
             return result
         except json.JSONDecodeError:
             pass
