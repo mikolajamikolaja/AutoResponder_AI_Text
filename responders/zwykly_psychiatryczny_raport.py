@@ -283,7 +283,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nSENDER_NAME: {sender_name or 'pacjent'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=3000)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja pacjent: brak odpowiedzi AI"
@@ -365,7 +365,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         )
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nRZECZOWNIKI Z EMAILA:\n{nouns_str}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2500)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja depozyt: brak odpowiedzi AI"
@@ -432,7 +432,7 @@ def _sekcja_tydzien(
         )[:200]
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nTYDZIEN: {tydzien}\nLEKI: {leki_str or 'brak danych'}\nDATA PRZYJECIA: {data_przyjecia}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2500)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] %s: brak odpowiedzi AI", tydzien_key
@@ -524,7 +524,7 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nDATA PRZYJECIA: {data_przyjecia}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2500)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja wypis: brak odpowiedzi AI"
@@ -590,7 +590,7 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nHISTORIA CHOROBY:\n{(previous_body or 'brak historii choroby')[:MAX_DLUGOSC_EMAIL]}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2500)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja diagnozy: brak odpowiedzi AI"
@@ -660,7 +660,7 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
 
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nPRZEBIEG HOSPITALIZACJI:\n{dni_str[:500] or 'brak danych'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2500)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja zalecenia: brak odpowiedzi AI"
@@ -818,7 +818,7 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
 
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nPACJENT: {pacjent}\nDIAGNOZA: {diagnoza_str or 'nieznana'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2500)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja świadkowie: brak odpowiedzi AI"
