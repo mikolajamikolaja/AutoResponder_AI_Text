@@ -25,6 +25,7 @@ import os
 import re
 import io
 import json
+import html as html_module
 import base64
 import random
 import logging
@@ -243,10 +244,152 @@ def _extract_first_json_object(text: str) -> str:
     return text[start:]
 
 
+def _extract_body_html(html_text: str) -> str:
+    if not html_text:
+        return ""
+    match = re.search(
+        r"<body[^>]*>(.*?)</body>", html_text, flags=re.DOTALL | re.IGNORECASE
+    )
+    if match:
+        return match.group(1).strip()
+    return html_text.strip()
+
+
+def _format_plain_text_as_html(text: str) -> str:
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = html_module.escape(normalized)
+    normalized = normalized.replace("\n\n", "</p><p>")
+    normalized = normalized.replace("\n", "<br>")
+    return f"<div class='section'><p>{normalized}</p></div>"
+
+
+def _build_combined_reply_html(sections: list[str]) -> str:
+    content = "\n<hr class='section-separator'>\n".join(s for s in sections if s)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset=\"UTF-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+    <style>
+        body {{ margin: 0; padding: 20px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #ffffff; min-height: 100vh; }}
+        .container {{ max-width: 600px; margin: 0 auto; background: rgba(255, 255, 255, 0.95); border-radius: 12px; padding: 30px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1); border: 2px solid rgba(200, 220, 255, 0.3); }}
+        .header {{ background: linear-gradient(135deg, #B3E5FC 0%, #C8E6C9 100%); padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 5px solid #81C784; }}
+        .content {{ font-size: 15px; line-height: 1.8; color: #333; }}
+        .content p {{ margin: 15px 0; color: #000000; }}
+        .section {{ margin-bottom: 20px; }}
+        .section-separator {{ border: none; border-top: 1px solid #DDD; margin: 30px 0; }}
+        .footer {{ margin-top: 30px; padding: 20px 15px 15px 15px; border-top: 2px solid #FFE0B2; font-size: 12px; color: #0a8a0a; text-align: center; background: linear-gradient(to bottom, transparent, rgba(255, 224, 178, 0.2)); border-radius: 6px; }}
+        .footer a {{ color: #0a8a0a; text-decoration: none; border-bottom: 1px dotted #0a8a0a; }}
+        .footer a:hover {{ border-bottom: 1px solid #0a8a0a; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <p style="margin: 0; color: #333; font-weight: 500;">✉️ Odpowiedź automatyczna</p>
+        </div>
+        <div class="content">{content}</div>
+        <div class="footer">
+            <p style="margin: 0 0 10px 0;">Odpowiedź wygenerowana automatycznie przez system Script + Render.<br><span style="font-size: 11px; color: #088a08;">Projekt dostępny na GitHub:<br><a href=\"https://github.com/legionowopawel/AutoResponder_AI_Text\" style=\"color: #088a08; text-decoration: none;\">AutoResponder_AI_Text</a></span></p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+def _wrap_section_html(content: str, title: str | None = None) -> str:
+    if not content:
+        return ""
+    inner = _extract_body_html(content)
+    title_html = f"<h2>{html_module.escape(title)}</h2>" if title else ""
+    return f"<div class='section'>{title_html}{inner}</div>"
+
+
+def _wrap_plain_text_section(text: str, title: str | None = None) -> str:
+    if not text:
+        return ""
+    section = _format_plain_text_as_html(text)
+    if title:
+        title_html = f"<h2>{html_module.escape(title)}</h2>"
+        return f"<div class='section'>{title_html}{section}</div>"
+    return section
+
+
+def _collect_section_attachments(
+    section_output: dict, docs: list, docx_list: list, images: list
+) -> None:
+    if not isinstance(section_output, dict):
+        return
+    if section_output.get("docs"):
+        docs.extend(
+            [item for item in section_output.get("docs", []) if isinstance(item, dict)]
+        )
+    if section_output.get("docx_list"):
+        docx_list.extend(
+            [
+                item
+                for item in section_output.get("docx_list", [])
+                if isinstance(item, dict)
+            ]
+        )
+    if section_output.get("images"):
+        images.extend(
+            [
+                item
+                for item in section_output.get("images", [])
+                if isinstance(item, dict)
+            ]
+        )
+    if section_output.get("image") and isinstance(section_output.get("image"), dict):
+        images.append(section_output.get("image"))
+    if section_output.get("htm_for_drive") and isinstance(
+        section_output.get("htm_for_drive"), dict
+    ):
+        docs.append(section_output.get("htm_for_drive"))
+
+
+def _normalize_section_html_text(html_text: str) -> str:
+    return _extract_body_html(html_text)
+
+
+def _extract_section_html(raw_html: str) -> str:
+    return _extract_body_html(raw_html)
+
+
+def _sanitize_reply_html(html_text: str) -> str:
+    return html_text or ""
+
+
+def _render_body_sections(
+    main_html: str,
+    emocje_html: str,
+    dociekliwy_html: str,
+    scrabble_html: str = "",
+) -> str:
+    sections = [main_html, emocje_html, dociekliwy_html, scrabble_html]
+    return _build_combined_reply_html(sections)
+
+
+def _build_email_body_text(text: str) -> str:
+    return _format_plain_text_as_html(text)
+
+
+def _strip_leading_markdown(raw: str) -> str:
+    if not raw:
+        return ""
+    match = re.search(r"[\{\[]", raw)
+    if match:
+        return raw[match.start() :]
+    return raw
+
+
 def _strip_json_markdown(raw: str) -> str:
     if not raw:
         return ""
     raw = raw.strip()
+    raw = _strip_leading_markdown(raw)
     raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"\s*```$", "", raw)
     raw = raw.strip()
@@ -4613,17 +4756,17 @@ def build_zwykly_section(
             )
             res_text = raw
     except Exception as e:
-        logger.warning(
-            "[zwykly] Błąd parsowania JSON: %s | raw: %.200s", e, raw
-        )
+        logger.warning("[zwykly] Błąd parsowania JSON: %s | raw: %.200s", e, raw)
         res_text = raw
 
-    reply_html = build_html_reply(res_text)
+    main_section_html = _wrap_section_html(
+        build_html_reply(res_text),
+        title="Tyler Durden + Sokrates",
+    )
 
     nouns = _extract_nouns_from_body(body)
     nouns_dict = {
-        f"rzecz{str(i + 1).zfill(3)}": noun
-        for i, noun in enumerate(nouns[:15])
+        f"rzecz{str(i + 1).zfill(3)}": noun for i, noun in enumerate(nouns[:15])
     }
 
     session_vars = _build_session_vars(
@@ -4696,6 +4839,71 @@ def build_zwykly_section(
         panel_assignments or [],
     )
 
+    docs: list[dict] = []
+    images: list[dict] = []
+    docx_list: list[dict] = []
+    emocje_section_html = ""
+    dociekliwy_section_html = ""
+    scrabble_section_html = ""
+
+    try:
+        from responders.emocje import build_emocje_section
+
+        emocje_output = build_emocje_section(
+            body=body,
+            sender_name=sender_name,
+            sender_email=sender_email,
+            attachments=attachments,
+            test_mode=test_mode,
+        )
+        if isinstance(emocje_output, dict):
+            emocje_section_html = _wrap_section_html(
+                emocje_output.get("reply_html", ""),
+                title="Emocje",
+            )
+            _collect_section_attachments(emocje_output, docs, docx_list, images)
+    except Exception as e:
+        logger.warning("[zwykly] Błąd emocje: %s", e)
+
+    try:
+        from responders.dociekliwy import build_dociekliwy_section
+
+        dociekliwy_output = build_dociekliwy_section(
+            body=body,
+            attachments=attachments,
+            sender_email=sender_email,
+            sender_name=sender_name,
+            test_mode=test_mode,
+        )
+        if isinstance(dociekliwy_output, dict):
+            dociekliwy_section_html = _wrap_section_html(
+                dociekliwy_output.get("reply_html", ""),
+                title="Dociekliwy",
+            )
+            _collect_section_attachments(dociekliwy_output, docs, docx_list, images)
+    except Exception as e:
+        logger.warning("[zwykly] Błąd dociekliwy: %s", e)
+
+    try:
+        from responders.scrabble import build_scrabble_section
+
+        scrabble_output = build_scrabble_section(body)
+        if isinstance(scrabble_output, dict):
+            scrabble_section_html = _wrap_section_html(
+                scrabble_output.get("reply_html", ""),
+                title="Scrabble",
+            )
+            _collect_section_attachments(scrabble_output, docs, docx_list, images)
+    except Exception as e:
+        logger.warning("[zwykly] Błąd scrabble: %s", e)
+
+    reply_html = _render_body_sections(
+        main_section_html,
+        emocje_section_html,
+        dociekliwy_section_html,
+        scrabble_section_html,
+    )
+
     result = {
         "reply_html": reply_html,
         "triptych": triptych_images or [],
@@ -4723,6 +4931,14 @@ def build_zwykly_section(
         result["explanation_txt"] = explanation_txt
     if debug_txt:
         result["debug_txt"] = debug_txt
-    result["images"] = []
-    result["docs"] = []
+    if images:
+        result["images"] = images
+    else:
+        result["images"] = []
+    if docs:
+        result["docs"] = docs
+    else:
+        result["docs"] = []
+    if docx_list:
+        result["docx_list"] = docx_list
     return result

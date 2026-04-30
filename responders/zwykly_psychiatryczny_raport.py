@@ -236,40 +236,437 @@ def _load_substitute_image() -> dict | None:
 
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
     """Sekcja 1 — dane pacjenta (3 osobne DeepSeek)."""
-    # ...existing implementation...
-    return {}
+    try:
+        pacjent_cfg = cfg.get("deepseek_1_pacjent", {})
+        if not pacjent_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_1_pacjent"
+            )
+            return {}
+
+        system = pacjent_cfg.get("system", "")
+        schema = pacjent_cfg.get("schema", {})
+        instrukcje = pacjent_cfg.get("instrukcje", "")
+
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nSENDER_NAME: {sender_name or 'pacjent'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja pacjent: brak odpowiedzi AI"
+            )
+            return {}
+
+        result = _parse_json_safe(raw, "dane_pacjenta")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja pacjent: JSON nienaprawialny"
+            )
+            return {}
+
+        # Normalizacja kluczy
+        if isinstance(result, dict):
+            KEY_MAP = {
+                "imie": "imie_nazwisko",
+                "name": "imie_nazwisko",
+                "nazwisko": "imie_nazwisko",
+                "wiek": "wiek",
+                "age": "wiek",
+                "adres": "adres",
+                "address": "adres",
+                "zawod": "zawod",
+                "job": "zawod",
+                "stan_cywilny": "stan_cywilny",
+                "marital_status": "stan_cywilny",
+                "numer_ubezpieczenia": "numer_ubezpieczenia",
+                "insurance": "numer_ubezpieczenia",
+                "data_przyjecia": "data_przyjecia",
+                "admission_date": "data_przyjecia",
+            }
+            for wrong, right in KEY_MAP.items():
+                if wrong in result and right not in result:
+                    result[right] = result.pop(wrong)
+                    current_app.logger.info(
+                        "[psych-raport] dane_pacjenta: znormalizowano '%s' → '%s'",
+                        wrong,
+                        right,
+                    )
+
+        current_app.logger.info("[psych-raport] Sekcja pacjent OK")
+        return result if isinstance(result, dict) else {"dane_pacjenta": result}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji pacjent: %s", e)
+        return {}
 
 
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
     """Sekcja 2 — depozyt + leki."""
-    # ...existing implementation...
-    return {}
+    try:
+        dep_cfg = cfg.get("deepseek_2_depozyt_leki", {})
+        if not dep_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_2_depozyt_leki"
+            )
+            return {}
+
+        system = dep_cfg.get("system", "")
+        schema = dep_cfg.get("schema", {})
+        instrukcje = dep_cfg.get("instrukcje", "")
+
+        nouns_str = (
+            ", ".join(list(nouns_dict.values())[:10])
+            if nouns_dict
+            else "przedmioty codzienne"
+        )
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nRZECZOWNIKI Z EMAILA:\n{nouns_str}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja depozyt: brak odpowiedzi AI"
+            )
+            return {}
+
+        result = _parse_json_safe(raw, "depozyt")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja depozyt: JSON nienaprawialny"
+            )
+            return {}
+
+        # Normalizacja kluczy
+        if isinstance(result, dict):
+            KEY_MAP = {
+                "deposit": "depozyt",
+                "przedmioty": "lista_przedmiotow",
+                "items": "lista_przedmiotow",
+                "protokol": "protokol_depozytu",
+                "protocol": "protokol_depozytu",
+                "leki": "leki",
+                "drugs": "leki",
+                "medications": "leki",
+                "nota_farmaceutyczna": "nota_farmaceutyczna",
+                "pharmacy_note": "nota_farmaceutyczna",
+            }
+            for wrong, right in KEY_MAP.items():
+                if wrong in result and right not in result:
+                    result[right] = result.pop(wrong)
+                    current_app.logger.info(
+                        "[psych-raport] depozyt: znormalizowano '%s' → '%s'",
+                        wrong,
+                        right,
+                    )
+
+        current_app.logger.info("[psych-raport] Sekcja depozyt+leki OK")
+        return result if isinstance(result, dict) else {"depozyt": result}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji depozyt: %s", e)
+        return {}
 
 
 def _sekcja_tydzien(
     cfg: dict, body: str, leki: list, tydzien: int, data_przyjecia: str
 ) -> list:
     """Sekcja 3/4 — dni hospitalizacji."""
-    # ...existing implementation...
-    return []
+    try:
+        tydzien_key = "deepseek_3_tydzien1" if tydzien == 1 else "deepseek_4_tydzien2"
+        tydzien_cfg = cfg.get(tydzien_key, {})
+        if not tydzien_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji %s", tydzien_key
+            )
+            return []
+
+        system = tydzien_cfg.get("system", "")
+        schema = tydzien_cfg.get("schema", {})
+        instrukcje = tydzien_cfg.get("instrukcje", "")
+
+        leki_str = ", ".join(
+            [l.get("nazwa", "") for l in (leki or []) if isinstance(l, dict)]
+        )[:200]
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nTYDZIEN: {tydzien}\nLEKI: {leki_str or 'brak danych'}\nDATA PRZYJECIA: {data_przyjecia}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] %s: brak odpowiedzi AI", tydzien_key
+            )
+            return []
+
+        result = _parse_json_safe(raw, tydzien_key)
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] %s: JSON nienaprawialny", tydzien_key
+            )
+            return []
+
+        # Normalizacja: oczekujemy listy dni
+        if isinstance(result, dict):
+            # Może być zapakowane w klucz "dni" lub "hospitalizacja"
+            for key in (
+                "dni",
+                "hospitalizacja",
+                "days",
+                "records",
+                "hospitalizacja_tydzien_1",
+                "hospitalizacja_tydzien_2",
+            ):
+                if key in result and isinstance(result[key], list):
+                    result = result[key]
+                    break
+            else:
+                # Jeśli dict ale nie ma listy, spróbuj wyciągnąć wartości
+                for v in result.values():
+                    if isinstance(v, list):
+                        result = v
+                        break
+
+        if not isinstance(result, list):
+            current_app.logger.warning(
+                "[psych-raport] %s: oczekiwano listy, dostałem %s",
+                tydzien_key,
+                type(result).__name__,
+            )
+            return []
+
+        # Normalizacja kluczy w każdym dniu
+        DAY_KEY_MAP = {
+            "day": "dzien",
+            "date": "data",
+            "event": "zdarzenie",
+            "drug": "lek",
+            "medication": "lek",
+            "condition": "stan_pacjenta",
+            "state": "stan_pacjenta",
+            "doctor_note": "nota_lekarska",
+            "note": "nota_lekarska",
+        }
+        for d in result:
+            if isinstance(d, dict):
+                for wrong, right in DAY_KEY_MAP.items():
+                    if wrong in d and right not in d:
+                        d[right] = d.pop(wrong)
+
+        current_app.logger.info(
+            "[psych-raport] %s OK (%d dni)", tydzien_key, len(result)
+        )
+        return result
+
+    except Exception as e:
+        current_app.logger.error(
+            "[psych-raport] Błąd %s: %s",
+            tydzien_key if "tydzien_key" in dir() else "tydzien",
+            e,
+        )
+        return []
 
 
 def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
     """Sekcja 5 — wypis."""
-    # ...existing implementation...
-    return {}
+    try:
+        wypis_cfg = cfg.get("deepseek_5_wypis", {})
+        if not wypis_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_5_wypis"
+            )
+            return {}
+
+        system = wypis_cfg.get("system", "")
+        schema = wypis_cfg.get("schema", {})
+        instrukcje = wypis_cfg.get("instrukcje", "")
+
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nDATA PRZYJECIA: {data_przyjecia}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja wypis: brak odpowiedzi AI"
+            )
+            return {}
+
+        result = _parse_json_safe(raw, "wypis")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja wypis: JSON nienaprawialny"
+            )
+            return {}
+
+        # Normalizacja: oczekujemy zagnieżdżenia w kluczu "wypis"
+        if isinstance(result, dict) and "wypis" in result:
+            result = result["wypis"]
+
+        # Normalizacja kluczy
+        if isinstance(result, dict):
+            KEY_MAP = {
+                "discharge_day": "dzien_wypisu",
+                "dzien": "dzien_wypisu",
+                "discharge_reason": "powod_wypisu",
+                "powod": "powod_wypisu",
+                "reason": "powod_wypisu",
+                "discharge_condition": "stan_przy_wypisie",
+                "stan": "stan_przy_wypisie",
+                "condition": "stan_przy_wypisie",
+                "post_discharge_recommendations": "zalecenia_po_wypisie",
+                "zalecenia": "zalecenia_po_wypisie",
+                "recommendations": "zalecenia_po_wypisie",
+                "farewell": "opis_pozegnania",
+                "pozegnanie": "opis_pozegnania",
+            }
+            for wrong, right in KEY_MAP.items():
+                if wrong in result and right not in result:
+                    result[right] = result.pop(wrong)
+                    current_app.logger.info(
+                        "[psych-raport] wypis: znormalizowano '%s' → '%s'", wrong, right
+                    )
+
+        current_app.logger.info("[psych-raport] Sekcja wypis OK")
+        return result if isinstance(result, dict) else {"wypis": result}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji wypis: %s", e)
+        return {}
 
 
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
     """Sekcja 6 — diagnozy łacińskie."""
-    # ...existing implementation...
-    return {}
+    try:
+        diagnozy_cfg = cfg.get("deepseek_6_diagnozy_lacina", {})
+        if not diagnozy_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_6_diagnozy_lacina"
+            )
+            return {}
+
+        system = diagnozy_cfg.get("system", "")
+        schema = diagnozy_cfg.get("schema", {})
+        instrukcje = diagnozy_cfg.get("instrukcje", "")
+
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nHISTORIA CHOROBY:\n{(previous_body or 'brak historii choroby')[:MAX_DLUGOSC_EMAIL]}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja diagnozy: brak odpowiedzi AI"
+            )
+            return {}
+
+        result = _parse_json_safe(raw, "diagnozy")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja diagnozy: JSON nienaprawialny"
+            )
+            return {}
+
+        # Normalizacja kluczy
+        if isinstance(result, dict):
+            KEY_MAP = {
+                "primary_diagnosis": "diagnoza_wstepna",
+                "diagnoza": "diagnoza_wstepna",
+                "diagnosis": "diagnoza_wstepna",
+                "rozpoznanie": "diagnoza_wstepna",
+                "additional_diagnosis": "diagnoza_dodatkowa",
+                "diagnoza_dod": "diagnoza_dodatkowa",
+                "comorbidity": "choroba_wspolistniejaca",
+                "choroba_wspol": "choroba_wspolistniejaca",
+                "symptoms": "objawy",
+                "symptomy": "objawy",
+                "objaw": "objawy",
+            }
+            for wrong, right in KEY_MAP.items():
+                if wrong in result and right not in result:
+                    result[right] = result.pop(wrong)
+                    current_app.logger.info(
+                        "[psych-raport] diagnozy: znormalizowano '%s' → '%s'",
+                        wrong,
+                        right,
+                    )
+
+        current_app.logger.info("[psych-raport] Sekcja diagnozy OK")
+        return result if isinstance(result, dict) else {"diagnoza_wstepna": result}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji diagnozy: %s", e)
+        return {}
 
 
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
     """Sekcja 7 — zalecenia + notatki (5 osobnych DeepSeek)."""
-    # ...existing implementation...
-    return {}
+    try:
+        zalecenia_cfg = cfg.get("deepseek_7_zalecenia_notatki", {})
+        if not zalecenia_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_7_zalecenia_notatki"
+            )
+            return {}
+
+        system = zalecenia_cfg.get("system", "")
+        schema = zalecenia_cfg.get("schema", {})
+        instrukcje = zalecenia_cfg.get("instrukcje", "")
+
+        # Podsumowanie hospitalizacji dla kontekstu
+        dni_str = ""
+        for d in (dni_1_7 or [])[:3] + (dni_8_14 or [])[:3]:
+            if isinstance(d, dict):
+                dni_str += (
+                    f"Dzień {d.get('dzien', '?')}: {d.get('zdarzenie', '')[:100]}\n"
+                )
+
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nPRZEBIEG HOSPITALIZACJI:\n{dni_str[:500] or 'brak danych'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja zalecenia: brak odpowiedzi AI"
+            )
+            return {}
+
+        result = _parse_json_safe(raw, "zalecenia")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja zalecenia: JSON nienaprawialny"
+            )
+            return {}
+
+        # Normalizacja kluczy
+        if isinstance(result, dict):
+            KEY_MAP = {
+                "tyler_recommendations": "zalecenia_tylera",
+                "recommendations": "zalecenia_tylera",
+                "tyler_zadania": "zalecenia_tylera",
+                "naglowek": "naglowek",
+                "header": "naglowek",
+                "zadanie": "zadanie_1",
+                "task_1": "zadanie_1",
+                "zadanie_1": "zadanie_1",
+                "podpis": "podpis",
+                "signature": "podpis",
+                "rokowanie": "rokowanie",
+                "prognosis": "rokowanie",
+                "incydenty": "incydenty_specjalne",
+                "incidents": "incydenty_specjalne",
+                "special_incidents": "incydenty_specjalne",
+                "nurse_notes": "notatki_pielegniarek",
+                "notatki_pielegniarek": "notatki_pielegniarek",
+                "cleaner_notes": "notatki_sprzataczki",
+                "notatki_sprzataczki": "notatki_sprzataczki",
+            }
+            for wrong, right in KEY_MAP.items():
+                if wrong in result and right not in result:
+                    result[right] = result.pop(wrong)
+                    current_app.logger.info(
+                        "[psych-raport] zalecenia: znormalizowano '%s' → '%s'",
+                        wrong,
+                        right,
+                    )
+
+        current_app.logger.info("[psych-raport] Sekcja zalecenia OK")
+        return result if isinstance(result, dict) else {"zalecenia_tylera": result}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji zalecenia: %s", e)
+        return {}
 
 
 def _sekcja_flux_prompty(
@@ -281,14 +678,171 @@ def _sekcja_flux_prompty(
     test_mode: bool = False,
 ) -> dict:
     """Sekcja 8 — prompty FLUX."""
-    # ...existing implementation...
-    return {}
+    try:
+        flux_cfg = cfg.get("deepseek_8_flux_prompty", {})
+        if not flux_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_8_flux_prompty"
+            )
+            return {}
+
+        system = flux_cfg.get("system", "")
+        schema = flux_cfg.get("schema", {})
+        instrukcje = flux_cfg.get("instrukcje", "")
+
+        nouns_str = (
+            ", ".join(list(nouns_dict.values())[:8])
+            if nouns_dict
+            else "przedmioty codzienne"
+        )
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nRZECZOWNIKI Z EMAILA:\n{nouns_str}\n\nSENDER_NAME: {sender_name or 'pacjent'}\nGENDER: {gender or 'patient'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=1500)
+        if not raw:
+            current_app.logger.warning("[psych-raport] Sekcja flux: brak odpowiedzi AI")
+            return {}
+
+        result = _parse_json_safe(raw, "flux_prompty")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja flux: JSON nienaprawialny"
+            )
+            return {}
+
+        # Normalizacja kluczy
+        if isinstance(result, dict):
+            KEY_MAP = {
+                "pacjent_prompt": "prompt_pacjent",
+                "patient_prompt": "prompt_pacjent",
+                "prompt_pacjenta": "prompt_pacjent",
+                "przedmioty_prompt": "prompt_przedmioty",
+                "objects_prompt": "prompt_przedmioty",
+                "prompt_przedmiotow": "prompt_przedmioty",
+            }
+            for wrong, right in KEY_MAP.items():
+                if wrong in result and right not in result:
+                    result[right] = result.pop(wrong)
+                    current_app.logger.info(
+                        "[psych-raport] flux: znormalizowano '%s' → '%s'", wrong, right
+                    )
+
+        current_app.logger.info("[psych-raport] Sekcja flux OK")
+        return result if isinstance(result, dict) else {"prompt_pacjent": str(result)}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji flux: %s", e)
+        return {}
 
 
 def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
     """Sekcja relacji świadków (DeepSeek)."""
-    # ...existing implementation...
-    return {"relacje_swiadkow": []}
+    try:
+        swiadkowie_cfg = cfg.get("deepseek_3_relacje_swiadkow", {})
+        if not swiadkowie_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_3_relacje_swiadkow"
+            )
+            return {"relacje_swiadkow": []}
+
+        system = swiadkowie_cfg.get("system", "")
+        schema = swiadkowie_cfg.get("schema", {})
+        instrukcje = swiadkowie_cfg.get("instrukcje", "")
+
+        # Kontekst z raportu
+        pacjent = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
+        diagnoza = raport.get("diagnoza_wstepna", {})
+        if isinstance(diagnoza, dict):
+            diagnoza_str = diagnoza.get("nazwa_lacinska", "") or diagnoza.get(
+                "nazwa_polska", ""
+            )
+        else:
+            diagnoza_str = str(diagnoza)
+
+        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nPACJENT: {pacjent}\nDIAGNOZA: {diagnoza_str or 'nieznana'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja świadkowie: brak odpowiedzi AI"
+            )
+            return {"relacje_swiadkow": []}
+
+        result = _parse_json_safe(raw, "relacje_swiadkow")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja świadkowie: JSON nienaprawialny"
+            )
+            return {"relacje_swiadkow": []}
+
+        # Normalizacja: oczekujemy listy świadków
+        if isinstance(result, dict):
+            for key in (
+                "relacje_swiadkow",
+                "swiadkowie",
+                "witnesses",
+                "witness_statements",
+            ):
+                if key in result and isinstance(result[key], list):
+                    result = result[key]
+                    break
+            else:
+                # Jeśli dict ale nie ma listy, spróbuj wyciągnąć wartości
+                for v in result.values():
+                    if isinstance(v, list):
+                        result = v
+                        break
+
+        if not isinstance(result, list):
+            current_app.logger.warning(
+                "[psych-raport] świadkowie: oczekiwano listy, dostałem %s",
+                type(result).__name__,
+            )
+            return {"relacje_swiadkow": []}
+
+        # Normalizacja kluczy w każdym świadku
+        WITNESS_KEY_MAP = {
+            "name": "imie_swiadka",
+            "imie": "imie_swiadka",
+            "witness_name": "imie_swiadka",
+            "occupation": "zawod",
+            "job": "zawod",
+            "date": "data",
+            "statement": "tresc",
+            "testimony": "tresc",
+            "zeznanie": "tresc",
+            "content": "tresc",
+        }
+        for w in result:
+            if isinstance(w, dict):
+                for wrong, right in WITNESS_KEY_MAP.items():
+                    if wrong in w and right not in w:
+                        w[right] = w.pop(wrong)
+
+        current_app.logger.info(
+            "[psych-raport] Sekcja świadkowie OK (%d relacji)", len(result)
+        )
+        return {"relacje_swiadkow": result}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji świadkowie: %s", e)
+        return {"relacje_swiadkow": []}
+
+
+def _hf_credit_exhausted(resp) -> bool:
+    """Sprawdza czy odpowiedź 402 wskazuje na globalne wyczerpanie kredytów."""
+    try:
+        data = resp.json()
+        return data.get("error", "").find("exhausted") != -1
+    except Exception:
+        return False
+
+
+def _substitute_or_none(label: str) -> str | None:
+    """Zwraca obrazek zastępczy lub None."""
+    substitute = _load_substitute_image()
+    if substitute:
+        return substitute.get("base64")
+    return None
 
 
 def _generate_flux(
@@ -1140,14 +1694,6 @@ def build_raport(
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
 
-    # Relacje świadków
-    relacje_result = {}
-    try:
-        # ...existing implementation...
-        pass
-    except Exception as e:
-        current_app.logger.error("[psych-raport] Relacje świadków błąd: %s", e)
-
     # Scalenie całości
     raport = {}
     raport.update(sekcja_pacjent)
@@ -1158,6 +1704,13 @@ def build_raport(
     raport.update(sekcja_wypis)
     raport.update(sekcja_diagnozy)
     raport.update(sekcja_zalecenia)
+
+    # Relacje świadków (po scaleniu raportu, bo potrzebuje kontekstu)
+    relacje_result = {}
+    try:
+        relacje_result = _sekcja_relacje_swiadkow(cfg, body, raport) or {}
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Relacje świadków błąd: %s", e)
     raport["relacje_swiadkow"] = relacje_result.get("relacje_swiadkow", [])
 
     # FLUX — zdjęcia równolegle
