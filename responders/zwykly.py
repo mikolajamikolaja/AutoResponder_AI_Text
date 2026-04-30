@@ -3125,7 +3125,12 @@ def _build_cv_pdf(cv_data: dict, photo_b64: str | None) -> str | None:
     c.save()
     pdf_bytes = buf.getvalue()
     logger.info("[cv-pdf] PDF wygenerowany: %d B", len(pdf_bytes))
-    return base64.b64encode(pdf_bytes).decode("ascii")
+    ts_cv = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return {
+        "base64": base64.b64encode(pdf_bytes).decode("ascii"),
+        "content_type": "application/pdf",
+        "filename": f"cv_tylera_{ts_cv}.pdf",
+    }
 
 
 def _build_explanation_txt(res_text: str, body: str) -> dict | None:
@@ -3359,139 +3364,131 @@ function sprawdz() {{
         c.setLineWidth(1)
         c.rect(10 * mm, 10 * mm, W - 20 * mm, H - 20 * mm, fill=0, stroke=1)
 
-        # Nagłówek
+        # Nagłówek ankiety
         c.setFillColorRGB(*DARK)
         c.rect(10 * mm, H - 40 * mm, W - 20 * mm, 30 * mm, fill=1, stroke=0)
         c.setFont(FB, 8)
         c.setFillColorRGB(0.6, 0.6, 0.6)
-        c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA")
+        c.drawCentredString(W / 2, H - 18 * mm, "TEST WIEDZY — TYLER DURDEN")
 
-        c.setFont(FB, 18)
+        c.setFont(FB, 16)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(
-            W / 2, H - 28 * mm, data.get("nazwa_postaci", "ANONIM")[:30]
-        )
-        c.setFont(FN, 10)
+        tytul_pdf = tytul[:60] if tytul else "Test Tylera Durdena"
+        c.drawCentredString(W / 2, H - 28 * mm, tytul_pdf)
+        c.setFont(FN, 9)
         c.setFillColorRGB(0.7, 0.5, 0.5)
-        c.drawCentredString(W / 2, H - 35 * mm, data.get("klasa_postaci", "")[:50])
+        c.drawCentredString(W / 2, H - 35 * mm, f"{len(pytania)} pytań | odpowiedź poprawna: b")
 
         y = H - 50 * mm
 
-        # Poziom
-        poziom = data.get("poziom", "?")
-        c.setFont(FB, 11)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, f"POZIOM: {poziom}")
+        # Wprowadzenie
+        wprowadzenie = data.get("wprowadzenie", "")
+        if wprowadzenie:
+            c.setFont(FN, 9)
+            c.setFillColorRGB(*GRAY)
+            words = wprowadzenie.split()
+            line_txt = ""
+            for w in words:
+                test = (line_txt + " " + w).strip()
+                if c.stringWidth(test, FN, 9) <= cw:
+                    line_txt = test
+                else:
+                    c.drawString(lm, y, line_txt)
+                    y -= 5 * mm
+                    line_txt = w
+            if line_txt:
+                c.drawString(lm, y, line_txt)
+            y -= 8 * mm
+
+        # Pytania
         c.setStrokeColorRGB(*RED)
         c.setLineWidth(0.5)
-        c.line(lm, y - 2, rm, y - 2)
-        y -= 8 * mm
+        for p in pytania:
+            if y < 30 * mm:
+                c.showPage()
+                y = H - 20 * mm
+            nr = p.get("nr", "?")
+            pytanie_txt = p.get("pytanie", "")
+            odp = p.get("odpowiedzi", {})
+            if isinstance(odp, list):
+                odp = {str(it.get("klucz", chr(97 + i))): str(it.get("tresc", "")) for i, it in enumerate(odp)}
+            wyjasnienie = p.get("wyjasnienie", "")
 
-        # Statystyki — 2 kolumny
-        stats = data.get("statystyki", {})
-        stat_list = list(stats.items())
-        half = len(stat_list) // 2 + len(stat_list) % 2
-        col1 = stat_list[:half]
-        col2 = stat_list[half:]
-        col_w = cw / 2 - 5 * mm
+            # Nagłówek pytania
+            c.setFont(FB, 9)
+            c.setFillColorRGB(*RED)
+            c.drawString(lm, y, f"Pytanie {nr}:")
+            y -= 4 * mm
 
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "STATYSTYKI")
-        y -= 5 * mm
+            # Treść pytania — zawijanie
+            c.setFont(FN, 8)
+            c.setFillColorRGB(*DARK)
+            words = pytanie_txt.split()
+            line_txt = ""
+            for w in words:
+                test = (line_txt + " " + w).strip()
+                if c.stringWidth(test, FN, 8) <= cw:
+                    line_txt = test
+                else:
+                    c.drawString(lm + 3 * mm, y, line_txt)
+                    y -= 4 * mm
+                    line_txt = w
+            if line_txt:
+                c.drawString(lm + 3 * mm, y, line_txt)
+            y -= 5 * mm
 
-        # Krok między statystykami — 18pt = etykieta(7) + wartość(7) + odstęp(4)
-        STAT_STEP = 18
-        col_half = cw / 2 - 3 * mm
-
-        def draw_stat_col(items, x_base):
-            sy = y_stat
-            for sk, sv in items:
-                label = sk.replace("_", " ").upper()
-                c.setFont(FB, 7)
+            # Odpowiedzi a/b/c
+            for klucz in ("a", "b", "c"):
+                tresc = str(odp.get(klucz, ""))
+                if not tresc:
+                    continue
+                marker = "◆" if klucz == "b" else "○"
+                c.setFont(FN, 8)
                 c.setFillColorRGB(*DARK)
-                c.drawString(x_base, sy, label + ":")
-                sy -= 8
-                # Zawijaj wartość jeśli długa
-                val_str = str(sv)
+                line_txt = f"{marker} {klucz}) {tresc}"
+                words = line_txt.split()
+                txt_line = ""
+                for w in words:
+                    test = (txt_line + " " + w).strip()
+                    if c.stringWidth(test, FN, 8) <= cw - 5 * mm:
+                        txt_line = test
+                    else:
+                        c.drawString(lm + 5 * mm, y, txt_line)
+                        y -= 4 * mm
+                        txt_line = w
+                if txt_line:
+                    c.drawString(lm + 5 * mm, y, txt_line)
+                y -= 4 * mm
+
+            # Wyjaśnienie (mniejsze, szare)
+            if wyjasnienie:
                 c.setFont(FN, 7)
                 c.setFillColorRGB(*GRAY)
-                words = val_str.split()
-                line = ""
+                words = wyjasnienie.split()
+                line_txt = "→ "
                 for w in words:
-                    test = (line + " " + w).strip()
-                    if c.stringWidth(test, FN, 7) <= col_half:
-                        line = test
+                    test = (line_txt + " " + w).strip()
+                    if c.stringWidth(test, FN, 7) <= cw - 3 * mm:
+                        line_txt = test
                     else:
-                        c.drawString(x_base + 2 * mm, sy, line)
-                        sy -= 8
-                        line = w
-                if line:
-                    c.drawString(x_base + 2 * mm, sy, line)
-                sy -= STAT_STEP - 8
-            return sy
-
-        y_stat = y
-        sy1 = draw_stat_col(col1, lm)
-        sy2 = draw_stat_col(col2, lm + cw / 2)
-        y = min(sy1, sy2) - 8 * mm
-
-        # Umiejętności
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "UMIEJĘTNOŚCI SPECJALNE")
-        c.line(lm, y - 2, rm, y - 2)
-        y -= 6 * mm
-        for um in data.get("umiejetnosci_specjalne", []):
-            c.setFont(FN, 8)
-            c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"◆ {um}")
-            y -= 5 * mm
-
-        y -= 3 * mm
-
-        # Ekwipunek
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "EKWIPUNEK")
-        c.line(lm, y - 2, rm, y - 2)
-        y -= 6 * mm
-        for item in data.get("ekwipunek", []):
-            c.setFont(FN, 8)
-            c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"⚔ {item}")
-            y -= 5 * mm
-
-        y -= 3 * mm
-
-        # Quest + cytat
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "QUEST GŁÓWNY:")
-        c.setFont(FN, 8)
-        c.setFillColorRGB(*DARK)
-        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", ""))
-        y -= 8 * mm
-
-        # Cytat na dole
-        c.setStrokeColorRGB(0.7, 0.7, 0.7)
-        c.line(lm, y, rm, y)
-        y -= 5 * mm
-        c.setFont(FN, 8)
-        c.setFillColorRGB(*RED)
-        cytat = data.get("cytat_postaci", "")
-        words = cytat.split()
-        line = ""
-        for w in words:
-            test = (line + " " + w).strip()
-            if c.stringWidth(f'"{test}"', FN, 8) <= cw:
-                line = test
-            else:
-                c.drawCentredString(W / 2, y, f'"{line}"')
+                        c.drawString(lm + 3 * mm, y, line_txt)
+                        y -= 3.5 * mm
+                        line_txt = w
+                if line_txt:
+                    c.drawString(lm + 3 * mm, y, line_txt)
                 y -= 4 * mm
-                line = w
-        if line:
-            c.drawCentredString(W / 2, y, f'"{line}"')
+
+            c.line(lm, y, rm, y)
+            y -= 5 * mm
+
+        # Zakończenie
+        zakonczenie = data.get("zakonczenie", "— Tyler Durden")
+        if y < 20 * mm:
+            c.showPage()
+            y = H - 20 * mm
+        c.setFont(FN, 9)
+        c.setFillColorRGB(*RED)
+        c.drawCentredString(W / 2, y, f'"{zakonczenie}"')
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -3500,7 +3497,7 @@ function sprawdz() {{
             "content_type": "application/pdf",
             "filename": f"ankieta_{ts}.pdf",
         }
-        logger.info("[ankieta] OK AcroForm: %d pytań", len(pytania[:5]))
+        logger.info("[ankieta] PDF OK: %d pytań", len(pytania))
         return html_dict, pdf_dict
 
     except Exception as e:
@@ -3615,144 +3612,101 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         c.setLineWidth(1)
         c.rect(10 * mm, 10 * mm, W - 20 * mm, H - 20 * mm, fill=0, stroke=1)
 
-        # Nagłówek
+        # Nagłówek horoskopu
         c.setFillColorRGB(*DARK)
         c.rect(10 * mm, H - 40 * mm, W - 20 * mm, 30 * mm, fill=1, stroke=0)
         c.setFont(FB, 8)
         c.setFillColorRGB(0.6, 0.6, 0.6)
-        c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA")
+        c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA — HOROSKOP TYLERA")
 
-        c.setFont(FB, 18)
+        znak = str(data.get("znak_zodiaku", "Nieznany Znak"))[:50]
+        c.setFont(FB, 16)
         c.setFillColorRGB(1, 1, 1)
-        c.drawCentredString(
-            W / 2, H - 28 * mm, data.get("nazwa_postaci", "ANONIM")[:30]
-        )
-        c.setFont(FN, 10)
+        c.drawCentredString(W / 2, H - 28 * mm, znak)
+        motto = str(data.get("motto", ""))[:80]
+        c.setFont(FN, 9)
         c.setFillColorRGB(0.7, 0.5, 0.5)
-        c.drawCentredString(W / 2, H - 35 * mm, data.get("klasa_postaci", "")[:50])
+        c.drawCentredString(W / 2, H - 35 * mm, motto)
 
         y = H - 50 * mm
 
-        # Poziom
-        poziom = data.get("poziom", "?")
-        c.setFont(FB, 11)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, f"POZIOM: {poziom}")
+        def wrap_text(txt, font, size, max_w, x, y_pos, color=DARK, indent=0):
+            c.setFont(font, size)
+            c.setFillColorRGB(*color)
+            words = str(txt).split()
+            line_txt = ""
+            for w in words:
+                test = (line_txt + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_w:
+                    line_txt = test
+                else:
+                    c.drawString(x + indent, y_pos, line_txt)
+                    y_pos -= (size + 2)
+                    line_txt = w
+            if line_txt:
+                c.drawString(x + indent, y_pos, line_txt)
+                y_pos -= (size + 2)
+            return y_pos
+
+        # Dni
         c.setStrokeColorRGB(*RED)
         c.setLineWidth(0.5)
-        c.line(lm, y - 2, rm, y - 2)
-        y -= 8 * mm
+        for dzien in data.get("dni", []):
+            if y < 35 * mm:
+                c.showPage()
+                y = H - 20 * mm
 
-        # Statystyki — 2 kolumny
-        stats = data.get("statystyki", {})
-        stat_list = list(stats.items())
-        half = len(stat_list) // 2 + len(stat_list) % 2
-        col1 = stat_list[:half]
-        col2 = stat_list[half:]
-        col_w = cw / 2 - 5 * mm
+            nr = dzien.get("dzien", "?")
+            data_str = dzien.get("data", "")
+            naglowek = str(dzien.get("naglowek", ""))
+            tresc = str(dzien.get("tresc", ""))
+            rada = str(dzien.get("rada_tylera", ""))
 
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "STATYSTYKI")
-        y -= 5 * mm
+            # Dzień nagłówek
+            c.setFont(FB, 10)
+            c.setFillColorRGB(*RED)
+            c.drawString(lm, y, f"DZIEŃ {nr}  {data_str}")
+            y -= 4 * mm
+            c.line(lm, y, rm, y)
+            y -= 4 * mm
 
-        # Krok między statystykami — 18pt = etykieta(7) + wartość(7) + odstęp(4)
-        STAT_STEP = 18
-        col_half = cw / 2 - 3 * mm
-
-        def draw_stat_col(items, x_base):
-            sy = y_stat
-            for sk, sv in items:
-                label = sk.replace("_", " ").upper()
-                c.setFont(FB, 7)
-                c.setFillColorRGB(*DARK)
-                c.drawString(x_base, sy, label + ":")
-                sy -= 8
-                # Zawijaj wartość jeśli długa
-                val_str = str(sv)
-                c.setFont(FN, 7)
-                c.setFillColorRGB(*GRAY)
-                words = val_str.split()
-                line = ""
-                for w in words:
-                    test = (line + " " + w).strip()
-                    if c.stringWidth(test, FN, 7) <= col_half:
-                        line = test
-                    else:
-                        c.drawString(x_base + 2 * mm, sy, line)
-                        sy -= 8
-                        line = w
-                if line:
-                    c.drawString(x_base + 2 * mm, sy, line)
-                sy -= STAT_STEP - 8
-            return sy
-
-        y_stat = y
-        sy1 = draw_stat_col(col1, lm)
-        sy2 = draw_stat_col(col2, lm + cw / 2)
-        y = min(sy1, sy2) - 8 * mm
-
-        # Umiejętności
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "UMIEJĘTNOŚCI SPECJALNE")
-        c.line(lm, y - 2, rm, y - 2)
-        y -= 6 * mm
-        for um in data.get("umiejetnosci_specjalne", []):
-            c.setFont(FN, 8)
+            # Nagłówek sensacyjny
+            c.setFont(FB, 9)
             c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"◆ {um}")
+            y = wrap_text(naglowek, FB, 9, cw, lm, y, color=DARK)
+            y -= 2 * mm
+
+            # Treść
+            y = wrap_text(tresc, FN, 8, cw, lm, y, color=GRAY, indent=2 * mm)
+            y -= 2 * mm
+
+            # Rada Tylera
+            if rada:
+                c.setFont(FN, 8)
+                c.setFillColorRGB(*RED)
+                y = wrap_text(f"→ {rada}", FN, 8, cw - 3 * mm, lm + 3 * mm, y, color=RED)
+
+            y -= 6 * mm
+
+        # Przepowiednia ogólna
+        przepowiednia = str(data.get("przepowiednia_ogolna", ""))
+        if przepowiednia:
+            if y < 25 * mm:
+                c.showPage()
+                y = H - 20 * mm
+            c.setStrokeColorRGB(*RED)
+            c.line(lm, y, rm, y)
             y -= 5 * mm
-
-        y -= 3 * mm
-
-        # Ekwipunek
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "EKWIPUNEK")
-        c.line(lm, y - 2, rm, y - 2)
-        y -= 6 * mm
-        for item in data.get("ekwipunek", []):
-            c.setFont(FN, 8)
-            c.setFillColorRGB(*DARK)
-            c.drawString(lm + 3 * mm, y, f"⚔ {item}")
+            c.setFont(FB, 9)
+            c.setFillColorRGB(*RED)
+            c.drawString(lm, y, "PRZEPOWIEDNIA OGÓLNA:")
             y -= 5 * mm
-
-        y -= 3 * mm
-
-        # Quest + cytat
-        c.setFont(FB, 9)
-        c.setFillColorRGB(*RED)
-        c.drawString(lm, y, "QUEST GŁÓWNY:")
-        c.setFont(FN, 8)
-        c.setFillColorRGB(*DARK)
-        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", ""))
-        y -= 8 * mm
-
-        # Cytat na dole
-        c.setStrokeColorRGB(0.7, 0.7, 0.7)
-        c.line(lm, y, rm, y)
-        y -= 5 * mm
-        c.setFont(FN, 8)
-        c.setFillColorRGB(*RED)
-        cytat = data.get("cytat_postaci", "")
-        words = cytat.split()
-        line = ""
-        for w in words:
-            test = (line + " " + w).strip()
-            if c.stringWidth(f'"{test}"', FN, 8) <= cw:
-                line = test
-            else:
-                c.drawCentredString(W / 2, y, f'"{line}"')
-                y -= 4 * mm
-                line = w
-        if line:
-            c.drawCentredString(W / 2, y, f'"{line}"')
+            y = wrap_text(przepowiednia, FN, 9, cw, lm, y, color=GRAY)
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        logger.info("[horoskop] OK")
+        logger.info("[horoskop] PDF OK: %d dni", len(data.get("dni", [])))
         return {
             "base64": pdf_b64,
             "content_type": "application/pdf",
