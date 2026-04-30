@@ -552,24 +552,56 @@ def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
         if len(collected) == 1:
             result = collected[0]
         else:
-            # Wiele obiektów — scalamy w jeden dict lub owijamy w dict z kluczem
-            merged = {}
-            list_items = []
-            for obj in collected:
-                if isinstance(obj, dict):
-                    merged.update(obj)
-                elif isinstance(obj, list):
-                    list_items.extend(obj)
-            if merged:
-                result = merged
-            elif list_items:
-                # Lista dictów — próbuj wykryć właściwy klucz na podstawie label
+            # Wiele obiektów — sprawdź czy to lista jednorodnych dictów (pytania/dni)
+            # czy różne sekcje do scalenia (różne klucze)
+            dict_items = [o for o in collected if isinstance(o, dict)]
+            list_items_flat = []
+            for o in collected:
+                if isinstance(o, list):
+                    list_items_flat.extend(o)
+
+            # Heurystyka: jednorodne dict-y → lista elementów (nie scalaj kluczami)
+            all_dicts = len(dict_items) == len(collected) and len(dict_items) > 1
+            if all_dicts:
+                first_keys = frozenset(dict_items[0].keys())
+                are_homogeneous = all(
+                    frozenset(d.keys()) == first_keys for d in dict_items[1:]
+                )
+            else:
+                are_homogeneous = False
+
+            if are_homogeneous:
+                # Jednorodne obiekty → wrzuć jako listę pod key_guess
                 key_guess = {
                     "ankieta": "pytania",
                     "horoskop": "dni",
                     "gra": "pytania",
                 }.get(label.split("-")[0].split("_")[0], "items")
-                result = {key_guess: list_items}
+                result = {key_guess: dict_items}
+                logger.warning(
+                    "[%s] raw_decode: %d jednorod. obiektów → {%s: [...]}", label, len(dict_items), key_guess
+                )
+            elif dict_items:
+                # Różne sekcje — scalaj (oryginalne zachowanie)
+                merged = {}
+                for obj in dict_items:
+                    merged.update(obj)
+                if list_items_flat:
+                    key_guess = {
+                        "ankieta": "pytania",
+                        "horoskop": "dni",
+                        "gra": "pytania",
+                    }.get(label.split("-")[0].split("_")[0], "items")
+                    if key_guess not in merged:
+                        merged[key_guess] = list_items_flat
+                result = merged
+            elif list_items_flat:
+                key_guess = {
+                    "ankieta": "pytania",
+                    "horoskop": "dni",
+                    "gra": "pytania",
+                }.get(label.split("-")[0].split("_")[0], "items")
+                result = {key_guess: list_items_flat}
             else:
                 result = collected
         logger.warning(
@@ -5031,10 +5063,33 @@ def build_zwykly_section(
             pdf_category = str(data.get("kategoria_pdf") or "")
         else:
             logger.warning(
-                "[zwykly] Oczekiwano dict z AI, otrzymano %s",
+                "[zwykly] Oczekiwano dict z AI, otrzymano %s — próba regex fallback",
                 type(data).__name__ if data is not None else "None",
             )
-            res_text = raw
+            # Fallback: wyciągnij odpowiedz_tekstowa bezpośrednio z ucietego JSON-a
+            m = re.search(
+                r'"odpowiedz_tekstowa"\s*:\s*"((?:[^"\]|\.)*)',
+                raw,
+                re.DOTALL,
+            )
+            if m:
+                extracted = m.group(1)
+                # Odkoduj escape sequences (\n, \t itp.)
+                try:
+                    extracted = extracted.encode("utf-8").decode("unicode_escape")
+                except Exception:
+                    pass
+                res_text = extracted
+                logger.warning("[zwykly] regex fallback OK — wyciągnięto %d znaków", len(res_text))
+                # Spróbuj też wyciągnąć emocję i kategorię
+                m_em = re.search(r'"emocja"\s*:\s*"([^"]*)"', raw)
+                if m_em:
+                    emotion_key = m_em.group(1)
+                m_cat = re.search(r'"kategoria_pdf"\s*:\s*"([^"]*)"', raw)
+                if m_cat:
+                    pdf_category = m_cat.group(1)
+            else:
+                res_text = raw
     except Exception as e:
         logger.warning("[zwykly] Błąd parsowania JSON: %s | raw: %.200s", e, raw)
         res_text = raw
