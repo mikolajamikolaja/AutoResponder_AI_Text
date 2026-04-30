@@ -1089,6 +1089,28 @@ h1{{font-size:1.25em;margin-bottom:4px}}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Admin — reset tokenów HF
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route("/admin/hf-reset", methods=["GET", "POST"])
+def admin_hf_reset():
+    """
+    Wymusza ponowny warm-up tokenów HF bez restartu serwera.
+    Przydatne po dodaniu nowego HF_TOKEN* w Render env i redeploy.
+    """
+    hf_tokens.force_reset()
+    # Uruchom warm-up od razu w tym samym wątku (mały koszt — max ~10s)
+    hf_tokens.warmup(force=True)
+    report = hf_tokens.status_report()
+    active = sum(1 for r in report if r.get("alive"))
+    return jsonify({
+        "status": "ok",
+        "message": f"Warm-up wykonany — {active} aktywnych tokenów",
+        "tokens": report,
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Uruchomienie
 # ═══════════════════════════════════════════════════════════════════════════════
 

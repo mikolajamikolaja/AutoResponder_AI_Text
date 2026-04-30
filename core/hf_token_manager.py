@@ -50,7 +50,7 @@ _MAX_WARMUP_THREADS = 8      # max równoległych wątków podczas warm-upu
 
 # Po tym czasie od warm-upu z wynikiem ALL_DEAD — spróbuj ponownie
 # 0 = nigdy nie próbuj ponownie (tokeny 401 są trwale martwe)
-_RECHECK_AFTER = 0
+_RECHECK_AFTER = 300  # po 5 min sprawdź ponownie (obsługuje dodanie nowego tokenu)
 
 # Minimalny odstęp między kolejnymi warm-upami (ochrona przed pętlą OOM-restart)
 _MIN_WARMUP_INTERVAL = 120   # sekund
@@ -325,12 +325,12 @@ class HFTokenManager:
         """
         Resetuje stan — wymusza ponowny warm-up przy następnym użyciu.
         Używa przy ręcznym odnowieniu tokenów w Render env.
-        UWAGA: nie resetuje _last_warmup_at — żeby chronić przed pętlą.
         """
         with self._warmup_lock:
             with self._lock:
                 self._warmed_up      = False
                 self._all_dead_since = 0.0
+                self._last_warmup_at = 0.0   # zezwól na natychmiastowy warm-up
                 self._tokens         = {}
         logger.info("[hf-manager] Reset — warm-up przy następnym get_active_tokens()")
 
