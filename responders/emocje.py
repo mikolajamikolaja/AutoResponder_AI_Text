@@ -123,6 +123,9 @@ def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict
     # Naprawa: jeśli zaczyna się od przecinka, dodaj { na początku
     if clean.startswith(","):
         clean = "{" + clean
+    # Naprawa: {, — AI pominęło pierwszy klucz (np. {, "pocieszenie": ...)
+    if re.match(r"^\{\s*,", clean):
+        clean = re.sub(r"^\{\s*,\s*", "{", clean, count=1)
     # Naprawa: jeśli brakuje końcowego }, dodaj go
     if clean.count("{") > clean.count("}") and not clean.endswith("}"):
         clean += "}"
@@ -507,7 +510,7 @@ def build_emocje_section(
             "fallback_pocieszenie",
             "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>",
         )
-        # Zabezpieczenie: jeśli fallback z JSON nie ma tagów <p>, owijamy w nie
+        # Jeśli fallback z JSON nie ma tagów HTML, owijamy w <p>
         if fallback and "<p>" not in fallback and "<div>" not in fallback:
             fallback = "".join(
                 f"<p>{s.strip()}</p>" for s in fallback.split("\n") if s.strip()

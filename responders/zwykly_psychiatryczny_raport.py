@@ -1747,47 +1747,57 @@ def build_raport(
 
     # Scalenie całości
     raport = {}
-    # dane_pacjenta musi być zagnieżdżone pod kluczem "dane_pacjenta"
-    # bo _build_docx robi raport.get("dane_pacjenta", {})
-    if sekcja_pacjent:
-        if "dane_pacjenta" in sekcja_pacjent and isinstance(sekcja_pacjent.get("dane_pacjenta"), dict):
-            # AI zwróciło już zagnieżdżone {"dane_pacjenta": {...}}
+
+    # ── dane_pacjenta: _sekcja_pacjent zwraca PŁASKI dict — opakowujemy
+    PACJENT_FIELDS = {"imie_nazwisko", "wiek", "adres", "zawod", "stan_cywilny", "numer_ubezpieczenia"}
+    if isinstance(sekcja_pacjent, dict):
+        if "dane_pacjenta" in sekcja_pacjent and isinstance(sekcja_pacjent["dane_pacjenta"], dict):
             raport["dane_pacjenta"] = sekcja_pacjent["dane_pacjenta"]
-            # skopiuj też klucze na poziomie głównym (np. data_przyjecia, numer_historii)
             for k, v in sekcja_pacjent.items():
                 if k != "dane_pacjenta":
                     raport[k] = v
         else:
-            # AI zwróciło płaski dict — opakowujemy go jako dane_pacjenta
-            # ale też kopiujemy na poziom główny klucze nie będące polami pacjenta
-            PACJENT_FIELDS = {
-                "imie_nazwisko", "wiek", "adres", "zawod", "stan_cywilny", "numer_ubezpieczenia"
-            }
-            dane_p = {k: v for k, v in sekcja_pacjent.items() if k in PACJENT_FIELDS}
-            raport["dane_pacjenta"] = dane_p
+            raport["dane_pacjenta"] = {k: v for k, v in sekcja_pacjent.items() if k in PACJENT_FIELDS}
             for k, v in sekcja_pacjent.items():
                 if k not in PACJENT_FIELDS:
-                    raport[k] = v  # data_przyjecia, numer_historii_choroby itp.
-    raport["depozyt"] = sekcja_dep_leki.get("depozyt", {})
-    raport["farmakologia"] = sekcja_dep_leki.get("farmakologia", {})
-    raport["hospitalizacja_tydzien_1"] = dni_1_7
-    raport["hospitalizacja_tydzien_2"] = dni_8_14
-    # wypis musi być zagnieżdżone pod kluczem "wypis"
-    if sekcja_wypis:
-        if "wypis" in sekcja_wypis and isinstance(sekcja_wypis.get("wypis"), dict):
+                    raport[k] = v
+
+    # ── depozyt i farmakologia
+    dep_raw = sekcja_dep_leki.get("depozyt", {}) if isinstance(sekcja_dep_leki, dict) else {}
+    raport["depozyt"] = dep_raw if isinstance(dep_raw, dict) else {}
+    farm_raw = sekcja_dep_leki.get("farmakologia", {}) if isinstance(sekcja_dep_leki, dict) else {}
+    raport["farmakologia"] = farm_raw if isinstance(farm_raw, dict) else {}
+
+    raport["hospitalizacja_tydzien_1"] = dni_1_7 if isinstance(dni_1_7, list) else []
+    raport["hospitalizacja_tydzien_2"] = dni_8_14 if isinstance(dni_8_14, list) else []
+
+    # ── wypis: _sekcja_wypis zwraca PŁASKI dict — opakowujemy
+    WYPIS_FIELDS = {"dzien_wypisu", "powod_wypisu", "zalecenia_po_wypisie", "stan_przy_wypisie", "opis_pozegnania"}
+    if isinstance(sekcja_wypis, dict):
+        if "wypis" in sekcja_wypis and isinstance(sekcja_wypis["wypis"], dict):
             raport["wypis"] = sekcja_wypis["wypis"]
             for k, v in sekcja_wypis.items():
                 if k != "wypis":
                     raport[k] = v
         else:
-            WYPIS_FIELDS = {"dzien_wypisu", "powod_wypisu", "zalecenia_po_wypisie"}
-            wypis_d = {k: v for k, v in sekcja_wypis.items() if k in WYPIS_FIELDS}
-            raport["wypis"] = wypis_d
+            raport["wypis"] = {k: v for k, v in sekcja_wypis.items() if k in WYPIS_FIELDS}
             for k, v in sekcja_wypis.items():
                 if k not in WYPIS_FIELDS:
                     raport[k] = v
-    raport.update(sekcja_diagnozy)
-    raport.update(sekcja_zalecenia)
+
+    # ── diagnozy i zalecenia: ochrona przed stringami zamiast dict
+    DICT_KEYS = {
+        "diagnoza_wstepna", "diagnoza_dodatkowa", "choroba_wspolistniejaca",
+        "zalecenia_tylera", "depozyt", "farmakologia", "wypis", "dane_pacjenta",
+    }
+    for sekcja in (sekcja_diagnozy, sekcja_zalecenia):
+        if not isinstance(sekcja, dict):
+            continue
+        for k, v in sekcja.items():
+            if k in DICT_KEYS and not isinstance(v, dict):
+                raport[k] = {}
+            else:
+                raport[k] = v
 
     # Relacje świadków (po scaleniu raportu, bo potrzebuje kontekstu)
     relacje_result = {}
