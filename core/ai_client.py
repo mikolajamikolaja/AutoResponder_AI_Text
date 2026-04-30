@@ -18,7 +18,7 @@ import logging
 
 from core.logging_reporter import get_logger
 
-DEEPSEEK_API_KEY = os.getenv("API_KEY_DEEPSEEK")
+API_KEY_DEEPSEEK = os.getenv("API_KEY_DEEPSEEK")
 MODEL_BIZ = os.getenv("MODEL_BIZ", "deepseek-chat")
 MODEL_TYLER = os.getenv("MODEL_TYLER", "deepseek-chat")
 
@@ -126,13 +126,13 @@ def call_deepseek(
 
     OPTYMALIZACJA: resp.close() po każdym żądaniu, del na pośrednich zmiennych.
     """
-    if not DEEPSEEK_API_KEY:
+    if not API_KEY_DEEPSEEK:
         current_app.logger.error("Brak API_KEY_DEEPSEEK")
         return None
 
     url = "https://api.deepseek.com/chat/completions"
     headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {API_KEY_DEEPSEEK}",
         "Content-Type": "application/json",
     }
     payload = {
@@ -255,113 +255,3 @@ def _log_api(model_name: str, success: bool, error: str = None):
         logger.log_api_call("deepseek", **kwargs)
     except Exception:
         pass
-
-
-def call_deepseek(
-    system: str, user: str, model: str = MODEL_TYLER, max_tokens: int = 2000
-) -> str | None:
-    """
-    Wywołuje DeepSeek API z fallbackiem na błędy struktury.
-    Zwraca tekst lub None (nigdy nie wyrzuca wyjątek).
-    """
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-    if not system or not user:
-        logger.warning("[deepseek] Pusty system lub user prompt")
-        return None
-
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        logger.error("[deepseek] Brak DEEPSEEK_API_KEY w zmiennych środowiskowych")
-        return None
-
-    url = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.7,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=120)
-
-        # ── Sprawdzenie statusu HTTP ──────────────────────────────────────────
-        if resp.status_code != 200:
-            try:
-                error_data = resp.json()
-                error_msg = error_data.get("error", {}).get("message", str(error_data))
-            except:
-                error_msg = resp.text[:200]
-            logger.error("[deepseek] HTTP %d: %s", resp.status_code, error_msg)
-            return None
-
-        # ── Parsowanie JSON ───────────────────────────────────────────────────
-        try:
-            data = resp.json()
-        except Exception as e:
-            logger.error(
-                "[deepseek] Błąd parsowania JSON: %s | body: %.300s", e, resp.text[:300]
-            )
-            return None
-
-        # ── Sprawdzenie "error" w response'ie ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        if "error" in data:
-            error_content = data.get("error", {})
-            if isinstance(error_content, dict):
-                error_msg = error_content.get("message", str(error_content))
-            else:
-                error_msg = str(error_content)
-            logger.error("[deepseek] API error: %s", error_msg)
-            return None
-
-        # ── Sprawdzenie "choices" ─────────────────────────────────────────────
-        choices = data.get("choices", [])
-        if not choices or len(choices) == 0:
-            logger.error(
-                "[deepseek] 'choices' puste lub brak w response: %s",
-                json.dumps(data, default=str)[:300],
-            )
-            return None
-
-        choice = choices[0]
-        if not isinstance(choice, dict):
-            logger.error("[deepseek] choices[0] nie jest dict: %s", type(choice))
-            return None
-
-        message = choice.get("message", {})
-        if not isinstance(message, dict):
-            logger.error("[deepseek] message nie jest dict: %s", type(message))
-            return None
-
-        content = message.get("content", "")
-        if not content or not isinstance(content, str):
-            logger.error("[deepseek] content pusta lub nie string: %s", type(content))
-            return None
-
-        # ── Sukces ────────────────────────────────────────────────────────────
-        logger.info("[deepseek] OK ✓ (%d znaków)", len(content))
-        return content.strip()
-
-    except requests.Timeout:
-        logger.error("[deepseek] Timeout (120s)")
-        return None
-    except requests.RequestException as e:
-        logger.error("[deepseek] Request error: %s", e)
-        return None
-    except Exception as e:
-        logger.error(
-            "[deepseek] Nieoczekiwany błąd: %s | %s", e, traceback.format_exc()
-        )
-        return None

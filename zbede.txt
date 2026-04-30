@@ -1,0 +1,27 @@
+Co widzę i co wygląda na zbędne
+Tak, widzę cały projekt poza backup.
+
+Najpewniejsze do usunięcia
+.venv — środowisko wirtualne, można je odtworzyć z requirements.txt
+__pycache__ (root i podfoldery) — pliki cache Pythona
+.pytest_cache — cache testów
+*.pyc — skompilowane pliki Pythona
+Generowane / pomocnicze artefakty
+raport_psychiatryczny_pacjent_20260430_123614.docx
+pliki w logs (np. log_20260423_...txt)
+foldery pdf i pdf_biznes — wyglądają na wygenerowane PDFy
+media — prawdopodobnie pliki multimedialne/wyjściowe
+Inne pliki, które mogą być usunięte, jeżeli nie są Ci potrzebne
+example — przykładowe skrypty/folder z przykładami
+reviews — pewnie dane/przykłady recenzji
+audyt_piatek.txt, do naprawy.txt — notatki robocze
+AUDIT_FINDINGS.md, CHANGES_LOG.md — dokumentacja/raporty historyczne, usuń tylko jeśli naprawdę nie chcesz ich zachować
+Pliki, które raczej powinieneś zostawić
+app.py, wsgi.py
+core
+responders
+config_responders.json
+requirements.txt, runtime.txt
+mail_utils.py, smtp_wysylka.py, drive_utils.py
+prompts, images, emotki, biblioteka — zapewne potrzebne do działania
+Uwaga: nie mogę stwierdzić na 100% bez znajomości wszystkich zależności, ale powyżej są najbardziej prawdopodobne pliki/foldery do oczyszczenia.
