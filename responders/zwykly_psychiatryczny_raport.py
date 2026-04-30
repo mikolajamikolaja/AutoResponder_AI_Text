@@ -290,6 +290,17 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
             )
             return {}
 
+        # Dodatkowy retry gdy wynik jest podejrzanie krótki (np. 17 znaków)
+        MIN_DANE_PACJENTA_LEN = 30
+        if len(raw.strip()) < MIN_DANE_PACJENTA_LEN:
+            current_app.logger.warning(
+                "[psych-raport] dane_pacjenta zbyt krótkie (%d znaków) — retry z max_tokens=3000",
+                len(raw.strip()),
+            )
+            raw2 = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=3000)
+            if raw2 and len(raw2.strip()) > len(raw.strip()):
+                raw = raw2
+
         result = _parse_json_safe(raw, "dane_pacjenta")
         if result is None:
             current_app.logger.warning(

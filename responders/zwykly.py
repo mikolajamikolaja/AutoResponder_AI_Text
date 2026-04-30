@@ -549,7 +549,29 @@ def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
         except json.JSONDecodeError:
             pos += 1
     if collected:
-        result = collected if len(collected) > 1 else collected[0]
+        if len(collected) == 1:
+            result = collected[0]
+        else:
+            # Wiele obiektów — scalamy w jeden dict lub owijamy w dict z kluczem
+            merged = {}
+            list_items = []
+            for obj in collected:
+                if isinstance(obj, dict):
+                    merged.update(obj)
+                elif isinstance(obj, list):
+                    list_items.extend(obj)
+            if merged:
+                result = merged
+            elif list_items:
+                # Lista dictów — próbuj wykryć właściwy klucz na podstawie label
+                key_guess = {
+                    "ankieta": "pytania",
+                    "horoskop": "dni",
+                    "gra": "pytania",
+                }.get(label.split("-")[0].split("_")[0], "items")
+                result = {key_guess: list_items}
+            else:
+                result = collected
         logger.warning(
             "[%s] JSON naprawiony (raw_decode: %d obiektów)", label, len(collected)
         )
@@ -3166,8 +3188,22 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         data = _parse_json_safe(raw, "ankieta")
         if data is None:
             raise ValueError("JSON nienaprawialny")
+        # AI zwróciło tablicę pytań bez wrappera — owijamy
+        if isinstance(data, list):
+            if len(data) > 0 and isinstance(data[0], dict):
+                logger.warning("[ankieta] AI zwróciło listę — owijam w {pytania: [...]}")
+                data = {"pytania": data}
+            else:
+                raise ValueError(f"Oczekiwano dict, dostałem list (pusta lub bez dictów)")
         if not isinstance(data, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
+        if not data.get("pytania"):
+            # Szukaj listy pytań pod zagnieżdżonymi kluczami
+            for v in data.values():
+                if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                    data["pytania"] = v
+                    logger.info("[ankieta] wyciągnięto pytania z zagnieżdżonej listy")
+                    break
         if not data.get("pytania"):
             logger.warning("[ankieta] JSON OK ale brak pytań — raw: %.200s", raw)
             return None, None
@@ -3484,6 +3520,15 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         data = _parse_json_safe(raw, "horoskop")
         if data is None:
             raise ValueError("[horoskop] JSON nienaprawialny")
+        # AI zwróciło tablicę dni bez wrappera — owijamy
+        if isinstance(data, list):
+            if len(data) > 0 and isinstance(data[0], dict):
+                logger.warning("[horoskop] AI zwróciło listę — owijam w {dni: [...]}")
+                data = {"dni": data}
+            else:
+                raise ValueError(
+                    f"[horoskop] Oczekiwano dict, dostałem list (pusta lub bez dictów)"
+                )
         if not isinstance(data, dict):
             raise ValueError(
                 f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}"
@@ -3755,8 +3800,16 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
                 data[right] = data.pop(wrong)
                 logger.info("[karta-rpg] znormalizowano '%s' → '%s'", wrong, right)
         if not data.get("nazwa_postaci") and not data.get("statystyki"):
-            logger.warning("[karta-rpg] JSON pusty — raw: %.200s", raw)
-            return None
+            # Poluzowany warunek — wystarczy że jest jakikolwiek klucz z wartością
+            has_any_content = any(
+                v for v in data.values() if v not in (None, "", [], {})
+            )
+            if not has_any_content:
+                logger.warning("[karta-rpg] JSON pusty — raw: %.200s", raw)
+                return None
+            logger.warning(
+                "[karta-rpg] Brak nazwa_postaci/statystyki ale są inne dane — kontynuuję"
+            )
     except Exception as e:
         logger.warning("[karta-rpg] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
@@ -4728,8 +4781,36 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
                     continue
         if data is None:
             raise ValueError(f"[gra] Nie znaleziono JSON w odpowiedzi")
+        # AI zwróciło listę pytań bez wrappera — owijamy
+        if isinstance(data, list):
+            if len(data) > 0 and isinstance(data[0], dict):
+                logger.warning("[gra] AI zwróciło listę — owijam w {pytania: [...]}")
+                data = {"pytania": data}
+            else:
+                raise ValueError(f"[gra] Oczekiwano dict, dostałem list")
         if not isinstance(data, dict):
             raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
+        if not data.get("pytania"):
+            # Szukaj pytań pod alternatywnymi kluczami
+            KEY_MAP_GRA = {
+                "questions": "pytania",
+                "tasks": "pytania",
+                "scenarios": "pytania",
+                "choices": "pytania",
+                "quests": "pytania",
+            }
+            for wrong, right in KEY_MAP_GRA.items():
+                if wrong in data:
+                    data[right] = data.pop(wrong)
+                    logger.info("[gra] znormalizowano '%s' → '%s'", wrong, right)
+                    break
+        if not data.get("pytania"):
+            # Szukaj zagnieżdżonej listy dictów
+            for v in data.values():
+                if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict):
+                    data["pytania"] = v
+                    logger.info("[gra] wyciągnięto pytania z zagnieżdżonej listy")
+                    break
         if not data.get("pytania"):
             logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
             return None

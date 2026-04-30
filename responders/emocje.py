@@ -2,30 +2,23 @@
 responders/emocje.py
 Responder EMOCJE — empatyczny pocieszyciel.
 
-Zamiast analizy liczb i wykresów, ten responder:
-  1. Czyta wiadomość nadawcy
-  2. Dobiera jedną z 8 metod pocieszenia do kontekstu
-  3. Generuje ciepłą, empatyczną odpowiedź HTML (bez rad, bez obietnic)
-  4. Dołącza wizualizację SVG + miniaturę JPG + pełny HTML jako załączniki
+Generuje odpowiedzi WSZYSTKIMI 8 metodami pocieszenia naraz.
+Odbiorca wybiera właściwą.
 
-Załączniki:
-  diagram_{label}.htm   – interaktywny SVG z metodą pocieszenia
-  mapa_{label}.jpg      – miniatura JPG (ciepłe kolory)
-  pelna_{label}.htm     – pełny HTML gotowy do wglądu
+Strategia AI:
+  1 zapytanie do DeepSeek → tablica 8 JSON-ów (jedna na metodę)
+  Fallback: 8 osobnych zapytań jeśli parsowanie tablicy się nie uda.
 
-Zależności:
-  - core.ai_client (call_deepseek, MODEL_TYLER)
-  - prompts/emocje.json (wytyczne i prompty)
+Zmiany v2:
+  - wszystkie 8 metod generowane zawsze
+  - nagłówek emaila: TYLKO jedna linia tekstu w kolorze (bez "Jestem tutaj" h1)
+  - brak zbędnego miejsca w body
 """
 
-import io
 import re
 import os
-import gc
 import json
-import base64
 import logging
-import zipfile
 from flask import current_app
 
 from core.ai_client import call_deepseek, extract_clean_text, MODEL_TYLER
@@ -35,6 +28,18 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 PROMPT_JSON = os.path.join(PROMPTS_DIR, "emocje.json")
+
+# Wszystkie 8 metod w ustalonej kolejności
+ALL_METODY = [
+    "walidacja_emocji",
+    "obecnosc",
+    "normalizacja",
+    "odzwierciedlenie",
+    "przestrzen_na_cisze",
+    "docenienie_odwagi",
+    "bez_srebrnych_podszewek",
+    "cieplo_przez_konkret",
+]
 
 
 # ── Ładowanie promptu ─────────────────────────────────────────────────────────
@@ -54,24 +59,30 @@ def _fallback_prompt() -> dict:
         "system": (
             "Jesteś empatycznym towarzyszem. Twoje jedyne zadanie to pocieszyć osobę "
             "która napisała wiadomość. NIE dajesz rad. NIE proponujesz rozwiązań. "
-            "Odpowiadasz WYŁĄCZNIE w formacie JSON bez żadnego tekstu poza klamrami {}."
+            "Odpowiadasz WYŁĄCZNIE w formacie JSON bez żadnego tekstu poza nawiasami."
         ),
         "user_template": (
-            "Przeczytaj poniższą wiadomość i wygeneruj ciepłą, empatyczną odpowiedź pocieszenia.\n\n"
+            "Przeczytaj poniższą wiadomość i wygeneruj ciepłe, empatyczne odpowiedzi pocieszenia "
+            "WSZYSTKIMI 8 metodami.\n\n"
             "### WIADOMOŚĆ:\n{{MAIL}}\n\n"
             "### IMIĘ NADAWCY:\n{{SENDER_NAME}}\n\n"
-            "### WYMAGANIA ODPOWIEDZI:\n"
-            "- Pole 'pocieszenie' MUSI zawierać co najmniej 4-6 akapitów HTML (<p>...</p>)\n"
-            "- Każdy akapit powinien mieć 2-4 zdania\n"
-            "- NIE pisz tylko jednego zdania — to jest pełna odpowiedź na email\n"
-            "- Odpowiedź ma być ciepła, osobista, odwoływać się do konkretnych słów z wiadomości\n\n"
-            "### SCHEMAT JSON:\n"
-            "{\n"
-            '  "metoda": "nazwa wybranej metody pocieszenia",\n'
-            '  "pocieszenie": "<p>akapit 1...</p><p>akapit 2...</p><p>akapit 3...</p>...",\n'
-            '  "nastroj": "smutek|lęk|frustracja|ból|neutralna|złość|samotność",\n'
-            '  "intensywnosc": 0\n'
-            "}"
+            "### WYMAGANIA:\n"
+            "- Dla każdej metody: 4-6 akapitów HTML (<p>...</p>)\n"
+            "- NIE dawaj rad ani rozwiązań\n"
+            "- Odwołuj się do konkretnych słów z wiadomości\n"
+            "- Nastrój: smutek|lęk|frustracja|ból|neutralna|złość|samotność\n"
+            "- Intensywność 0-10\n\n"
+            "### FORMAT — zwróć TYLKO tablicę JSON z 8 obiektami:\n"
+            "[\n"
+            '  {"metoda": "walidacja_emocji", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7},\n'
+            '  {"metoda": "obecnosc", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7},\n'
+            '  {"metoda": "normalizacja", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7},\n'
+            '  {"metoda": "odzwierciedlenie", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7},\n'
+            '  {"metoda": "przestrzen_na_cisze", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7},\n'
+            '  {"metoda": "docenienie_odwagi", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7},\n'
+            '  {"metoda": "bez_srebrnych_podszewek", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7},\n'
+            '  {"metoda": "cieplo_przez_konkret", "pocieszenie": "<p>...</p>", "nastroj": "smutek", "intensywnosc": 7}\n'
+            "]"
         ),
         "fallback_pocieszenie": (
             "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>"
@@ -81,11 +92,14 @@ def _fallback_prompt() -> dict:
     }
 
 
-# ── Call AI ───────────────────────────────────────────────────────────────────
+# ── Call AI — jedno zbiorcze zapytanie ───────────────────────────────────────
 
 
-def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict | None:
-    """Wywołuje DeepSeek i zwraca sparsowany dict z 'pocieszenie' lub None."""
+def _generuj_wszystkie_metody(body: str, sender_name: str, prompt_data: dict) -> list[dict] | None:
+    """
+    Jedno wywołanie DeepSeek → zwraca listę 8 dict-ów (jedna per metoda).
+    Fallback: None jeśli nie uda się sparsować.
+    """
     template = prompt_data.get("user_template", _fallback_prompt()["user_template"])
     system_msg = prompt_data.get("system", "Odpowiadaj WYŁĄCZNIE w JSON.")
 
@@ -95,13 +109,14 @@ def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict
         .replace("{{SENDER_NAME}}", sender_name or "nieznane")
     )
 
-    # Dołącz metody pocieszenia jako kontekst jeśli są w JSON
-    metody = prompt_data.get("metody_pocieszenia", [])
-    if metody:
-        metody_txt = "\n### DOSTĘPNE METODY POCIESZENIA:\n"
-        for m in metody:
+    # Dołącz opisy metod jeśli są w JSON
+    metody_def = prompt_data.get("metody_pocieszenia", [])
+    if metody_def:
+        metody_txt = "\n### OPISY METOD:\n"
+        for m in metody_def:
             metody_txt += (
-                f"- [{m.get('id', '?')}] {m.get('nazwa', '')}: {m.get('opis', '')} "
+                f"- [{m.get('id', '?')}] {m.get('nazwa', '')} ({m.get('id_key', m.get('id', ''))}): "
+                f"{m.get('opis', '')} "
                 f"(przykład: \"{m.get('przyklad', '')}\")\n"
             )
         user_msg += metody_txt
@@ -120,81 +135,109 @@ def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict
     clean = re.sub(r"```\s*", "", clean)
     clean = clean.strip()
 
-    # Naprawa: jeśli zaczyna się od przecinka, dodaj { na początku
-    if clean.startswith(","):
-        clean = "{" + clean
-    # Naprawa: {, — AI pominęło pierwszy klucz (np. {, "pocieszenie": ...)
-    if re.match(r"^\{\s*,", clean):
-        clean = re.sub(r"^\{\s*,\s*", "{", clean, count=1)
-    # Naprawa: jeśli brakuje końcowego }, dodaj go
-    if clean.count("{") > clean.count("}") and not clean.endswith("}"):
-        clean += "}"
-    if clean.count("[") > clean.count("]") and not clean.endswith("]"):
+    # Naprawa nawiasów
+    if clean.count("[") > clean.count("]"):
         clean += "]"
+    if clean.count("{") > clean.count("}"):
+        clean += "}"
 
     try:
-        # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
-        # (gdy AI zwróci JSON + dodatkowy tekst poza klamrami)
         decoder = json.JSONDecoder()
-        try:
-            obj, _ = decoder.raw_decode(clean)
-            return obj
-        except json.JSONDecodeError:
-            # Fallback: szukaj największego JSON w tekście
-            for match in re.finditer(r"[{\[]", clean):
-                start = match.start()
-                try:
-                    obj, end = decoder.raw_decode(clean[start:])
-                    if obj is not None:
-                        return obj
-                except json.JSONDecodeError:
-                    continue
-            raise
+        # Szukaj pierwszego '[' — powinniśmy dostać tablicę
+        for match in re.finditer(r"\[", clean):
+            start = match.start()
+            try:
+                obj, _ = decoder.raw_decode(clean[start:])
+                if isinstance(obj, list) and len(obj) > 0:
+                    return obj
+            except json.JSONDecodeError:
+                continue
+        # Może AI zwróciło pojedynczy obiekt zamiast tablicy
+        for match in re.finditer(r"\{", clean):
+            start = match.start()
+            try:
+                obj, _ = decoder.raw_decode(clean[start:])
+                if isinstance(obj, dict):
+                    return [obj]
+            except json.JSONDecodeError:
+                continue
+        raise json.JSONDecodeError("Brak tablicy JSON", clean, 0)
     except json.JSONDecodeError:
-        logger.error("[emocje] Nie można sparsować JSON: %s...", clean[:200])
+        logger.error("[emocje] Nie można sparsować JSON: %s...", clean[:300])
         return None
+
+
+def _generuj_jedna_metoda(body: str, sender_name: str, metoda_key: str, prompt_data: dict) -> dict | None:
+    """
+    Fallback: osobne wywołanie dla jednej metody (używane gdy zbiorcze się nie uda).
+    """
+    metody_def = prompt_data.get("metody_pocieszenia", [])
+    opis_metody = ""
+    for m in metody_def:
+        if m.get("id_key", m.get("id", "")) == metoda_key or m.get("nazwa", "").lower().replace(" ", "_") == metoda_key:
+            opis_metody = f"{m.get('nazwa', metoda_key)}: {m.get('opis', '')} (przykład: \"{m.get('przyklad', '')}\")"
+            break
+    if not opis_metody:
+        opis_metody = metoda_key.replace("_", " ")
+
+    system_msg = prompt_data.get("system", "Odpowiadaj WYŁĄCZNIE w JSON.")
+    user_msg = (
+        f"Przeczytaj wiadomość i wygeneruj pocieszenie METODĄ: {opis_metody}\n\n"
+        f"### WIADOMOŚĆ:\n{body[:4000]}\n\n"
+        f"### IMIĘ:\n{sender_name or 'nieznane'}\n\n"
+        f"### FORMAT JSON:\n"
+        f'{{"metoda": "{metoda_key}", "pocieszenie": "<p>...</p><p>...</p>", '
+        f'"nastroj": "smutek|lęk|frustracja|ból|neutralna|złość|samotność", "intensywnosc": 0}}'
+    )
+
+    zasady = prompt_data.get("zasady_odpowiedzi", [])
+    if zasady:
+        user_msg += "\n### ZASADY:\n" + "\n".join(f"- {z}" for z in zasady)
+
+    raw = call_deepseek(system_msg, user_msg, MODEL_TYLER)
+    if not raw:
+        return None
+
+    clean = extract_clean_text(raw) if callable(extract_clean_text) else raw
+    clean = re.sub(r"```json\s*", "", clean).replace("```", "").strip()
+    if clean.count("{") > clean.count("}"):
+        clean += "}"
+
+    try:
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", clean):
+            try:
+                obj, _ = decoder.raw_decode(clean[match.start():])
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                continue
+    except Exception:
+        pass
+    return None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _html_to_zip(html_content: str, inner_filename: str) -> str:
-    """Pakuje HTML do ZIP i zwraca base64. Gmail nie blokuje .zip."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr(inner_filename, html_content.encode("utf-8"))
-    return base64.b64encode(buf.getvalue()).decode("ascii")
 
-
-def _safe_label(text: str) -> str:
-    return re.sub(r'[\\/*?:"<>|,. ]', "_", text)[:40]
 
 
 def _wyciagnij_imie(sender_name: str, sender_email: str = "") -> str:
-    """
-    Zwraca imię do wyświetlenia.
-    Jeśli sender_name jest pusty lub wygląda jak adres email — wyciąga
-    lokalną część emaila i kapitalizuje ją jako imię.
-    """
     name = (sender_name or "").strip()
-
-    # Jeśli sender_name jest adresem email lub pustym — użyj emaila
     if not name or "@" in name:
         if sender_email:
             local = sender_email.split("@")[0]
-            # Wyczyść cyfry i znaki specjalne, zostaw pierwsze słowo
             local = re.sub(r"[._+\-]", " ", local).strip()
-            local = re.split(r"\s+", local)[0]  # tylko pierwsze słowo (imię)
-            local = re.sub(r"\d+", "", local).strip()  # usuń cyfry
+            local = re.split(r"\s+", local)[0]
+            local = re.sub(r"\d+", "", local).strip()
             if local:
                 return local.capitalize()
-        return ""  # brak imienia — powitanie zostanie pominięte
-
+        return ""
     return name
 
 
 def _nastroj_do_koloru(nastroj: str) -> dict:
-    """Mapuje nastrój na paletę kolorów."""
     palety = {
         "smutek":     {"bg": "#eeedfe", "border": "#afa9ec", "ink": "#534ab7", "accent": "#534ab7"},
         "ból":        {"bg": "#eeedfe", "border": "#afa9ec", "ink": "#534ab7", "accent": "#534ab7"},
@@ -208,256 +251,82 @@ def _nastroj_do_koloru(nastroj: str) -> dict:
 
 
 def _metoda_do_tagu(metoda: str) -> str:
-    """Zwraca czytelną nazwę metody po polsku."""
     mapy = {
-        "walidacja_emocji":      "metoda 01 · walidacja emocji",
-        "obecnosc":              "metoda 02 · obecność",
-        "normalizacja":          "metoda 03 · normalizacja",
-        "odzwierciedlenie":      "metoda 04 · odzwierciedlenie",
-        "przestrzen_na_cisze":   "metoda 05 · przestrzeń na ciszę",
-        "docenienie_odwagi":     "metoda 06 · docenienie odwagi",
+        "walidacja_emocji":        "metoda 01 · walidacja emocji",
+        "obecnosc":                "metoda 02 · obecność",
+        "normalizacja":            "metoda 03 · normalizacja",
+        "odzwierciedlenie":        "metoda 04 · odzwierciedlenie",
+        "przestrzen_na_cisze":     "metoda 05 · przestrzeń na ciszę",
+        "docenienie_odwagi":       "metoda 06 · docenienie odwagi",
         "bez_srebrnych_podszewek": "metoda 07 · bez srebrnych podszewek",
-        "cieplo_przez_konkret":  "metoda 08 · ciepło przez konkret",
+        "cieplo_przez_konkret":    "metoda 08 · ciepło przez konkret",
     }
     return mapy.get(metoda, f"metoda · {metoda.replace('_', ' ')}")
 
 
-# ── Generowanie SVG ───────────────────────────────────────────────────────────
+# ── Budowanie HTML bloku jednej metody ────────────────────────────────────────
 
 
-def _buduj_svg(pocieszenie_html: str, metoda: str, nastroj: str, sender_name: str) -> str:
-    """Generuje interaktywny SVG-diagram pocieszenia."""
-    kolory = _nastroj_do_koloru(nastroj)
-    tag = _metoda_do_tagu(metoda)
-
-    # Wyciągnij czysty tekst z HTML odpowiedzi
-    czysty = re.sub(r"<[^>]+>", " ", pocieszenie_html)
-    czysty = re.sub(r"\s+", " ", czysty).strip()
-    # Przytnij do 200 znaków dla podglądu w SVG
-    podglad = czysty[:200] + ("…" if len(czysty) > 200 else "")
-    # Escapuj do XML
-    podglad_xml = (
-        podglad
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
-    imie = (sender_name or "Nadawca").replace("&", "&amp;")
-
-    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 520" width="360" height="520">
-  <defs>
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&amp;family=Fraunces:ital,wght@0,300;0,600;1,300;1,600&amp;display=swap');
-      .mono {{ font-family: 'DM Mono', monospace; }}
-      .serif {{ font-family: 'Fraunces', serif; }}
-    </style>
-  </defs>
-
-  <!-- tło -->
-  <rect width="360" height="520" fill="#fdf8f3" rx="16"/>
-
-  <!-- header -->
-  <rect x="12" y="12" width="336" height="72" fill="{kolory['bg']}" rx="14" stroke="{kolory['border']}" stroke-width="1.5"/>
-  <text x="180" y="38" text-anchor="middle" font-family="Fraunces, serif" font-size="15" font-weight="600" fill="{kolory['ink']}">Pocieszenie dla {imie}</text>
-  <text x="180" y="56" text-anchor="middle" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.65">{tag}</text>
-  <text x="180" y="74" text-anchor="middle" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.5">nastrój: {nastroj}</text>
-
-  <!-- strzałka -->
-  <line x1="180" y1="84" x2="180" y2="104" stroke="#d3cfc8" stroke-width="1"/>
-  <polygon points="175,104 185,104 180,112" fill="#d3cfc8"/>
-
-  <!-- metoda card -->
-  <rect x="12" y="114" width="336" height="52" fill="{kolory['bg']}" rx="10" stroke="{kolory['border']}" stroke-width="1.5"/>
-  <text x="24" y="134" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.6" font-weight="500">{tag.upper()}</text>
-  <text x="24" y="152" font-family="Fraunces, serif" font-size="13" font-weight="600" fill="{kolory['ink']}">DeepSeek — jedno wywołanie AI</text>
-
-  <!-- strzałka -->
-  <line x1="180" y1="166" x2="180" y2="186" stroke="#d3cfc8" stroke-width="1"/>
-  <polygon points="175,186 185,186 180,194" fill="#d3cfc8"/>
-
-  <!-- odpowiedź box -->
-  <rect x="12" y="196" width="336" height="260" fill="#ffffff" rx="12" stroke="#d3cfc8" stroke-width="1"/>
-  <text x="24" y="218" font-family="DM Mono, monospace" font-size="9" fill="#8a7a6a" opacity="0.7">ODPOWIEDŹ POCIESZENIA</text>
-  <foreignObject x="20" y="224" width="320" height="224">
-    <body xmlns="http://www.w3.org/1999/xhtml" style="font-family:DM Mono,monospace;font-size:10px;color:#2a1f14;line-height:1.6;word-wrap:break-word;margin:0;padding:0;">
-      {podglad_xml}
-    </body>
-  </foreignObject>
-
-  <!-- strzałka -->
-  <line x1="180" y1="456" x2="180" y2="472" stroke="#d3cfc8" stroke-width="1"/>
-  <polygon points="175,472 185,472 180,480" fill="#d3cfc8"/>
-
-  <!-- footer -->
-  <rect x="12" y="482" width="336" height="26" fill="{kolory['bg']}" rx="8" stroke="{kolory['border']}" stroke-width="1"/>
-  <text x="180" y="499" text-anchor="middle" font-family="DM Mono, monospace" font-size="9" fill="{kolory['ink']}" opacity="0.7">return · reply_html · pocieszenie gotowe</text>
-</svg>"""
-    return svg
-
-
-# ── Generowanie JPG (przez PNG z matplotlib) ──────────────────────────────────
-
-
-def _buduj_jpg_b64(nastroj: str, metoda: str, sender_name: str) -> str | None:
-    """Generuje prostą miniaturę JPG jako base64."""
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
-        import numpy as np
-
-        kolory = _nastroj_do_koloru(nastroj)
-        bg_hex = kolory["bg"]
-        ink_hex = kolory["ink"]
-        tag = _metoda_do_tagu(metoda)
-
-        fig, ax = plt.subplots(figsize=(4, 2.8))
-        fig.patch.set_facecolor(bg_hex)
-        ax.set_facecolor(bg_hex)
-        ax.axis("off")
-
-        ax.text(
-            0.5, 0.78,
-            f"Pocieszenie · {sender_name or 'Nadawca'}",
-            ha="center", va="center",
-            fontsize=9, fontweight="bold",
-            color=ink_hex,
-            transform=ax.transAxes,
-        )
-        ax.text(
-            0.5, 0.52,
-            tag,
-            ha="center", va="center",
-            fontsize=7.5,
-            color=ink_hex,
-            alpha=0.7,
-            transform=ax.transAxes,
-        )
-        ax.text(
-            0.5, 0.28,
-            f"nastrój: {nastroj}",
-            ha="center", va="center",
-            fontsize=7,
-            color=ink_hex,
-            alpha=0.5,
-            transform=ax.transAxes,
-        )
-
-        rect = mpatches.FancyBboxPatch(
-            (0.04, 0.04), 0.92, 0.92,
-            boxstyle="round,pad=0.02",
-            linewidth=1.2,
-            edgecolor=kolory["border"],
-            facecolor="none",
-            transform=ax.transAxes,
-        )
-        ax.add_patch(rect)
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format="jpeg", dpi=90, bbox_inches="tight", facecolor=bg_hex)
-        buf.seek(0)
-        result = base64.b64encode(buf.read()).decode("ascii")
-        buf.close()
-        plt.close(fig)
-        plt.close("all")
-        gc.collect()
-        return result
-    except Exception as e:
-        logger.warning("[emocje] Błąd generowania JPG: %s", e)
-        return None
-
-
-# ── Budowanie HTML maila ───────────────────────────────────────────────────────
-
-
-def _buduj_html_email(
+def _buduj_html_blok_metody(
     pocieszenie_html: str,
     sender_name: str,
     metoda: str,
     nastroj: str,
-    jpg_b64: str | None,
 ) -> str:
-    """Buduje reply_html z ciepłym layoutem."""
+    """
+    Zwraca HTML dla JEDNEJ metody.
+    Nagłówek: tylko jedna linia tekstu w kolorze atramentu — bez h1, bez dużych tytułów.
+    Minimalny footprint w body.
+    """
     kolory = _nastroj_do_koloru(nastroj)
     tag = _metoda_do_tagu(metoda)
     imie = sender_name or ""
-
     powitanie = f"<p>Drogi/a {imie},</p>" if imie else ""
 
-    img_tag = ""
-    if jpg_b64:
-        img_tag = (
-            f'<div style="margin:16px 0;text-align:center;">'
-            f'<img src="data:image/jpeg;base64,{jpg_b64}" '
-            f'style="border-radius:12px;max-width:280px;border:1px solid {kolory["border"]};" '
-            f'alt="Diagram pocieszenia"/>'
-            f'</div>'
-        )
-
-    html = f"""<div style="font-family:'DM Mono',monospace;color:#2a1f14;max-width:560px;margin:0 auto;padding:20px 14px;">
-  <div style="background:{kolory['bg']};border:1.5px solid {kolory['border']};border-radius:16px;padding:18px 20px;text-align:center;margin-bottom:20px;">
-    <h1 style="font-family:Fraunces,serif;font-size:18px;font-weight:600;color:{kolory['ink']};margin:0 0 6px 0;">Jestem tutaj</h1>
-    <p style="font-size:10px;color:{kolory['ink']};opacity:0.65;margin:0;">{tag}</p>
-  </div>
-
-  {img_tag}
-
-  <div style="line-height:1.75;font-size:13px;color:#2a1f14;">
+    return f"""<div style="border-left:3px solid {kolory['border']};padding:10px 14px 10px 14px;margin-bottom:18px;background:{kolory['bg']};border-radius:0 10px 10px 0;">
+  <p style="font-family:'DM Mono',monospace;font-size:10px;color:{kolory['ink']};margin:0 0 8px 0;letter-spacing:0.04em;">{tag}</p>
+  <div style="font-family:'DM Mono',monospace;font-size:13px;color:#2a1f14;line-height:1.75;">
     {powitanie}
     {pocieszenie_html}
   </div>
-
-  <div style="margin-top:24px;padding-top:14px;border-top:1px solid #d3cfc8;font-size:10px;color:#8a7a6a;text-align:center;">
-    <em>nastrój: {nastroj}</em>
-  </div>
 </div>"""
-    return html
 
 
-# ── Budowanie pełnego HTML pliku ───────────────────────────────────────────────
-
-
-def _buduj_pelny_html(
-    pocieszenie_html: str,
+def _buduj_html_email_multi(
+    metody_results: list[dict],
     sender_name: str,
-    metoda: str,
-    nastroj: str,
+    nastroj_dominujacy: str,
 ) -> str:
-    """Buduje pełny samodzielny plik HTML do podglądu."""
-    kolory = _nastroj_do_koloru(nastroj)
-    tag = _metoda_do_tagu(metoda)
+    """
+    Składa cały reply_html ze wszystkich metod jako lista bloków.
+    """
+    kolory = _nastroj_do_koloru(nastroj_dominujacy)
     imie = sender_name or "Nadawca"
 
-    return f"""<!DOCTYPE html>
-<html lang="pl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pocieszenie · {imie}</title>
-<style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,wght@0,300;0,600;1,300;1,600&display=swap');
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#fdf8f3;font-family:'DM Mono',monospace;color:#2a1f14;padding:24px 16px 60px;}}
-.header{{background:{kolory['bg']};border:1.5px solid {kolory['border']};border-radius:16px;padding:20px;text-align:center;margin-bottom:20px;}}
-.header h1{{font-family:Fraunces,serif;font-size:20px;font-weight:600;color:{kolory['ink']};}}
-.header p{{font-size:10px;color:{kolory['ink']};opacity:0.65;margin-top:6px;}}
-.body{{background:#fff;border:1px solid #d3cfc8;border-radius:14px;padding:22px 20px;line-height:1.8;font-size:13px;}}
-.footer{{margin-top:20px;text-align:center;font-size:10px;color:#8a7a6a;}}
-</style>
-</head>
-<body>
-<div class="header">
-  <h1>Jestem tutaj · {imie}</h1>
-  <p>{tag} · nastrój: {nastroj}</p>
-</div>
-<div class="body">
-  {pocieszenie_html}
-</div>
-<div class="footer">Wygenerowano przez DeepSeek AI — system pocieszenia empatycznego.</div>
-</body>
-</html>"""
+    bloki = []
+    for r in metody_results:
+        blok = _buduj_html_blok_metody(
+            r.get("pocieszenie", "<p>Jestem tutaj.</p>"),
+            sender_name,
+            r.get("metoda", "obecnosc"),
+            r.get("nastroj", nastroj_dominujacy),
+        )
+        bloki.append(blok)
+
+    bloki_html = "\n".join(bloki)
+
+    return f"""<div style="font-family:'DM Mono',monospace;color:#2a1f14;max-width:560px;margin:0 auto;padding:16px 14px;">
+  <p style="font-size:10px;color:{kolory['ink']};margin:0 0 16px 0;opacity:0.7;letter-spacing:0.05em;">
+    pocieszenie dla {imie} · {len(metody_results)} metod
+  </p>
+  {bloki_html}
+  <div style="margin-top:16px;padding-top:10px;border-top:1px solid #d3cfc8;font-size:10px;color:#8a7a6a;text-align:center;">
+    <em>nastrój: {nastroj_dominujacy}</em>
+  </div>
+</div>"""
+
+
+
 
 
 # ── Główna funkcja responderu ─────────────────────────────────────────────────
@@ -471,133 +340,85 @@ def build_emocje_section(
     test_mode: bool = False,
 ) -> dict:
     """
-    Emocje responder — empatyczny pocieszyciel.
+    Emocje responder — generuje odpowiedzi WSZYSTKIMI 8 metodami.
+
+    Strategia AI:
+      - 1 zapytanie zbiorcze → lista 8 dict-ów
+      - jeśli parsowanie tablicy nie wyjdzie → 8 osobnych zapytań (fallback)
 
     Zwraca dict z:
-      reply_html  – HTML gotowy do wysłania jako mail
-      images      – lista (pusta — brak wykresów)
-      docs        – lista HTM/SVG jako załączniki
+      reply_html  – HTML z blokami wszystkich 8 metod
+      images      – []
+      docs        – ZIP z pełnym HTML i SVG pierwszej metody
     """
     prompt_data = _load_prompt()
-    docs = []
-
-    # ── Walidacja wejścia ─────────────────────────────────────────────────────
-
     mail_text = (body or "").strip()
     if not mail_text:
         fallback = prompt_data.get(
             "fallback_pocieszenie",
             "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>",
         )
-        return {
-            "reply_html": fallback,
-            "images": [],
-            "docs": [],
-        }
+        return {"reply_html": fallback, "images": [], "docs": []}
 
-    # ── Wyciągnij imię — z sender_name lub z adresu email ────────────────────
     imie = _wyciagnij_imie(sender_name, sender_email)
 
-    sl = _safe_label(imie or sender_email or "mail")
+    # ── Strategia: jedno zbiorcze zapytanie ──────────────────────────────────
 
-    # ── Wywołanie AI ──────────────────────────────────────────────────────────
+    metody_results = _generuj_wszystkie_metody(mail_text, imie, prompt_data)
 
-    result = _generuj_pocieszenie(mail_text, imie, prompt_data)
+    # ── Fallback: 8 osobnych zapytań jeśli nie dostaliśmy tablicy ────────────
 
-    if not result:
-        logger.warning("[emocje] AI nie zwróciło wyniku — używam fallbacku")
-        fallback = prompt_data.get(
-            "fallback_pocieszenie",
-            "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>",
-        )
-        # Jeśli fallback z JSON nie ma tagów HTML, owijamy w <p>
-        if fallback and "<p>" not in fallback and "<div>" not in fallback:
-            fallback = "".join(
-                f"<p>{s.strip()}</p>" for s in fallback.split("\n") if s.strip()
-            ) or f"<p>{fallback}</p>"
-        reply_html_fallback = _buduj_html_email(
-            fallback, imie, "obecnosc", "neutralna", None
-        )
-        return {
-            "reply_html": reply_html_fallback,
-            "images": [],
-            "docs": [],
-        }
+    if not metody_results:
+        logger.warning("[emocje] Zbiorcze zapytanie nie zadziałało — fallback: 8 osobnych")
+        metody_results = []
+        for metoda_key in ALL_METODY:
+            r = _generuj_jedna_metoda(mail_text, imie, metoda_key, prompt_data)
+            if r:
+                metody_results.append(r)
+            else:
+                # Absolutny fallback dla tej metody
+                metody_results.append({
+                    "metoda": metoda_key,
+                    "pocieszenie": prompt_data.get(
+                        "fallback_pocieszenie",
+                        "<p>Jestem tutaj z Tobą.</p>"
+                    ),
+                    "nastroj": "neutralna",
+                    "intensywnosc": 5,
+                })
 
-    pocieszenie_html = result.get(
-        "pocieszenie",
-        prompt_data.get("fallback_pocieszenie", "<p>Jestem tutaj.</p>"),
-    )
-    metoda = result.get("metoda", "obecnosc")
-    nastroj = result.get("nastroj", "neutralna")
-
-    # ── Miniatura JPG ─────────────────────────────────────────────────────────
-
-    jpg_b64 = _buduj_jpg_b64(nastroj, metoda, imie)
-
-    # ── reply_html ────────────────────────────────────────────────────────────
-
-    reply_html = _buduj_html_email(pocieszenie_html, imie, metoda, nastroj, jpg_b64)
-
-    # ── Załączniki ────────────────────────────────────────────────────────────
-
-    # 1. SVG diagram → ZIP (Gmail blokuje .htm/.html)
-    try:
-        svg_content = _buduj_svg(pocieszenie_html, metoda, nastroj, imie)
-        svg_htm = f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<title>Diagram pocieszenia</title>
-</head><body style="margin:0;background:#fdf8f3;display:flex;justify-content:center;padding:20px;">
-{svg_content}
-</body></html>"""
-        docs.append({
-            "base64": _html_to_zip(svg_htm, f"diagram_{sl}.html"),
-            "filename": f"diagram_{sl}.zip",
-            "content_type": "application/zip",
-        })
-    except Exception as e:
-        logger.warning("[emocje] Błąd SVG: %s", e)
-
-    # 2. Miniatura JPG (Gmail przepuszcza .jpg bez problemu)
-    if jpg_b64:
-        try:
-            docs.append({
-                "base64": jpg_b64,
-                "filename": f"mapa_{sl}.jpg",
-                "content_type": "image/jpeg",
+    # Upewnij się że mamy wszystkie 8 — uzupełnij brakujące fallbackiem
+    metody_keys_got = {r.get("metoda") for r in metody_results}
+    for metoda_key in ALL_METODY:
+        if metoda_key not in metody_keys_got:
+            metody_results.append({
+                "metoda": metoda_key,
+                "pocieszenie": prompt_data.get("fallback_pocieszenie", "<p>Jestem tutaj.</p>"),
+                "nastroj": "neutralna",
+                "intensywnosc": 5,
             })
-        except Exception as e:
-            logger.warning("[emocje] Błąd JPG doc: %s", e)
 
-    # 3. Pełny HTML → ZIP (Gmail blokuje .htm/.html)
-    try:
-        pelny = _buduj_pelny_html(pocieszenie_html, imie, metoda, nastroj)
-        docs.append({
-            "base64": _html_to_zip(pelny, f"pelna_{sl}.html"),
-            "filename": f"pelna_{sl}.zip",
-            "content_type": "application/zip",
-        })
-    except Exception as e:
-        logger.warning("[emocje] Błąd pełnego HTML: %s", e)
+    # Sortuj wg kolejności z ALL_METODY
+    order = {k: i for i, k in enumerate(ALL_METODY)}
+    metody_results.sort(key=lambda r: order.get(r.get("metoda", ""), 99))
 
-    # ── Cleanup ───────────────────────────────────────────────────────────────
+    # Dominujący nastrój — bierzemy z pierwszego wyniku
+    nastroj_dominujacy = metody_results[0].get("nastroj", "neutralna")
 
-    try:
-        import matplotlib.pyplot as plt
-        plt.close("all")
-    except Exception:
-        pass
-    gc.collect()
+    # ── reply_html — wszystkie metody ────────────────────────────────────────
+
+    reply_html = _buduj_html_email_multi(metody_results, imie, nastroj_dominujacy)
+
+
 
     logger.info(
-        "[emocje] metoda=%s | nastrój=%s | załączników=%d",
-        metoda,
-        nastroj,
-        len(docs),
+        "[emocje] metod=%d | nastrój=%s",
+        len(metody_results),
+        nastroj_dominujacy,
     )
 
     return {
         "reply_html": reply_html,
         "images": [],
-        "docs": docs,
+        "docs": [],
     }
