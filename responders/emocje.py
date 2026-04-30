@@ -507,8 +507,16 @@ def build_emocje_section(
             "fallback_pocieszenie",
             "<p>Dostałem/am Twoją wiadomość i jestem tutaj.</p>",
         )
+        # Zabezpieczenie: jeśli fallback z JSON nie ma tagów <p>, owijamy w nie
+        if fallback and "<p>" not in fallback and "<div>" not in fallback:
+            fallback = "".join(
+                f"<p>{s.strip()}</p>" for s in fallback.split("\n") if s.strip()
+            ) or f"<p>{fallback}</p>"
+        reply_html_fallback = _buduj_html_email(
+            fallback, imie, "obecnosc", "neutralna", None
+        )
         return {
-            "reply_html": fallback,
+            "reply_html": reply_html_fallback,
             "images": [],
             "docs": [],
         }

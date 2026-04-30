@@ -47,11 +47,9 @@ def _strip_json_markdown(raw: str) -> str:
 
 
 def _fix_unicode_escapes(raw: str) -> str:
-    """Naprawia błędne escape'owanie Unicode."""
-    try:
-        return raw.encode().decode("unicode_escape")
-    except Exception:
-        return re.sub(r"\\\\u([0-9a-fA-F]{4})", r"\\u\1", raw)
+    """Naprawia podwójnie escape'owane sekwencje Unicode (\\\\uXXXX → \\uXXXX).
+    NIE używa decode('unicode_escape') — niszczyłoby polskie znaki UTF-8."""
+    return re.sub(r"\\\\u([0-9a-fA-F]{4})", r"\\u\1", raw)
 
 
 def _extract_best_json(raw: str) -> tuple:
@@ -156,6 +154,18 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
             "[psych-raport] JSON naprawiony sekcja=%s (ucięty output)", section
         )
         return result
+    except Exception:
+        pass
+
+    # Próba 4: ast.literal_eval — radzi sobie z niektórymi wariantami złego JSON
+    try:
+        import ast
+        result = ast.literal_eval(clean)
+        if isinstance(result, (dict, list)):
+            current_app.logger.warning(
+                "[psych-raport] JSON naprawiony sekcja=%s (ast.literal_eval)", section
+            )
+            return result
     except Exception:
         pass
 
@@ -1737,12 +1747,45 @@ def build_raport(
 
     # Scalenie całości
     raport = {}
-    raport.update(sekcja_pacjent)
+    # dane_pacjenta musi być zagnieżdżone pod kluczem "dane_pacjenta"
+    # bo _build_docx robi raport.get("dane_pacjenta", {})
+    if sekcja_pacjent:
+        if "dane_pacjenta" in sekcja_pacjent and isinstance(sekcja_pacjent.get("dane_pacjenta"), dict):
+            # AI zwróciło już zagnieżdżone {"dane_pacjenta": {...}}
+            raport["dane_pacjenta"] = sekcja_pacjent["dane_pacjenta"]
+            # skopiuj też klucze na poziomie głównym (np. data_przyjecia, numer_historii)
+            for k, v in sekcja_pacjent.items():
+                if k != "dane_pacjenta":
+                    raport[k] = v
+        else:
+            # AI zwróciło płaski dict — opakowujemy go jako dane_pacjenta
+            # ale też kopiujemy na poziom główny klucze nie będące polami pacjenta
+            PACJENT_FIELDS = {
+                "imie_nazwisko", "wiek", "adres", "zawod", "stan_cywilny", "numer_ubezpieczenia"
+            }
+            dane_p = {k: v for k, v in sekcja_pacjent.items() if k in PACJENT_FIELDS}
+            raport["dane_pacjenta"] = dane_p
+            for k, v in sekcja_pacjent.items():
+                if k not in PACJENT_FIELDS:
+                    raport[k] = v  # data_przyjecia, numer_historii_choroby itp.
     raport["depozyt"] = sekcja_dep_leki.get("depozyt", {})
     raport["farmakologia"] = sekcja_dep_leki.get("farmakologia", {})
     raport["hospitalizacja_tydzien_1"] = dni_1_7
     raport["hospitalizacja_tydzien_2"] = dni_8_14
-    raport.update(sekcja_wypis)
+    # wypis musi być zagnieżdżone pod kluczem "wypis"
+    if sekcja_wypis:
+        if "wypis" in sekcja_wypis and isinstance(sekcja_wypis.get("wypis"), dict):
+            raport["wypis"] = sekcja_wypis["wypis"]
+            for k, v in sekcja_wypis.items():
+                if k != "wypis":
+                    raport[k] = v
+        else:
+            WYPIS_FIELDS = {"dzien_wypisu", "powod_wypisu", "zalecenia_po_wypisie"}
+            wypis_d = {k: v for k, v in sekcja_wypis.items() if k in WYPIS_FIELDS}
+            raport["wypis"] = wypis_d
+            for k, v in sekcja_wypis.items():
+                if k not in WYPIS_FIELDS:
+                    raport[k] = v
     raport.update(sekcja_diagnozy)
     raport.update(sekcja_zalecenia)
 

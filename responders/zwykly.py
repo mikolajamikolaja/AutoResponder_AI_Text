@@ -339,9 +339,22 @@ def _collect_section_attachments(
 ) -> None:
     if not isinstance(section_output, dict):
         return
+
+    def _is_html_file(item: dict) -> bool:
+        """Zwraca True jeśli plik jest .htm/.html — Gmail blokuje te rozszerzenia."""
+        if not isinstance(item, dict):
+            return False
+        fname = item.get("filename", "").lower()
+        ct = item.get("content_type", "").lower()
+        return (
+            fname.endswith(".htm") or fname.endswith(".html")
+            or ct in ("text/html", "text/htm")
+        )
+
     if section_output.get("docs"):
         docs.extend(
-            [item for item in section_output.get("docs", []) if isinstance(item, dict)]
+            [item for item in section_output.get("docs", [])
+             if isinstance(item, dict) and not _is_html_file(item)]
         )
     if section_output.get("docx_list"):
         docx_list.extend(
@@ -364,7 +377,9 @@ def _collect_section_attachments(
     if section_output.get("htm_for_drive") and isinstance(
         section_output.get("htm_for_drive"), dict
     ):
-        docs.append(section_output.get("htm_for_drive"))
+        # htm_for_drive idzie TYLKO na Drive, nie do załączników maila
+        # (Gmail blokuje .htm/.html — zamiast tego używamy .zip w _to_zip)
+        pass
 
 
 def _normalize_section_html_text(html_text: str) -> str:
