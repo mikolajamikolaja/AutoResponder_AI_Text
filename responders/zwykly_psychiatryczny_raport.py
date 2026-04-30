@@ -771,8 +771,17 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
         schema = swiadkowie_cfg.get("schema", {})
         instrukcje = swiadkowie_cfg.get("instrukcje", "")
 
-        # Kontekst z raportu
-        pacjent = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
+        # Kontekst z raportu — zabezpieczenie na wypadek gdyby raport nie był dict
+        if not isinstance(raport, dict):
+            current_app.logger.warning(
+                "[psych-raport] raport nie jest dict (type=%s) — używam pustego",
+                type(raport).__name__,
+            )
+            raport = {}
+        dane_pacjenta = raport.get("dane_pacjenta", {})
+        if not isinstance(dane_pacjenta, dict):
+            dane_pacjenta = {}
+        pacjent = dane_pacjenta.get("imie_nazwisko", "pacjent")
         diagnoza = raport.get("diagnoza_wstepna", {})
         if isinstance(diagnoza, dict):
             diagnoza_str = diagnoza.get("nazwa_lacinska", "") or diagnoza.get(

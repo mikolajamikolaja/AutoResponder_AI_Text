@@ -4610,6 +4610,15 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
 
     try:
         clean = _strip_json_markdown(raw)
+        # Naprawa: jeśli zaczyna się od przecinka, dodaj { na początku
+        if clean.startswith(","):
+            clean = "{" + clean
+        # Naprawa: jeśli brakuje końcowego }, dodaj go
+        if clean.count("{") > clean.count("}") and not clean.endswith("}"):
+            clean += "}"
+        if clean.count("[") > clean.count("]") and not clean.endswith("]"):
+            clean += "]"
+
         # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
         # (gdy AI zwróci JSON + dodatkowy tekst poza klamrami)
         decoder = json.JSONDecoder()

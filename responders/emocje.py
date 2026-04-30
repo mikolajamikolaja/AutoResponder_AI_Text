@@ -119,6 +119,15 @@ def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict
     clean = re.sub(r"```\s*", "", clean)
     clean = clean.strip()
 
+    # Naprawa: jeśli zaczyna się od przecinka, dodaj { na początku
+    if clean.startswith(","):
+        clean = "{" + clean
+    # Naprawa: jeśli brakuje końcowego }, dodaj go
+    if clean.count("{") > clean.count("}") and not clean.endswith("}"):
+        clean += "}"
+    if clean.count("[") > clean.count("]") and not clean.endswith("]"):
+        clean += "]"
+
     try:
         # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
         # (gdy AI zwróci JSON + dodatkowy tekst poza klamrami)
