@@ -1820,6 +1820,7 @@ function _checkUnprocessedMessages(webhookUrl) {
   var secret     = props.getProperty("WEBHOOK_SECRET");
   var adminEmail = props.getProperty("ADMIN_EMAIL");
 
+  var anySentToRender = false;  // v15: śledź czy faktycznie wysłaliśmy coś do Rendera
   for (var j = 0; j < oldest.length; j++) {
     var item = oldest[j];
 
@@ -2005,6 +2006,7 @@ function _checkUnprocessedMessages(webhookUrl) {
         // Render zaakceptował zadanie — czekamy aż sam zapisze WYSŁANO do Sheets.
         // Zwiększamy tylko licznik, żeby po MAX_RETRIES_PER_MSG próbach odblokować kolejkę.
         try { props.setProperty(retryCountKey, String(retryCount + 1)); } catch(e3) {}
+        anySentToRender = true;  // v15: faktycznie wysłaliśmy coś do Rendera
         console.log("[check] ✓ Retry zaakceptowany: " + item.sender +
                     " — Render wyśle mail i zapisze WYSŁANO (próba " + (retryCount + 1) + "/" + MAX_RETRIES_PER_MSG + ")");
       } else {
@@ -2032,7 +2034,10 @@ function _checkUnprocessedMessages(webhookUrl) {
 
     Utilities.sleep(500);
   }
-  return true;  // Render dostał zadanie — nie wysyłamy nowych emaili w tej rundzie
+  // v15: zwracamy true TYLKO jeśli faktycznie wysłaliśmy coś do Rendera
+  // Jeśli tylko oznaczono GAS_FALLBACK (limit retryków, banned sender, puste body)
+  // to nie blokujemy głównej pętli — może czekać nowa wiadomość
+  return anySentToRender;
 }
 
 function keepAlive() {

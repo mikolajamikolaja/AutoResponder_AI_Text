@@ -120,14 +120,24 @@ def _generuj_pocieszenie(body: str, sender_name: str, prompt_data: dict) -> dict
     clean = clean.strip()
 
     try:
-        return json.loads(clean)
+        # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
+        # (gdy AI zwróci JSON + dodatkowy tekst poza klamrami)
+        decoder = json.JSONDecoder()
+        try:
+            obj, _ = decoder.raw_decode(clean)
+            return obj
+        except json.JSONDecodeError:
+            # Fallback: szukaj największego JSON w tekście
+            for match in re.finditer(r"[{\[]", clean):
+                start = match.start()
+                try:
+                    obj, end = decoder.raw_decode(clean[start:])
+                    if obj is not None:
+                        return obj
+                except json.JSONDecodeError:
+                    continue
+            raise
     except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", clean, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except Exception:
-                pass
         logger.error("[emocje] Nie można sparsować JSON: %s...", clean[:200])
         return None
 

@@ -406,6 +406,52 @@ def _strip_json_markdown(raw: str) -> str:
     return clean
 
 
+def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
+    """Parsuje JSON z fallbackiem na _extract_first_json_object (naprawia 'Extra data')."""
+    if not raw or len(raw.strip()) < 2:
+        return None
+
+    clean = _strip_json_markdown(raw)
+    if not clean:
+        return None
+
+    # Próba 1: bezpośrednie parsowanie
+    try:
+        result = json.loads(clean)
+        return result
+    except json.JSONDecodeError:
+        pass
+
+    # Próba 2: ekstrakcja pierwszego obiektu JSON (naprawia "Extra data")
+    fragment = _extract_first_json_object(clean)
+    if fragment:
+        try:
+            result = json.loads(fragment)
+            logger.warning("[%s] JSON Extra data — użyto _extract_first_json_object", label)
+            return result
+        except json.JSONDecodeError:
+            pass
+
+    # Próba 3: naprawa uciętego JSON
+    repaired = clean.strip()
+    if repaired.startswith(","):
+        repaired = "{" + repaired.lstrip(",").strip()
+    if not repaired.endswith("}") and not repaired.endswith("]"):
+        if "{" in repaired:
+            repaired += "}"
+        elif "[" in repaired:
+            repaired += "]"
+    try:
+        result = json.loads(repaired)
+        logger.warning("[%s] JSON naprawiony (ucięty)", label)
+        return result
+    except Exception:
+        pass
+
+    logger.warning("[%s] JSON nienaprawialny (raw_len=%d)", label, len(raw))
+    return None
+
+
 def _load_prompt_json() -> dict:
     """
     Wczytuje prompt.json z katalogu prompts/.
@@ -678,16 +724,10 @@ def _parse_response(raw: str) -> tuple[str, str]:
     if not raw or not raw.strip():
         return "", ""
 
-    json_str = _strip_json_markdown(raw)
-    if not json_str.strip().startswith("{"):
+    data = _parse_json_safe(raw, "zwykly-parse")
+    if data is None:
+        logger.warning("[zwykly] JSON parse error, fallback to raw text")
         return raw.strip(), ""
-
-    try:
-        data = json.loads(json_str)
-    except Exception as e:
-        logger.warning("[zwykly] JSON parse error, fallback to raw text: %s", e)
-        return raw.strip(), ""
-
     if not isinstance(data, dict):
         return raw.strip(), ""
 
@@ -907,7 +947,23 @@ def _extract_nouns_deepseek(body: str) -> dict:
                 raw,
             )
             return {}
-        result = json.loads(clean)
+        # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
+        decoder = json.JSONDecoder()
+        result = None
+        try:
+            result, _ = decoder.raw_decode(clean)
+        except json.JSONDecodeError:
+            for match in re.finditer(r"[{\[]", clean):
+                start = match.start()
+                try:
+                    obj, end = decoder.raw_decode(clean[start:])
+                    if obj is not None:
+                        result = obj
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if result is None:
+            raise ValueError("Nie znaleziono JSON")
         if not isinstance(result, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(result).__name__}")
         nouns_dict = {
@@ -2025,16 +2081,34 @@ def _generate_triptych_prompts_batch(
 
     try:
         clean = _strip_json_markdown(raw)
+        # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
+        decoder = json.JSONDecoder()
+        parsed = None
+        try:
+            parsed, _ = decoder.raw_decode(clean)
+        except json.JSONDecodeError:
+            for match in re.finditer(r"[{\[]", clean):
+                start = match.start()
+                try:
+                    obj, end = decoder.raw_decode(clean[start:])
+                    if obj is not None:
+                        parsed = obj
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if parsed is None:
+            raise ValueError("Nie znaleziono JSON")
         # Obsłuż przypadek gdy model zwrócił tablicę bezpośrednio: ["p1","p2",...]
         # zamiast {"prompts": ["p1","p2",...]}
-        if clean.strip().startswith("["):
-            prompts = json.loads(clean)
+        if isinstance(parsed, list):
+            prompts = parsed
             logger.info(
                 "[tryptyk-batch] Model zwrócił tablicę bezpośrednio — akceptuję"
             )
+        elif isinstance(parsed, dict):
+            prompts = parsed.get("prompts", [])
         else:
-            data = json.loads(clean)
-            prompts = data.get("prompts", [])
+            raise ValueError(f"Nieoczekiwany typ: {type(parsed).__name__}")
         if isinstance(prompts, list) and len(prompts) >= 1:
             # Uzupełnij do 7 jeśli model zwrócił mniej
             while len(prompts) < 7:
@@ -2424,7 +2498,7 @@ def _build_debug_txt(
     }
 
 
-def _generate_icon_flux(body: str, emotion_key: str) -> str | None:
+def _generate_icon_flux(emotion_key: str, sender_name: str = "") -> str | None:
     """
     Zwraca emotkę PNG z katalogu EMOTKI_DIR — bez wywołania API/FLUX.
     HF tokeny są na czarnej liście — generowanie FLUX nie ma sensu.
@@ -2500,12 +2574,28 @@ def _generate_cv_content(
 
     try:
         clean = _strip_json_markdown(raw)
-        cv_data = json.loads(clean)
+        # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
+        decoder = json.JSONDecoder()
+        cv_data = None
+        try:
+            cv_data, _ = decoder.raw_decode(clean)
+        except json.JSONDecodeError:
+            for match in re.finditer(r"[{\[]", clean):
+                start = match.start()
+                try:
+                    obj, end = decoder.raw_decode(clean[start:])
+                    if obj is not None:
+                        cv_data = obj
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if cv_data is None:
+            raise ValueError("Nie znaleziono JSON")
         if not isinstance(cv_data, dict):
             raise ValueError(f"[cv] Oczekiwano dict, dostałem {type(cv_data).__name__}")
         logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
         return cv_data
-    except json.JSONDecodeError as e:
+    except Exception as e:
         logger.warning("[cv] Błąd JSON: %s | raw: %.200s", e, raw)
         return None
 
@@ -2966,18 +3056,9 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
     logger.info("[ankieta] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = _strip_json_markdown(raw)
-        # Próba naprawy uciętego JSON — obetnij do ostatniego kompletnego ]
-        try:
-            data = json.loads(clean)
-        except json.JSONDecodeError:
-            last_bracket = clean.rfind('"}')
-            if last_bracket > 0:
-                clean = clean[: last_bracket + 2] + "]}"  # zamknij pytania i root
-                logger.warning("[ankieta] JSON ucięty — próba naprawy")
-                data = json.loads(clean)
-            else:
-                raise
+        data = _parse_json_safe(raw, "ankieta")
+        if data is None:
+            raise ValueError("JSON nienaprawialny")
         if not isinstance(data, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
@@ -3298,8 +3379,9 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
     logger.info("[horoskop] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = _strip_json_markdown(raw)
-        data = json.loads(clean)
+        data = _parse_json_safe(raw, "horoskop")
+        if data is None:
+            raise ValueError("[horoskop] JSON nienaprawialny")
         if not isinstance(data, dict):
             raise ValueError(
                 f"[horoskop] Oczekiwano dict, dostałem {type(data).__name__}"
@@ -3534,8 +3616,9 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
     logger.info("[karta-rpg] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = _strip_json_markdown(raw)
-        data = json.loads(clean)
+        data = _parse_json_safe(raw, "karta-rpg")
+        if data is None:
+            raise ValueError("[karta-rpg] JSON nienaprawialny")
         if isinstance(data, list) and len(data) > 0:
             logger.warning("[karta-rpg] Model zwrócił listę — biorę pierwszy element")
             data = data[0]
@@ -3934,8 +4017,9 @@ def _build_raport_psychiatryczny(
     logger.info("[raport] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = _strip_json_markdown(raw)
-        data = json.loads(clean)
+        data = _parse_json_safe(raw, "raport")
+        if data is None:
+            raise ValueError("[raport] JSON nienaprawialny")
         if not isinstance(data, dict):
             raise ValueError(
                 f"[raport] Oczekiwano dict, dostałem {type(data).__name__}"
@@ -4215,8 +4299,9 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
     logger.info("[plakat] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        clean = _strip_json_markdown(raw)
-        data = json.loads(clean)
+        data = _parse_json_safe(raw, "plakat")
+        if data is None:
+            raise ValueError("[plakat] JSON nienaprawialny")
         if not isinstance(data, dict):
             raise ValueError(
                 f"[plakat] Oczekiwano dict, dostałem {type(data).__name__}"
@@ -4523,7 +4608,25 @@ def _build_gra_html(body: str, res_text: str) -> dict | None:
 
     try:
         clean = _strip_json_markdown(raw)
-        data = json.loads(clean)
+        # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
+        # (gdy AI zwróci JSON + dodatkowy tekst poza klamrami)
+        decoder = json.JSONDecoder()
+        data = None
+        try:
+            data, _ = decoder.raw_decode(clean)
+        except json.JSONDecodeError:
+            # Fallback: szukaj największego JSON w tekście
+            for match in re.finditer(r"[\[{]", clean):
+                start = match.start()
+                try:
+                    obj, end = decoder.raw_decode(clean[start:])
+                    if obj is not None:
+                        data = obj
+                        break
+                except json.JSONDecodeError:
+                    continue
+        if data is None:
+            raise ValueError(f"[gra] Nie znaleziono JSON w odpowiedzi")
         if not isinstance(data, dict):
             raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
@@ -4734,12 +4837,11 @@ def build_zwykly_section(
             "docs": [],
         }
 
-    clean = _strip_json_markdown(raw)
     res_text = ""
     emotion_key = ""
     pdf_category = ""
     try:
-        data = json.loads(clean)
+        data = _parse_json_safe(raw, "zwykly-build")
         if isinstance(data, dict):
             res_text = str(
                 data.get("odpowiedz_tekstowa")
@@ -4752,7 +4854,7 @@ def build_zwykly_section(
         else:
             logger.warning(
                 "[zwykly] Oczekiwano dict z AI, otrzymano %s",
-                type(data).__name__,
+                type(data).__name__ if data is not None else "None",
             )
             res_text = raw
     except Exception as e:

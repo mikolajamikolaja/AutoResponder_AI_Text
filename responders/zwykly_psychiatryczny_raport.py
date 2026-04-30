@@ -9,6 +9,7 @@ import re
 import json
 import base64
 import random
+import logging
 import requests
 import concurrent.futures
 from datetime import datetime, timedelta
@@ -54,11 +55,29 @@ def _fix_unicode_escapes(raw: str) -> str:
 
 
 def _extract_best_json(raw: str) -> tuple:
-    """Wyciąga największy obiekt JSON z tekstu."""
+    """Wyciąga pierwszy kompletny obiekt JSON z tekstu.
+
+    Używa json.JSONDecoder.raw_decode() który parsuje pierwszy obiekt JSON
+    i zwraca (obj, end_position). W przeciwieństwie do json.loads() NIE rzuca
+    "Extra data" — po prostu zwraca pierwszy obiekt, a resztę ignoruje.
+
+    Jeśli raw_decode zawiedzie (uszkodzony JSON), szuka największego
+    poprawnego fragmentu JSON w tekście.
+    """
     decoder = json.JSONDecoder()
     best_obj = None
     best_text = None
     best_len = 0
+
+    # Próba 1: raw_decode od początku — parsuje pierwszy obiekt JSON
+    # nawet jeśli po nim są dodatkowe dane ("Extra data")
+    try:
+        obj, end = decoder.raw_decode(raw)
+        return obj, raw[:end]
+    except json.JSONDecodeError:
+        pass  # Uszkodzony JSON — przejdź do szukania fragmentu
+
+    # Próba 2: szukaj największego obiektu JSON w tekście
     for match in re.finditer(r"[\[{]", raw):
         start = match.start()
         try:
@@ -212,9 +231,13 @@ def _load_cfg() -> dict:
 
 def _load_substitute_image() -> dict | None:
     """Ładuje obrazek zastępczy ze ścieżki."""
+    # Używamy logging.getLogger zamiast current_app.logger,
+    # bo ta funkcja może być wywołana z wątku (ThreadPoolExecutor)
+    # gdzie nie ma kontekstu aplikacji Flask.
+    log = logging.getLogger(__name__)
     full_path = SUBSTITUTE_IMAGE_PATH
     if not os.path.exists(full_path):
-        current_app.logger.error("[psych-raport] Brak zastepczy.jpg: %s", full_path)
+        log.error("[psych-raport] Brak zastepczy.jpg: %s", full_path)
         return None
     try:
         with open(full_path, "rb") as f:
@@ -225,7 +248,7 @@ def _load_substitute_image() -> dict | None:
             "filename": "zastepczy.jpg",
         }
     except Exception as e:
-        current_app.logger.error("[psych-raport] Błąd ładowania zastepczy.jpg: %s", e)
+        log.error("[psych-raport] Błąd ładowania zastepczy.jpg: %s", e)
         return None
 
 
@@ -855,6 +878,11 @@ def _generate_flux(
     test_mode: bool = False,
 ) -> str | None:
     """Generuje obrazek FLUX — zwraca base64 JPG lub None."""
+    # Używamy logging.getLogger zamiast current_app.logger,
+    # bo ta funkcja może być wywołana z wątku (ThreadPoolExecutor)
+    # gdzie nie ma kontekstu aplikacji Flask.
+    log = logging.getLogger(__name__)
+
     if test_mode:
         substitute = _load_substitute_image()
         if substitute:
@@ -863,11 +891,11 @@ def _generate_flux(
 
     tokens = get_active_tokens()
     if not tokens:
-        current_app.logger.error("[psych-flux] Brak tokenów HF dla %s", label)
+        log.error("[psych-flux] Brak tokenów HF dla %s", label)
         substitute = _load_substitute_image()
         return substitute.get("base64") if substitute else None
 
-    current_app.logger.info("[psych-flux] %s — prompt %.120s...", label, prompt)
+    log.info("[psych-flux] %s — prompt %.120s...", label, prompt)
 
     payload = {
         "inputs": prompt,
@@ -887,7 +915,7 @@ def _generate_flux(
                 HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT
             )
             if resp.status_code == 200:
-                current_app.logger.info(
+                log.info(
                     "[psych-flux] %s OK token=%s (%dB)", label, name, len(resp.content)
                 )
                 try:
@@ -898,43 +926,43 @@ def _generate_flux(
                     pil.save(buf, format="JPEG", quality=92, optimize=True)
                     return base64.b64encode(buf.getvalue()).decode("ascii")
                 except Exception as e:
-                    current_app.logger.warning("[psych-flux] PNG→JPG błąd: %s", e)
+                    log.warning("[psych-flux] PNG→JPG błąd: %s", e)
                     return base64.b64encode(resp.content).decode("ascii")
             elif resp.status_code == 402:
                 mark_dead(name)
-                current_app.logger.warning(
+                log.warning(
                     "[psych-flux] %s 402 token=%s — wyczerpane kredyty, dodano do czarnej listy",
                     label,
                     name,
                 )
                 if _hf_credit_exhausted(resp):
-                    current_app.logger.warning(
+                    log.warning(
                         "[psych-flux] %s 402 wskazuje na globalne wyczerpanie kredytów — kończę próby",
                         label,
                     )
                     break
             elif resp.status_code in (401, 403):
                 mark_dead(name)
-                current_app.logger.warning(
+                log.warning(
                     "[psych-flux] %s HTTP %d token=%s — nieważny, dodano do czarnej listy",
                     label,
                     resp.status_code,
                     name,
                 )
             elif resp.status_code == 429:
-                current_app.logger.warning(
+                log.warning(
                     "[psych-flux] %s 429 token=%s → następny", label, name
                 )
             else:
-                current_app.logger.warning(
+                log.warning(
                     "[psych-flux] %s HTTP %d token=%s", label, resp.status_code, name
                 )
         except Exception as e:
-            current_app.logger.warning(
+            log.warning(
                 "[psych-flux] %s wyjątek token=%s: %s", label, name, e
             )
 
-    current_app.logger.error(
+    log.error(
         "[psych-flux] %s — wszystkie tokeny zawiodły — używam zastepczy.jpg", label
     )
     return _substitute_or_none(label)
@@ -944,6 +972,10 @@ def _generate_photos_parallel(
     prompt_pacjent: str, prompt_przedmioty: str, test_mode: bool = False
 ) -> tuple:
     """Generuje oba zdjęcia równolegle — zwraca (photo_1_dict, photo_2_dict)."""
+    # Używamy logging.getLogger zamiast current_app.logger,
+    # bo ta funkcja może być wywołana z wątku (ThreadPoolExecutor)
+    # gdzie nie ma kontekstu aplikacji Flask.
+    log = logging.getLogger(__name__)
 
     def gen_pacjent():
         b64 = _generate_flux(prompt_pacjent, "photo_pacjent", test_mode=test_mode)
@@ -973,7 +1005,7 @@ def _generate_photos_parallel(
             p2 = fut2.result(timeout=300)
             return p1, p2
     except Exception as e:
-        current_app.logger.error("[psych-flux] Błąd równoległy: %s", e)
+        log.error("[psych-flux] Błąd równoległy: %s", e)
         return None, None
 
 
