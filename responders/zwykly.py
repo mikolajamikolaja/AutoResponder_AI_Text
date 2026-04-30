@@ -402,28 +402,48 @@ def _strip_leading_markdown(raw: str) -> str:
 
 
 def _strip_json_markdown(raw: str) -> str:
+    """
+    Czyści markdown wokół JSON-a.
+    WAŻNE: NIE usuwa prowadzącego przecinka — zachowujemy go żeby
+    _parse_json_safe wiedział, że to fragment tablicy/obiektu.
+    """
     if not raw:
         return ""
     raw = raw.strip()
-    raw = _strip_leading_markdown(raw)
+    # Usuń code fences (```json ... ```)
     raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"\s*```$", "", raw)
     raw = raw.strip()
 
-    fragment = _extract_first_json_object(raw)
-    if fragment:
-        return fragment
+    # Jeśli zaczyna się od '{' lub '[' — wyciągnij kompletny obiekt
+    if raw and raw[0] in ("{", "["):
+        fragment = _extract_first_json_object(raw)
+        if fragment:
+            return fragment
+        return raw
 
-    clean = re.sub(r"^[\s,]+", "", raw)
-    clean = clean.lstrip("`, \n\t")
+    # Jeśli zaczyna się od ',' — fragment tablicy/obiektu; zostawiamy bez zmian
+    if raw and raw[0] == ",":
+        return raw
+
+    # Szukaj pierwszego '{' lub '[' (po słowie "json", backtickach itp.)
+    match = re.search(r"[\{\[]", raw)
+    if match:
+        candidate = raw[match.start():]
+        fragment = _extract_first_json_object(candidate)
+        if fragment:
+            return fragment
+        return candidate
+
+    # Ostateczność — minimalne czyszczenie (bez usuwania przecinka)
+    clean = raw.lstrip("`, \n\t")
     if clean.lower().startswith("json"):
         clean = clean[4:].strip()
-    clean = re.sub(r"^[\s,]+", "", clean)
     return clean
 
 
 def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
-    """Parsuje JSON z fallbackiem na _extract_first_json_object (naprawia 'Extra data')."""
+    """Parsuje JSON z wielostopniowym fallbackiem — naprawia ucięte i niekompletne JSONy."""
     if not raw or len(raw.strip()) < 2:
         return None
 
@@ -433,12 +453,11 @@ def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
 
     # Próba 1: bezpośrednie parsowanie
     try:
-        result = json.loads(clean)
-        return result
+        return json.loads(clean)
     except json.JSONDecodeError:
         pass
 
-    # Próba 2: ekstrakcja pierwszego obiektu JSON (naprawia "Extra data")
+    # Próba 2: ekstrakcja pierwszego kompletnego obiektu (naprawia "Extra data")
     fragment = _extract_first_json_object(clean)
     if fragment:
         try:
@@ -450,21 +469,75 @@ def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
         except json.JSONDecodeError:
             pass
 
-    # Próba 3: naprawa uciętego JSON
+    # Próba 3: naprawa fragmentu zaczynającego się od ','
+    # AI zwraca środek tablicy/obiektu bez otwierającego nawiasu
     repaired = clean.strip()
     if repaired.startswith(","):
-        repaired = "{" + repaired.lstrip(",").strip()
-    if not repaired.endswith("}") and not repaired.endswith("]"):
-        if "{" in repaired:
-            repaired += "}"
-        elif "[" in repaired:
-            repaired += "]"
-    try:
-        result = json.loads(repaired)
-        logger.warning("[%s] JSON naprawiony (ucięty)", label)
+        inner = repaired.lstrip(",").strip()
+        if inner.startswith("{"):
+            # Fragment listy obiektów → owijamy w [...]
+            wrapped = "[" + inner
+            opens = wrapped.count("{") - wrapped.count("}")
+            if opens > 0:
+                wrapped += "}" * opens
+            if not wrapped.endswith("]"):
+                wrapped += "]"
+            try:
+                result = json.loads(wrapped)
+                logger.warning("[%s] JSON naprawiony (fragment tablicy → list)", label)
+                return result
+            except json.JSONDecodeError:
+                pass
+        elif inner.startswith('"'):
+            # Fragment klucz-wartość → owijamy w {...}
+            wrapped = "{" + inner
+            if not wrapped.endswith("}"):
+                wrapped += "}"
+            try:
+                result = json.loads(wrapped)
+                logger.warning("[%s] JSON naprawiony (fragment obiektu → dict)", label)
+                return result
+            except json.JSONDecodeError:
+                pass
+    else:
+        # Brak przecinka — próba uzupełnienia brakującego zamknięcia
+        if not repaired.endswith("}") and not repaired.endswith("]"):
+            if "{" in repaired:
+                repaired += "}"
+            elif "[" in repaired:
+                repaired += "]"
+        try:
+            result = json.loads(repaired)
+            logger.warning("[%s] JSON naprawiony (ucięty)", label)
+            return result
+        except Exception:
+            pass
+
+    # Próba 4: raw_decode — wyciąga wszystkie kompletne obiekty {} z fragmentu
+    # Pomija luźne stringi (tylko dict/list się kwalifikują)
+    decoder = json.JSONDecoder()
+    collected = []
+    scan_text = clean.lstrip(", \t\n")
+    pos = 0
+    while pos < len(scan_text):
+        if scan_text[pos] not in ("{", "["):
+            pos += 1
+            continue
+        try:
+            obj, end = decoder.raw_decode(scan_text, pos)
+            if isinstance(obj, (dict, list)):
+                collected.append(obj)
+            pos = end
+            while pos < len(scan_text) and scan_text[pos] in ", \t\n":
+                pos += 1
+        except json.JSONDecodeError:
+            pos += 1
+    if collected:
+        result = collected if len(collected) > 1 else collected[0]
+        logger.warning(
+            "[%s] JSON naprawiony (raw_decode: %d obiektów)", label, len(collected)
+        )
         return result
-    except Exception:
-        pass
 
     logger.warning("[%s] JSON nienaprawialny (raw_len=%d)", label, len(raw))
     return None
@@ -3065,7 +3138,7 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
     )
 
-    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=3000)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=4500)
 
     if not raw:
         logger.warning("[ankieta] Brak danych od AI")
@@ -3385,7 +3458,7 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. Klucz listy dni MUSI być 'dni'."
     )
 
-    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=3000)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=4000)
     if not raw:
         return None
 
@@ -3621,7 +3694,7 @@ def _build_karta_rpg(body: str, res_text: str) -> dict | None:
         f"Zwróć TYLKO czysty JSON. ZAKAZ angielskich kluczy (name/stats/age) — używaj nazwa_postaci/statystyki."
     )
 
-    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=2500)
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=3500)
     if not raw:
         logger.warning("[karta-rpg] Brak odpowiedzi od AI")
         return None
