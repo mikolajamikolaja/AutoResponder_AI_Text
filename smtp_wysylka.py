@@ -238,6 +238,13 @@ def wyslij_odpowiedz(
         try:
             raw = base64.b64decode(item["base64"])
             ctype = item.get("content_type", "application/octet-stream")
+            if not ctype or "/" not in ctype:
+                logger.warning(
+                    "[gmail] Nieprawidłowy content_type '%s' dla %s — używam application/octet-stream",
+                    ctype,
+                    item.get("filename", "?"),
+                )
+                ctype = "application/octet-stream"
             main_type, sub_type = ctype.split("/", 1)
             part = MIMEBase(main_type, sub_type)
             part.set_payload(raw)

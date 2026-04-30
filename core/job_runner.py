@@ -88,6 +88,8 @@ def _upload_drive_section_files(section_data: dict, folder_id: str) -> list:
         "emoticon",
         "cv_pdf",
         "log_psych",
+        "psych_photo_1",
+        "psych_photo_2",
         "ankieta_html",
         "ankieta_pdf",
         "horoskop_pdf",
@@ -228,7 +230,7 @@ def run_pipeline_async(
             else:
                 try:
                     _token_refresh(get_token_fn, flask_app, section_key)
-                    _send_section_email(
+                    sent = _send_section_email(
                         section_key=section_key,
                         result=result,
                         sender=sender,
@@ -239,7 +241,8 @@ def run_pipeline_async(
                         flask_app=flask_app,
                         logger=logger,
                     )
-                    emails_sent += 1
+                    if sent:
+                        emails_sent += 1
                 except Exception as e:
                     flask_app.logger.error(
                         "[async] Błąd wysyłki '%s': %s", section_key, e
@@ -282,10 +285,10 @@ def run_pipeline_async(
         if on_pipeline_done:
             on_pipeline_done("", emails_sent)
 
-            # ── Zwolnij pamięć natychmiast ──────────────────────────────────────
-            if result is not None:
-                del result
-            gc.collect()
+        # ── Zwolnij pamięć natychmiast ──────────────────────────────────────
+        if result is not None:
+            del result
+        gc.collect()
 
         # ── Historia nadawcy (raz na końcu) ─────────────────────────────────────
         if history_sheet_id and not skip_save_to_history:
