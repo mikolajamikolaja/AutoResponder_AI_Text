@@ -25,8 +25,8 @@ import os
 import re
 import io
 import json
-import random
 import base64
+import random
 import logging
 import requests
 from datetime import datetime
@@ -184,47 +184,82 @@ def _extract_first_json_object(text: str) -> str:
     Liczy nawiasy — bezpieczniejsze niż zachłanny regex (naprawia 'Extra data').
     Obsługuje zarówno dict jak i list na najwyższym poziomie.
     """
-    for opener, closer in [("{", "}"), ("[", "]")]:
-        start = text.find(opener)
-        if start == -1:
+    if not text:
+        return ""
+    start = None
+    stack = []
+    in_string = False
+    escape = False
+    quote_char = None
+
+    for idx, ch in enumerate(text):
+        if escape:
+            escape = False
             continue
-        depth = 0
-        in_string = False
-        escape = False
-        for i, ch in enumerate(text[start:], start):
-            if escape:
-                escape = False
-                continue
-            if ch == "\\" and in_string:
-                escape = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == opener:
-                depth += 1
-            elif ch == closer:
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-        # Nie zamknięto — zwróć od startu do końca jako fallback
-        return text[start:]
-    return text
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if in_string:
+            if ch == quote_char:
+                in_string = False
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            quote_char = ch
+            continue
+        if ch in ("{", "["):
+            start = idx
+            stack.append(ch)
+            break
+
+    if start is None:
+        return ""
+
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if in_string:
+            if ch == quote_char:
+                in_string = False
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            quote_char = ch
+            continue
+        if ch in ("{", "["):
+            stack.append(ch)
+        elif ch in ("}", "]") and stack:
+            top = stack[-1]
+            if (top == "{" and ch == "}") or (top == "[" and ch == "]"):
+                stack.pop()
+                if not stack:
+                    return text[start : idx + 1]
+
+    return text[start:]
 
 
 def _strip_json_markdown(raw: str) -> str:
     if not raw:
         return ""
-    # Szukamy wszystkiego między pierwszą a ostatnią klamrą/nawiasem
-    match = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
-    if match:
-        return match.group(1)
-    # Jeśli brak klamer, czyścimy z markdownu i białych znaków
-    clean = raw.strip().lstrip("`, \n\t")
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw)
+    raw = raw.strip()
+
+    fragment = _extract_first_json_object(raw)
+    if fragment:
+        return fragment
+
+    clean = re.sub(r"^[\s,]+", "", raw)
+    clean = clean.lstrip("`, \n\t")
     if clean.lower().startswith("json"):
         clean = clean[4:].strip()
+    clean = re.sub(r"^[\s,]+", "", clean)
     return clean
 
 
@@ -497,53 +532,25 @@ def _clean_manifest_labels(text: str) -> str:
 
 
 def _parse_response(raw: str) -> tuple[str, str]:
-    """
-    Parsuje odpowiedź modelu (oczekujemy JSON).
-    Zwraca (tekst_odpowiedzi, emotion_key).
-    """
-    if not raw:
-        return "", FALLBACK_EMOT
+    if not raw or not raw.strip():
+        return "", ""
 
     json_str = _strip_json_markdown(raw)
-
-    # Guard: jeśli po stripowaniu nie ma { — model zwrócił tekst zamiast JSON
     if not json_str.strip().startswith("{"):
-        logger.warning(
-            "[zwykly] Odpowiedź nie jest JSON (brak '{') — używam sanitize | raw=%.120s",
-            raw,
-        )
-        return sanitize_model_output(raw), FALLBACK_EMOT
+        return raw.strip(), ""
 
     try:
         data = json.loads(json_str)
-        if not isinstance(data, dict):
-            raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
-        tekst = _clean_manifest_labels(data.get("odpowiedz_tekstowa", "").strip())
-        emocja = data.get("emocja", "").strip().lower()
-
-        # Usuń ewentualne znaki | jeśli model zwrócił schemat zamiast wartości
-        if "|" in emocja:
-            emocja = emocja.split("|")[0].strip()
-
-        emotion_key = EMOCJA_MAP.get(emocja, FALLBACK_EMOT)
-
-        # Sprawdź czy odpowiedź zawiera sekcję Tylera — jeśli nie, JSON jest niekompletny
-        if tekst and "### TYLER DURDEN" not in tekst:
-            logger.warning(
-                "[zwykly] Brak sekcji TYLER DURDEN — odpowiedź niekompletna (%.80s)",
-                tekst,
-            )
-            tekst = ""  # wymusi fallback poniżej
-
-        if not tekst:
-            tekst = sanitize_model_output(raw)
-
-        logger.info("[zwykly] emocja=%s → plik=%s", emocja, emotion_key)
-        return tekst, emotion_key
-
     except Exception as e:
-        logger.warning("[zwykly] Błąd parsowania JSON: %s | raw=%.200s", e, raw)
-        return sanitize_model_output(raw), FALLBACK_EMOT
+        logger.warning("[zwykly] JSON parse error, fallback to raw text: %s", e)
+        return raw.strip(), ""
+
+    if not isinstance(data, dict):
+        return raw.strip(), ""
+
+    text = data.get("odpowiedz_tekstowa") or data.get("odpowiedz") or ""
+    emotion = data.get("emocja") or data.get("emotion") or ""
+    return str(text).strip(), str(emotion).strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1109,7 +1116,7 @@ def _extract_tyler_rules(response_text: str) -> list:
     Panel 1 = zasady 1+2 (identyczne), panele 2-7 = zasady 2-7 (indeks 1-6),
     panel 7 = zasada 8.
     Tak naprawdę zwracamy listę 7 zasad do 7 paneli:
-      panel_rules[0] = zasada 1 (i 2)
+      panel_rules[0] = zasada 1 (i 2 — są identyczne)
       panel_rules[1] = zasada 3
       ...
       panel_rules[6] = zasada 8
@@ -2965,89 +2972,132 @@ function sprawdz() {{
         c.setFillColorRGB(0.6, 0.6, 0.6)
         c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA")
 
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.7, 0.7, 0.7)
+        c.setFont(FB, 18)
+        c.setFillColorRGB(1, 1, 1)
         c.drawCentredString(
-            W / 2,
-            H - 21 * mm,
-            f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia",
+            W / 2, H - 28 * mm, data.get("nazwa_postaci", "ANONIM")[:30]
         )
+        c.setFont(FN, 10)
+        c.setFillColorRGB(0.7, 0.5, 0.5)
+        c.drawCentredString(W / 2, H - 35 * mm, data.get("klasa_postaci", "")[:50])
 
-        # Linia dekoracyjna
-        c.setStrokeColorRGB(0.7, 0.1, 0.1)
-        c.setLineWidth(2)
-        c.line(lm, H - 30 * mm, rm, H - 30 * mm)
+        y = H - 50 * mm
 
-        # Tytuł horoskopu
-        znak = data.get("znak_zodiaku", "Nieznany")
-        motto = data.get("motto", "")
-        c.setFont(FB, 13)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawCentredString(W / 2, H - 37 * mm, f"HOROSKOP: {znak.upper()}")
-        c.setFont(FN, 9)
-        c.setFillColorRGB(0.3, 0.3, 0.3)
-        c.drawCentredString(W / 2, H - 43 * mm, motto[:80])
-
-        c.setStrokeColorRGB(0.3, 0.3, 0.3)
+        # Poziom
+        poziom = data.get("poziom", "?")
+        c.setFont(FB, 11)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, f"POZIOM: {poziom}")
+        c.setStrokeColorRGB(*RED)
         c.setLineWidth(0.5)
-        c.line(lm, H - 46 * mm, rm, H - 46 * mm)
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 8 * mm
 
-        y = H - 52 * mm
-        dni = data.get("dni", [])
+        # Statystyki — 2 kolumny
+        stats = data.get("statystyki", {})
+        stat_list = list(stats.items())
+        half = len(stat_list) // 2 + len(stat_list) % 2
+        col1 = stat_list[:half]
+        col2 = stat_list[half:]
+        col_w = cw / 2 - 5 * mm
 
-        for dzien in dni:
-            if y < 30 * mm:
-                c.showPage()
-                y = H - 20 * mm
-
-            naglowek = dzien.get("naglowek", "").upper()
-            data_dnia = dzien.get("data", "")
-            tresc = dzien.get("tresc", "")
-            rada = dzien.get("rada_tylera", "")
-
-            # Data
-            c.setFont(FB, 8)
-            c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.drawString(lm, y, data_dnia)
-            y -= 4 * mm
-
-            # Nagłówek dnia — styl tabloidu
-            c.setFont(FB, 11)
-            c.setFillColorRGB(0.05, 0.05, 0.05)
-            h = wrap_draw(naglowek, lm, y, FB, 11, cw, (0.05, 0.05, 0.05))
-            y -= h + 1 * mm
-
-            # Treść
-            h = wrap_draw(tresc, lm, y, FN, 9, cw, (0.2, 0.2, 0.2))
-            y -= h + 1 * mm
-
-            # Rada Tylera
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.6, 0.1, 0.1)
-            c.drawString(lm, y, f"Rada Tylera: {rada}")
-            y -= 4 * mm
-
-            # Separator
-            c.setStrokeColorRGB(0.8, 0.8, 0.8)
-            c.setLineWidth(0.3)
-            c.line(lm, y, rm, y)
-            y -= 4 * mm
-
-        # Przepowiednia ogólna
-        if y < 30 * mm:
-            c.showPage()
-            y = H - 20 * mm
-
-        c.setStrokeColorRGB(0.6, 0.1, 0.1)
-        c.setLineWidth(1)
-        c.line(lm, y + 2 * mm, rm, y + 2 * mm)
-        y -= 4 * mm
-        c.setFont(FB, 10)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, "PRZEPOWIEDNIA TYGODNIA:")
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "STATYSTYKI")
         y -= 5 * mm
-        prz = data.get("przepowiednia_ogolna", "")
-        wrap_draw(prz, lm, y, FN, 9, cw, (0.1, 0.1, 0.1))
+
+        # Krok między statystykami — 18pt = etykieta(7) + wartość(7) + odstęp(4)
+        STAT_STEP = 18
+        col_half = cw / 2 - 3 * mm
+
+        def draw_stat_col(items, x_base):
+            sy = y_stat
+            for sk, sv in items:
+                label = sk.replace("_", " ").upper()
+                c.setFont(FB, 7)
+                c.setFillColorRGB(*DARK)
+                c.drawString(x_base, sy, label + ":")
+                sy -= 8
+                # Zawijaj wartość jeśli długa
+                val_str = str(sv)
+                c.setFont(FN, 7)
+                c.setFillColorRGB(*GRAY)
+                words = val_str.split()
+                line = ""
+                for w in words:
+                    test = (line + " " + w).strip()
+                    if c.stringWidth(test, FN, 7) <= col_half:
+                        line = test
+                    else:
+                        c.drawString(x_base + 2 * mm, sy, line)
+                        sy -= 8
+                        line = w
+                if line:
+                    c.drawString(x_base + 2 * mm, sy, line)
+                sy -= STAT_STEP - 8
+            return sy
+
+        y_stat = y
+        sy1 = draw_stat_col(col1, lm)
+        sy2 = draw_stat_col(col2, lm + cw / 2)
+        y = min(sy1, sy2) - 8 * mm
+
+        # Umiejętności
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "UMIEJĘTNOŚCI SPECJALNE")
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 6 * mm
+        for um in data.get("umiejetnosci_specjalne", []):
+            c.setFont(FN, 8)
+            c.setFillColorRGB(*DARK)
+            c.drawString(lm + 3 * mm, y, f"◆ {um}")
+            y -= 5 * mm
+
+        y -= 3 * mm
+
+        # Ekwipunek
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "EKWIPUNEK")
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 6 * mm
+        for item in data.get("ekwipunek", []):
+            c.setFont(FN, 8)
+            c.setFillColorRGB(*DARK)
+            c.drawString(lm + 3 * mm, y, f"⚔ {item}")
+            y -= 5 * mm
+
+        y -= 3 * mm
+
+        # Quest + cytat
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "QUEST GŁÓWNY:")
+        c.setFont(FN, 8)
+        c.setFillColorRGB(*DARK)
+        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", ""))
+        y -= 8 * mm
+
+        # Cytat na dole
+        c.setStrokeColorRGB(0.7, 0.7, 0.7)
+        c.line(lm, y, rm, y)
+        y -= 5 * mm
+        c.setFont(FN, 8)
+        c.setFillColorRGB(*RED)
+        cytat = data.get("cytat_postaci", "")
+        words = cytat.split()
+        line = ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(f'"{test}"', FN, 8) <= cw:
+                line = test
+            else:
+                c.drawCentredString(W / 2, y, f'"{line}"')
+                y -= 4 * mm
+                line = w
+        if line:
+            c.drawCentredString(W / 2, y, f'"{line}"')
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -3168,89 +3218,132 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         c.setFillColorRGB(0.6, 0.6, 0.6)
         c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA")
 
-        c.setFont(FN, 8)
-        c.setFillColorRGB(0.7, 0.7, 0.7)
+        c.setFont(FB, 18)
+        c.setFillColorRGB(1, 1, 1)
         c.drawCentredString(
-            W / 2,
-            H - 21 * mm,
-            f"Wydanie Specjalne • {today.strftime('%d.%m.%Y')} • Cena: Twoje złudzenia",
+            W / 2, H - 28 * mm, data.get("nazwa_postaci", "ANONIM")[:30]
         )
+        c.setFont(FN, 10)
+        c.setFillColorRGB(0.7, 0.5, 0.5)
+        c.drawCentredString(W / 2, H - 35 * mm, data.get("klasa_postaci", "")[:50])
 
-        # Linia dekoracyjna
-        c.setStrokeColorRGB(0.7, 0.1, 0.1)
-        c.setLineWidth(2)
-        c.line(lm, H - 30 * mm, rm, H - 30 * mm)
+        y = H - 50 * mm
 
-        # Tytuł horoskopu
-        znak = data.get("znak_zodiaku", "Nieznany")
-        motto = data.get("motto", "")
-        c.setFont(FB, 13)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawCentredString(W / 2, H - 37 * mm, f"HOROSKOP: {znak.upper()}")
-        c.setFont(FN, 9)
-        c.setFillColorRGB(0.3, 0.3, 0.3)
-        c.drawCentredString(W / 2, H - 43 * mm, motto[:80])
-
-        c.setStrokeColorRGB(0.3, 0.3, 0.3)
+        # Poziom
+        poziom = data.get("poziom", "?")
+        c.setFont(FB, 11)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, f"POZIOM: {poziom}")
+        c.setStrokeColorRGB(*RED)
         c.setLineWidth(0.5)
-        c.line(lm, H - 46 * mm, rm, H - 46 * mm)
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 8 * mm
 
-        y = H - 52 * mm
-        dni = data.get("dni", [])
+        # Statystyki — 2 kolumny
+        stats = data.get("statystyki", {})
+        stat_list = list(stats.items())
+        half = len(stat_list) // 2 + len(stat_list) % 2
+        col1 = stat_list[:half]
+        col2 = stat_list[half:]
+        col_w = cw / 2 - 5 * mm
 
-        for dzien in dni:
-            if y < 30 * mm:
-                c.showPage()
-                y = H - 20 * mm
-
-            naglowek = dzien.get("naglowek", "").upper()
-            data_dnia = dzien.get("data", "")
-            tresc = dzien.get("tresc", "")
-            rada = dzien.get("rada_tylera", "")
-
-            # Data
-            c.setFont(FB, 8)
-            c.setFillColorRGB(0.5, 0.5, 0.5)
-            c.drawString(lm, y, data_dnia)
-            y -= 4 * mm
-
-            # Nagłówek dnia — styl tabloidu
-            c.setFont(FB, 11)
-            c.setFillColorRGB(0.05, 0.05, 0.05)
-            h = wrap_draw(naglowek, lm, y, FB, 11, cw, (0.05, 0.05, 0.05))
-            y -= h + 1 * mm
-
-            # Treść
-            h = wrap_draw(tresc, lm, y, FN, 9, cw, (0.2, 0.2, 0.2))
-            y -= h + 1 * mm
-
-            # Rada Tylera
-            c.setFont(FN, 8)
-            c.setFillColorRGB(0.6, 0.1, 0.1)
-            c.drawString(lm, y, f"Rada Tylera: {rada}")
-            y -= 4 * mm
-
-            # Separator
-            c.setStrokeColorRGB(0.8, 0.8, 0.8)
-            c.setLineWidth(0.3)
-            c.line(lm, y, rm, y)
-            y -= 4 * mm
-
-        # Przepowiednia ogólna
-        if y < 30 * mm:
-            c.showPage()
-            y = H - 20 * mm
-
-        c.setStrokeColorRGB(0.6, 0.1, 0.1)
-        c.setLineWidth(1)
-        c.line(lm, y + 2 * mm, rm, y + 2 * mm)
-        y -= 4 * mm
-        c.setFont(FB, 10)
-        c.setFillColorRGB(0.6, 0.1, 0.1)
-        c.drawString(lm, y, "PRZEPOWIEDNIA TYGODNIA:")
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "STATYSTYKI")
         y -= 5 * mm
-        prz = data.get("przepowiednia_ogolna", "")
-        wrap_draw(prz, lm, y, FN, 9, cw, (0.1, 0.1, 0.1))
+
+        # Krok między statystykami — 18pt = etykieta(7) + wartość(7) + odstęp(4)
+        STAT_STEP = 18
+        col_half = cw / 2 - 3 * mm
+
+        def draw_stat_col(items, x_base):
+            sy = y_stat
+            for sk, sv in items:
+                label = sk.replace("_", " ").upper()
+                c.setFont(FB, 7)
+                c.setFillColorRGB(*DARK)
+                c.drawString(x_base, sy, label + ":")
+                sy -= 8
+                # Zawijaj wartość jeśli długa
+                val_str = str(sv)
+                c.setFont(FN, 7)
+                c.setFillColorRGB(*GRAY)
+                words = val_str.split()
+                line = ""
+                for w in words:
+                    test = (line + " " + w).strip()
+                    if c.stringWidth(test, FN, 7) <= col_half:
+                        line = test
+                    else:
+                        c.drawString(x_base + 2 * mm, sy, line)
+                        sy -= 8
+                        line = w
+                if line:
+                    c.drawString(x_base + 2 * mm, sy, line)
+                sy -= STAT_STEP - 8
+            return sy
+
+        y_stat = y
+        sy1 = draw_stat_col(col1, lm)
+        sy2 = draw_stat_col(col2, lm + cw / 2)
+        y = min(sy1, sy2) - 8 * mm
+
+        # Umiejętności
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "UMIEJĘTNOŚCI SPECJALNE")
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 6 * mm
+        for um in data.get("umiejetnosci_specjalne", []):
+            c.setFont(FN, 8)
+            c.setFillColorRGB(*DARK)
+            c.drawString(lm + 3 * mm, y, f"◆ {um}")
+            y -= 5 * mm
+
+        y -= 3 * mm
+
+        # Ekwipunek
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "EKWIPUNEK")
+        c.line(lm, y - 2, rm, y - 2)
+        y -= 6 * mm
+        for item in data.get("ekwipunek", []):
+            c.setFont(FN, 8)
+            c.setFillColorRGB(*DARK)
+            c.drawString(lm + 3 * mm, y, f"⚔ {item}")
+            y -= 5 * mm
+
+        y -= 3 * mm
+
+        # Quest + cytat
+        c.setFont(FB, 9)
+        c.setFillColorRGB(*RED)
+        c.drawString(lm, y, "QUEST GŁÓWNY:")
+        c.setFont(FN, 8)
+        c.setFillColorRGB(*DARK)
+        c.drawString(lm + 30 * mm, y, data.get("quest_glowny", ""))
+        y -= 8 * mm
+
+        # Cytat na dole
+        c.setStrokeColorRGB(0.7, 0.7, 0.7)
+        c.line(lm, y, rm, y)
+        y -= 5 * mm
+        c.setFont(FN, 8)
+        c.setFillColorRGB(*RED)
+        cytat = data.get("cytat_postaci", "")
+        words = cytat.split()
+        line = ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(f'"{test}"', FN, 8) <= cw:
+                line = test
+            else:
+                c.drawCentredString(W / 2, y, f'"{line}"')
+                y -= 4 * mm
+                line = w
+        if line:
+            c.drawCentredString(W / 2, y, f'"{line}"')
 
         c.save()
         pdf_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -3998,7 +4091,7 @@ def _build_plakat_svg(res_text: str, body: str) -> dict | None:
             "quote": "glowne_zdanie",
             "tresc": "glowne_zdanie",
             "subtitle": "podtytul",
-            "podtytuł": "podtytul",
+            "podtytul": "podtytul",
             "background": "tlo_opis",
             "tlo": "tlo_opis",
             "color": "kolor_dominujacy",
@@ -4461,200 +4554,1194 @@ function pokazWynik() {{
     }
 
 
-def build_zwykly_section(
-    body: str,
-    previous_body: str = None,
-    sender_email: str = "",
-    sender_name: str = "",
-    test_mode: bool = False,
-    attachments: list = None,
-) -> dict:
-    """
-    Zwykły responder - generuje odpowiedź tekstową i obrazki FLUX.
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIAGRAM PRZEPŁYWU SVG
+# ═══════════════════════════════════════════════════════════════════════════════
 
-    Parametr test_mode:
-    - Jeśli test_mode=True (pochodzi z KEYWORDS_TEST via app.py disable_flux),
-      to zwracamy zastępczy obrazek zamiast generować FLUX.
-    - To oszczędza tokeny HF_TOKEN bez zmiany logiki respondentów.
 
-    Render nie ma zewnętrznego limitu czasu — wszystkie sekcje zawsze się wykonują.
-    """
-    from flask import current_app as flask_app
-    import re
-
-    logger.info("[zwykly] START - Optymalizacja sekwencyjna (v2)")
-    app_obj = flask_app._get_current_object()
-
-    # Szczegółowe logowanie dla programisty
-    execution_logger.log_input(sender_email, "zwykly_request", body, sender_name)
-    execution_logger.log_pipeline_step(
-        "zwykly_start",
-        {
-            "body_length": len(body or ""),
-            "previous_body_length": len(previous_body or ""),
-            "sender_email": sender_email,
-            "sender_name": sender_name,
-            "test_mode": test_mode,
-            "attachments_count": len(attachments or []),
-        },
-    )
-    execution_logger.log_memory_usage()
-
-    # --- INICJALIZACJA ---
-    res_text = emotion_key = provider = None
-    nouns_dict = {}
-    png_b64 = cv_pdf_b64 = raport_pdf = psych_photo_1 = psych_photo_2 = log_psych = None
-    triptych_images = []
-    ankieta_html = ankieta_pdf = horoskop_pdf = karta_rpg_pdf = plakat_svg = (
-        gra_html
-    ) = None
-    explanation_txt = debug_txt = ""
-
-    # ── KROK 1: Tekst AI + Rzeczowniki równolegle (2 calle DeepSeek) ────────
-    def _get_ai_main():
-        with app_obj.app_context():
-            p_data = _load_prompt_json()
-            p_str = _render_prompt(p_data, body, previous_body, sender_name=sender_name)
-            raw, prov = _call_ai_with_fallback(
-                p_data.get("system", ""), p_str, max_tokens=6000
-            )
-            txt, emo = _parse_response(raw)
-            return txt, emo, prov, p_data, p_str
-
-    nouns_dict = _extract_nouns_deepseek(body)
-    res_text, emotion_key, provider, prompt_data, user_msg = _get_ai_main()
-
-    if not res_text:
-        res_text = "### TYLER DURDEN\n\nSystem zawiódł..."
-
-    session_vars = _build_session_vars(
-        body,
-        sender_email,
-        sender_name,
-        previous_body or "",
-        res_text,
-        emotion_key,
-        provider,
-        nouns_dict,
-    )
-    for k, v in nouns_dict.items():
-        session_vars[k.upper()] = v
-
-    # ── KROK 2: Zadania bez AI lub z 1 callem DeepSeek każde ───────────────
-    # Sekwencyjnie, żeby każdy call DeepSeek był wykonywany pojedynczo.
-    def task_tryptyk():
-        with app_obj.app_context():
-            # _generate_raw_email_image usunięte — HF nie działa i nie potrzebuje AI
-            imgs, _, _ = _generate_triptych(
-                res_text,
-                prompt_data,
-                body,
-                session_vars=session_vars,
-                test_mode=test_mode,
-            )
-            return imgs
-
+def _build_flow_diagram_svg(exec_logger) -> dict | None:
+    """Generuje diagram przepływu pokazujący INPUT → API CALLS → SECTIONS."""
     try:
-        triptych_images = task_tryptyk()
-    except Exception:
-        triptych_images = []
+        # Pobierz dane z exec_logger metadata (ExecutionLogger, nie logging.Logger)
+        metadata = getattr(exec_logger, "metadata", {}) or {}
+        api_calls = metadata.get("api_calls", [])
+        sections_completed = metadata.get("sections_completed", [])
+        in_history = metadata.get("in_history", "nieznany")
+        in_requiem = metadata.get("in_requiem", "nieznany")
 
-    # Emotyka usunięta z odpowiedzi
-    png_b64 = None
+        # Przygotuj dane do wizualizacji
+        deepseek_count = sum(
+            1 for call in api_calls if call.get("provider") == "deepseek"
+        )
+        total_tokens = sum(call.get("tokens", 0) for call in api_calls)
 
-    reply_html = build_html_reply(res_text)
-    analiza_docx_list = []
-    htm_for_drive = None  # HTM do zapisu na Drive (podmieni placeholder w reply_html)
-    drive_url = None  # URL pliku HTM na Drive (po wgraniu)
+        sections_list = ", ".join(sections_completed) if sections_completed else "brak"
 
-    # Dociekliwy jest zawsze wywoływany osobno przez app.py jako sekcja 'analiza'.
-    # Zwykly NIE wywołuje dociekliwego — każdy responder wysyła osobny email.
+        svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <!-- Tło -->
+  <rect width="800" height="600" fill="#1a1a1a"/>
 
-    # ── KROK 3: Raport psychiatryczny ────────────────────────────────────────
-    # Wywoływany przed taskami pobocznymi — ma priorytet na zasoby DeepSeek.
-    try:
-        with app_obj.app_context():
-            r_res = build_raport(
-                body,
-                previous_body or "",
-                res_text,
-                nouns_dict,
-                sender_name,
-                session_vars.get("USER_GENDER", "patient"),
-                test_mode=test_mode,
-            )
-        if not isinstance(r_res, dict):
-            logger.error(
-                "[zwykly] Raport błąd: build_raport zwrócił %s zamiast dict",
-                type(r_res),
-            )
-            r_res = {}
-        raport_pdf = r_res.get("raport_pdf")
-        psych_photo_1 = r_res.get("psych_photo_1")
-        psych_photo_2 = r_res.get("psych_photo_2")
-        log_psych = r_res.get("log_psych")
+  <!-- Tytuł -->
+  <text x="400" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">DIAGRAM PRZEPŁYWU</text>
+
+  <!-- INPUT -->
+  <rect x="50" y="100" width="120" height="60" fill="#4CAF50" rx="10"/>
+  <text x="110" y="135" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">INPUT</text>
+
+  <!-- Strzałka 1 -->
+  <polygon points="180,130 200,125 200,135" fill="#ffffff"/>
+  <line x1="170" y1="130" x2="200" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- API CALLS -->
+  <rect x="220" y="80" width="140" height="100" fill="#2196F3" rx="10"/>
+  <text x="290" y="110" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">API CALLS</text>
+  <text x="290" y="135" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">DeepSeek: {deepseek_count}</text>
+  <text x="290" y="155" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Tokens: {total_tokens}</text>
+
+  <!-- Strzałka 2 -->
+  <polygon points="370,130 390,125 390,135" fill="#ffffff"/>
+  <line x1="360" y1="130" x2="390" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- SECTIONS -->
+  <rect x="410" y="100" width="140" height="60" fill="#FF9800" rx="10"/>
+  <text x="480" y="125" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">SECTIONS</text>
+  <text x="480" y="140" font-family="Arial, sans-serif" font-size="10"
+        fill="#ffffff" text-anchor="middle">{sections_list[:20]}</text>
+
+  <!-- Status użytkownika -->
+  <rect x="580" y="80" width="160" height="100" fill="#9C27B0" rx="10"/>
+  <text x="660" y="105" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">STATUS</text>
+  <text x="660" y="125" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Historia: {in_history}</text>
+  <text x="660" y="140" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Requiem: {in_requiem}</text>
+
+  <!-- Szczegóły API calls -->
+  <text x="50" y="220" font-family="Arial, sans-serif" font-size="16" font-weight="bold"
+        fill="#ffffff">SZCZEGÓŁY API CALLS:</text>
+
+  <text x="50" y="250" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Łącznie wywołań: {len(api_calls)}</text>
+  <text x="50" y="270" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Sekcje wykonane: {len(sections_completed)}</text>
+  <text x="50" y="290" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Czas przetwarzania: ~{len(api_calls) * 2}s</text>
+
+  <!-- Legenda -->
+  <text x="50" y="340" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff">LEGENDA:</text>
+
+  <rect x="50" y="360" width="15" height="15" fill="#4CAF50"/>
+  <text x="75" y="372" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wejście email</text>
+
+  <rect x="50" y="385" width="15" height="15" fill="#2196F3"/>
+  <text x="75" y="397" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wywołania AI</text>
+
+  <rect x="50" y="410" width="15" height="15" fill="#FF9800"/>
+  <text x="75" y="422" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Generowane sekcje</text>
+
+  <rect x="50" y="435" width="15" height="15" fill="#9C27B0"/>
+  <text x="75" y="447" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Status użytkownika</text>
+
+  <!-- Stopka -->
+  <text x="400" y="580" font-family="Arial, sans-serif" font-size="10"
+        fill="#666666" text-anchor="middle">Wygenerowano: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</text>
+</svg>"""
+
+        svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info("[flow_diagram] OK")
+        return {
+            "base64": svg_b64,
+            "content_type": "image/svg+xml",
+            "filename": f"flow_diagram_{ts}.svg",
+        }
+
     except Exception as e:
-        logger.error("[zwykly] Raport błąd: %s", e)
-        log_psych = {"error": str(e)}
+        logger.warning("[flow_diagram] Błąd: %s", e)
+        return None
 
-    # ── Taski poboczne — bez limitu czasowego (Render działa bez ograniczeń) ──
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GRA HTML
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_gra_html(body: str, res_text: str) -> dict | None:
+    """Generuje grę interaktywną HTML z wyborami Tylera."""
     try:
-        ankieta_html, ankieta_pdf = _build_ankieta(res_text, body)
-    except Exception:
-        pass
+        with open(GRA_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        logger.warning("[gra] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    schema = cfg.get("output_schema", {})
+    user_msg = (
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+    )
+
+    # max_tokens=4000 — zwiększone, 10 pytań × ~200 tokenów = min 3500 potrzebnych
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=4000)
+    if not raw:
+        logger.warning("[gra] Brak odpowiedzi od AI")
+        return None
+
+    logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
 
     try:
-        horoskop_pdf = _build_horoskop(body, res_text)
-    except Exception:
-        pass
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
+        if not isinstance(data, dict):
+            raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
+        if not data.get("pytania"):
+            logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
+            return None
+    except Exception as e:
+        logger.warning("[gra] Błąd JSON: %s | raw: %.200s", e, raw)
+        return None
 
-    try:
-        karta_rpg_pdf = _build_karta_rpg(body, res_text)
-    except Exception:
-        pass
+    tytul = data.get("tytul_gry", "Gra Tylera Durdena")
+    wstep = data.get("wstep", "")
+    pytania = data.get("pytania", [])
+    wyniki = data.get("wyniki", {})
+    zakonczenie = data.get("zakonczenie", "— Tyler Durden")
 
-    try:
-        gra_html = _build_gra_html(body, res_text)
-    except Exception:
-        pass
+    # Buduj komentarze JS
+    komentarze_b = {}
+    komentarze_inne = {}
+    for p in pytania:
+        nr = p.get("nr", 0)
+        komentarze_b[nr] = p.get("komentarz_po_wyborze_b", "Dobrze.")
+        komentarze_inne[nr] = p.get("komentarz_po_wyborze_innym", "Typowe.")
 
-    # Usunięto generowanie plakatu SVG - zgodnie z życzeniem użytkownika
-    plakat_svg = None
+    kb_js = json.dumps(komentarze_b)
+    ki_js = json.dumps(komentarze_inne)
+    w_js = json.dumps(wyniki)
 
-    # flow_diagram_svg przeniesiony na KONIEC respond() — tuż przed return
-    # żeby logger miał już wszystkie dane sesji (api_calls, sections_completed)
+    pytania_html = ""
+    for p in pytania:
+        nr = p.get("nr", "?")
+        sytuacja = p.get("sytuacja", "")
+        pytanie_txt = p.get("pytanie", "")
+        odp = p.get("odpowiedzi", {})
+        if isinstance(odp, list):
+            odp = {
+                str(item.get("klucz", item.get("key", chr(97 + i)))): str(
+                    item.get("tresc", item.get("text", ""))
+                )
+                for i, item in enumerate(odp)
+            }
+        elif not isinstance(odp, dict):
+            odp = {}
+        pytania_html += f"""
+<div class="pytanie" id="p{nr}" style="display:none">
+  <div class="nr">Pytanie {nr} / {len(pytania)}</div>
+  <div class="sytuacja">{sytuacja}</div>
+  <div class="pytanie-txt">{pytanie_txt}</div>
+  <div class="opcje">
+    <button class="opcja" onclick="odpowiedz({nr},'a')">a) {odp.get('a', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'b')">b) {odp.get('b', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'c')">c) {odp.get('c', '')}</button>
+  </div>
+  <div class="komentarz" id="k{nr}"></div>
+</div>"""
 
-    try:
-        explanation_txt = _build_explanation_txt(res_text, body)
-    except Exception:
-        pass
+    html = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>{tytul}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: 'Courier New', monospace; background: #050505; color: #d0c0a0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
+  h1 {{ color: #8b0000; text-align: center; font-size: 1.6em; margin: 30px 0 10px; border-bottom: 2px solid #8b0000; padding-bottom: 10px; width: 100%; max-width: 700px; }}
+  .wstep {{ color: #666; font-style: italic; text-align: center; margin: 15px 0 30px; max-width: 600px; }}
+  .pytanie {{ background: #0f0f0f; border: 1px solid #2a1a1a; border-left: 4px solid #8b0000; padding: 25px; max-width: 700px; width: 100%; border-radius: 0 4px 4px 0; }}
+  .nr {{ color: #8b0000; font-size: 0.8em; margin-bottom: 10px; letter-spacing: 2px; }}
+  .sytuacja {{ color: #888; font-style: italic; margin-bottom: 12px; font-size: 0.9em; line-height: 1.5; }}
+  .pytanie-txt {{ font-size: 1.1em; color: #c8b89a; margin-bottom: 20px; font-weight: bold; }}
+  .opcje {{ display: flex; flex-direction: column; gap: 10px; }}
+  .opcja {{ background: #1a1a1a; border: 1px solid #333; color: #c8b89a; padding: 12px 18px; text-align: left; cursor: pointer; font-family: 'Courier New', monospace; font-size: 0.9em; transition: all 0.2s; border-radius: 2px; }}
+  .opcja:hover {{ background: #2a1a1a; border-color: #8b0000; }}
+  .opcja:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+  .opcja.tyler {{ background: #1a0a0a; border-color: #8b0000; color: #ff6666; }}
+  .komentarz {{ margin-top: 15px; padding: 10px; background: #0a0a0a; border-left: 2px solid #8b0000; color: #8b0000; font-style: italic; display: none; font-size: 0.85em; }}
+  #wynik {{ display: none; background: #0f0f0f; border: 2px solid #8b0000; padding: 30px; max-width: 700px; width: 100%; text-align: center; margin-top: 20px; }}
+  #wynik h2 {{ color: #8b0000; margin-bottom: 15px; }}
+  #wynik .punkty {{ font-size: 2em; color: #c8b89a; margin: 10px 0; }}
+  #wynik .komentarz-wynik {{ color: #888; font-style: italic; }}
+  #start {{ background: #8b0000; color: white; border: none; padding: 15px 40px; font-size: 1.1em; cursor: pointer; font-family: 'Courier New', monospace; margin: 20px 0; letter-spacing: 1px; }}
+  #start:hover {{ background: #a00000; }}
+  .pasek {{ background: #1a1a1a; height: 4px; max-width: 700px; width: 100%; margin: 10px 0; }}
+  .pasek-fill {{ background: #8b0000; height: 100%; transition: width 0.3s; width: 0%; }}
+  footer {{ color: #333; font-size: 0.75em; margin-top: 40px; text-align: center; }}
+</style>
+</head>
+<body>
+<h1>{tytul}</h1>
+<p class="wstep">{wstep}</p>
+<div class="pasek"><div class="pasek-fill" id="pasek"></div></div>
+<button id="start" onclick="startGra()">ROZPOCZNIJ GRĘ</button>
+{pytania_html}
+<div id="wynik">
+  <h2>KONIEC GRY</h2>
+  <div class="punkty" id="punkty-wynik"></div>
+  <div class="komentarz-wynik" id="komentarz-wynik"></div>
+</div>
+<footer>{zakonczenie}</footer>
+<script>
+var bieżace = 0;
+var punkty = 0;
+var total = {len(pytania)};
+var kb = {kb_js};
+var ki = {ki_js};
+var wyniki = {w_js};
 
-    def _get_safe_photo(img_data, label):
-        if img_data and isinstance(img_data, dict) and img_data.get("base64"):
-            return img_data
+function startGra() {{
+  document.getElementById('start').style.display = 'none';
+  pokazPytanie(1);
+}}
 
-    # Sekcja zabezpieczająca obrazy przed wysyłką:
-    p1 = _get_safe_photo(results.get("psych_photo_1"), "pacjent")
-    p2 = _get_safe_photo(results.get("psych_photo_2"), "przedmioty")
+function pokazPytanie(nr) {{
+  bieżace = nr;
+  var el = document.getElementById('p' + nr);
+  if (el) el.style.display = 'block';
+  document.getElementById('pasek').style.width = ((nr-1)/total*100) + '%';
+  window.scrollTo(0, document.body.scrollHeight);
+}}
 
+function odpowiedz(nr, wybor) {{
+  var btns = document.querySelectorAll('#p' + nr + ' .opcja');
+  btns.forEach(function(b) {{ b.disabled = true; }});
+  
+  if (wybor === 'b') {{
+    punkty++;
+    btns[1].classList.add('tyler');
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (kb[nr] || 'Dobrze.');
+    k.style.display = 'block';
+  }} else {{
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (ki[nr] || 'Typowe.');
+    k.style.display = 'block';
+    k.style.borderLeftColor = '#444';
+    k.style.color = '#555';
+  }}
+
+  setTimeout(function() {{
+    if (nr < total) {{
+      pokazPytanie(nr + 1);
+    }} else {{
+      pokazWynik();
+    }}
+  }}, 1800);
+}}
+
+function pokazWynik() {{
+  document.getElementById('pasek').style.width = '100%';
+  var wynikDiv = document.getElementById('wynik');
+  wynikDiv.style.display = 'block';
+  document.getElementById('punkty-wynik').innerHTML = punkty + ' / ' + total + ' punktów Tylera';
+  var komentarz = '';
+  if (punkty <= 3) komentarz = wyniki['0_3'] || 'Rozczarowujące.';
+  else if (punkty <= 6) komentarz = wyniki['4_6'] || 'Trochę lepiej.';
+  else if (punkty <= 9) komentarz = wyniki['7_9'] || 'Prawie.';
+  else komentarz = wyniki['10'] || 'Jesteś gotowy.';
+  document.getElementById('komentarz-wynik').innerHTML = komentarz;
+  window.scrollTo(0, document.body.scrollHeight);
+}}
+</script>
+</body>
+</html>"""
+
+    html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger.info("[gra] OK: %d pytań", len(pytania))
     return {
-        "reply_html": reply_html,
-        "emotka_png": results.get("emotka_b64", ""),
-        "pdf_emocji": results.get("pdf_b64", ""),
-        "psych_photo_1": p1,
-        "psych_photo_2": p2,
-        "triptych": triptych_images,
-        "ankieta_html": ankieta_html,
-        "horoskop_pdf": horoskop_pdf,
-        "karta_rpg_pdf": karta_rpg_pdf,
-        "plakat_svg": plakat_svg,
-        "flow_diagram_svg": flow_diagram_svg,
-        "gra_html": gra_html,
-        "docx_list": analiza_docx_list,
-        "explanation_txt": explanation_txt,
-        "provider": provider,
-        "nouns_dict": nouns_dict,
-        # Dla logowania / ewentualnej obsługi w smtp_wysylka.py
-        "htm_for_drive": htm_for_drive,
-        "drive_url": drive_url,
+        "base64": html_b64,
+        "content_type": "application/octet-stream",
+        "filename": f"gra_{ts}.htm",
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIAGRAM PRZEPŁYWU SVG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_flow_diagram_svg(exec_logger) -> dict | None:
+    """Generuje diagram przepływu pokazujący INPUT → API CALLS → SECTIONS."""
+    try:
+        # Pobierz dane z exec_logger metadata (ExecutionLogger, nie logging.Logger)
+        metadata = getattr(exec_logger, "metadata", {}) or {}
+        api_calls = metadata.get("api_calls", [])
+        sections_completed = metadata.get("sections_completed", [])
+        in_history = metadata.get("in_history", "nieznany")
+        in_requiem = metadata.get("in_requiem", "nieznany")
+
+        # Przygotuj dane do wizualizacji
+        deepseek_count = sum(
+            1 for call in api_calls if call.get("provider") == "deepseek"
+        )
+        total_tokens = sum(call.get("tokens", 0) for call in api_calls)
+
+        sections_list = ", ".join(sections_completed) if sections_completed else "brak"
+
+        svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <!-- Tło -->
+  <rect width="800" height="600" fill="#1a1a1a"/>
+
+  <!-- Tytuł -->
+  <text x="400" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">DIAGRAM PRZEPŁYWU</text>
+
+  <!-- INPUT -->
+  <rect x="50" y="100" width="120" height="60" fill="#4CAF50" rx="10"/>
+  <text x="110" y="135" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">INPUT</text>
+
+  <!-- Strzałka 1 -->
+  <polygon points="180,130 200,125 200,135" fill="#ffffff"/>
+  <line x1="170" y1="130" x2="200" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- API CALLS -->
+  <rect x="220" y="80" width="140" height="100" fill="#2196F3" rx="10"/>
+  <text x="290" y="110" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">API CALLS</text>
+  <text x="290" y="135" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">DeepSeek: {deepseek_count}</text>
+  <text x="290" y="155" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Tokens: {total_tokens}</text>
+
+  <!-- Strzałka 2 -->
+  <polygon points="370,130 390,125 390,135" fill="#ffffff"/>
+  <line x1="360" y1="130" x2="390" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- SECTIONS -->
+  <rect x="410" y="100" width="140" height="60" fill="#FF9800" rx="10"/>
+  <text x="480" y="125" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">SECTIONS</text>
+  <text x="480" y="140" font-family="Arial, sans-serif" font-size="10"
+        fill="#ffffff" text-anchor="middle">{sections_list[:20]}</text>
+
+  <!-- Status użytkownika -->
+  <rect x="580" y="80" width="160" height="100" fill="#9C27B0" rx="10"/>
+  <text x="660" y="105" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">STATUS</text>
+  <text x="660" y="125" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Historia: {in_history}</text>
+  <text x="660" y="140" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Requiem: {in_requiem}</text>
+
+  <!-- Szczegóły API calls -->
+  <text x="50" y="220" font-family="Arial, sans-serif" font-size="16" font-weight="bold"
+        fill="#ffffff">SZCZEGÓŁY API CALLS:</text>
+
+  <text x="50" y="250" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Łącznie wywołań: {len(api_calls)}</text>
+  <text x="50" y="270" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Sekcje wykonane: {len(sections_completed)}</text>
+  <text x="50" y="290" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Czas przetwarzania: ~{len(api_calls) * 2}s</text>
+
+  <!-- Legenda -->
+  <text x="50" y="340" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff">LEGENDA:</text>
+
+  <rect x="50" y="360" width="15" height="15" fill="#4CAF50"/>
+  <text x="75" y="372" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wejście email</text>
+
+  <rect x="50" y="385" width="15" height="15" fill="#2196F3"/>
+  <text x="75" y="397" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wywołania AI</text>
+
+  <rect x="50" y="410" width="15" height="15" fill="#FF9800"/>
+  <text x="75" y="422" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Generowane sekcje</text>
+
+  <rect x="50" y="435" width="15" height="15" fill="#9C27B0"/>
+  <text x="75" y="447" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Status użytkownika</text>
+
+  <!-- Stopka -->
+  <text x="400" y="580" font-family="Arial, sans-serif" font-size="10"
+        fill="#666666" text-anchor="middle">Wygenerowano: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</text>
+</svg>"""
+
+        svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info("[flow_diagram] OK")
+        return {
+            "base64": svg_b64,
+            "content_type": "image/svg+xml",
+            "filename": f"flow_diagram_{ts}.svg",
+        }
+
+    except Exception as e:
+        logger.warning("[flow_diagram] Błąd: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GRA HTML
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_gra_html(body: str, res_text: str) -> dict | None:
+    """Generuje grę interaktywną HTML z wyborami Tylera."""
+    try:
+        with open(GRA_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        logger.warning("[gra] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    schema = cfg.get("output_schema", {})
+    user_msg = (
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+    )
+
+    # max_tokens=4000 — zwiększone, 10 pytań × ~200 tokenów = min 3500 potrzebnych
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=4000)
+    if not raw:
+        logger.warning("[gra] Brak odpowiedzi od AI")
+        return None
+
+    logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
+
+    try:
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
+        if not isinstance(data, dict):
+            raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
+        if not data.get("pytania"):
+            logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
+            return None
+    except Exception as e:
+        logger.warning("[gra] Błąd JSON: %s | raw: %.200s", e, raw)
+        return None
+
+    tytul = data.get("tytul_gry", "Gra Tylera Durdena")
+    wstep = data.get("wstep", "")
+    pytania = data.get("pytania", [])
+    wyniki = data.get("wyniki", {})
+    zakonczenie = data.get("zakonczenie", "— Tyler Durden")
+
+    # Buduj komentarze JS
+    komentarze_b = {}
+    komentarze_inne = {}
+    for p in pytania:
+        nr = p.get("nr", 0)
+        komentarze_b[nr] = p.get("komentarz_po_wyborze_b", "Dobrze.")
+        komentarze_inne[nr] = p.get("komentarz_po_wyborze_innym", "Typowe.")
+
+    kb_js = json.dumps(komentarze_b)
+    ki_js = json.dumps(komentarze_inne)
+    w_js = json.dumps(wyniki)
+
+    pytania_html = ""
+    for p in pytania:
+        nr = p.get("nr", "?")
+        sytuacja = p.get("sytuacja", "")
+        pytanie_txt = p.get("pytanie", "")
+        odp = p.get("odpowiedzi", {})
+        if isinstance(odp, list):
+            odp = {
+                str(item.get("klucz", item.get("key", chr(97 + i)))): str(
+                    item.get("tresc", item.get("text", ""))
+                )
+                for i, item in enumerate(odp)
+            }
+        elif not isinstance(odp, dict):
+            odp = {}
+        pytania_html += f"""
+<div class="pytanie" id="p{nr}" style="display:none">
+  <div class="nr">Pytanie {nr} / {len(pytania)}</div>
+  <div class="sytuacja">{sytuacja}</div>
+  <div class="pytanie-txt">{pytanie_txt}</div>
+  <div class="opcje">
+    <button class="opcja" onclick="odpowiedz({nr},'a')">a) {odp.get('a', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'b')">b) {odp.get('b', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'c')">c) {odp.get('c', '')}</button>
+  </div>
+  <div class="komentarz" id="k{nr}"></div>
+</div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>{tytul}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: 'Courier New', monospace; background: #050505; color: #d0c0a0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
+  h1 {{ color: #8b0000; text-align: center; font-size: 1.6em; margin: 30px 0 10px; border-bottom: 2px solid #8b0000; padding-bottom: 10px; width: 100%; max-width: 700px; }}
+  .wstep {{ color: #666; font-style: italic; text-align: center; margin: 15px 0 30px; max-width: 600px; }}
+  .pytanie {{ background: #0f0f0f; border: 1px solid #2a1a1a; border-left: 4px solid #8b0000; padding: 25px; max-width: 700px; width: 100%; border-radius: 0 4px 4px 0; }}
+  .nr {{ color: #8b0000; font-size: 0.8em; margin-bottom: 10px; letter-spacing: 2px; }}
+  .sytuacja {{ color: #888; font-style: italic; margin-bottom: 12px; font-size: 0.9em; line-height: 1.5; }}
+  .pytanie-txt {{ font-size: 1.1em; color: #c8b89a; margin-bottom: 20px; font-weight: bold; }}
+  .opcje {{ display: flex; flex-direction: column; gap: 10px; }}
+  .opcja {{ background: #1a1a1a; border: 1px solid #333; color: #c8b89a; padding: 12px 18px; text-align: left; cursor: pointer; font-family: 'Courier New', monospace; font-size: 0.9em; transition: all 0.2s; border-radius: 2px; }}
+  .opcja:hover {{ background: #2a1a1a; border-color: #8b0000; }}
+  .opcja:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+  .opcja.tyler {{ background: #1a0a0a; border-color: #8b0000; color: #ff6666; }}
+  .komentarz {{ margin-top: 15px; padding: 10px; background: #0a0a0a; border-left: 2px solid #8b0000; color: #8b0000; font-style: italic; display: none; font-size: 0.85em; }}
+  #wynik {{ display: none; background: #0f0f0f; border: 2px solid #8b0000; padding: 30px; max-width: 700px; width: 100%; text-align: center; margin-top: 20px; }}
+  #wynik h2 {{ color: #8b0000; margin-bottom: 15px; }}
+  #wynik .punkty {{ font-size: 2em; color: #c8b89a; margin: 10px 0; }}
+  #wynik .komentarz-wynik {{ color: #888; font-style: italic; }}
+  #start {{ background: #8b0000; color: white; border: none; padding: 15px 40px; font-size: 1.1em; cursor: pointer; font-family: 'Courier New', monospace; margin: 20px 0; letter-spacing: 1px; }}
+  #start:hover {{ background: #a00000; }}
+  .pasek {{ background: #1a1a1a; height: 4px; max-width: 700px; width: 100%; margin: 10px 0; }}
+  .pasek-fill {{ background: #8b0000; height: 100%; transition: width 0.3s; width: 0%; }}
+  footer {{ color: #333; font-size: 0.75em; margin-top: 40px; text-align: center; }}
+</style>
+</head>
+<body>
+<h1>{tytul}</h1>
+<p class="wstep">{wstep}</p>
+<div class="pasek"><div class="pasek-fill" id="pasek"></div></div>
+<button id="start" onclick="startGra()">ROZPOCZNIJ GRĘ</button>
+{pytania_html}
+<div id="wynik">
+  <h2>KONIEC GRY</h2>
+  <div class="punkty" id="punkty-wynik"></div>
+  <div class="komentarz-wynik" id="komentarz-wynik"></div>
+</div>
+<footer>{zakonczenie}</footer>
+<script>
+var bieżace = 0;
+var punkty = 0;
+var total = {len(pytania)};
+var kb = {kb_js};
+var ki = {ki_js};
+var wyniki = {w_js};
+
+function startGra() {{
+  document.getElementById('start').style.display = 'none';
+  pokazPytanie(1);
+}}
+
+function pokazPytanie(nr) {{
+  bieżace = nr;
+  var el = document.getElementById('p' + nr);
+  if (el) el.style.display = 'block';
+  document.getElementById('pasek').style.width = ((nr-1)/total*100) + '%';
+  window.scrollTo(0, document.body.scrollHeight);
+}}
+
+function odpowiedz(nr, wybor) {{
+  var btns = document.querySelectorAll('#p' + nr + ' .opcja');
+  btns.forEach(function(b) {{ b.disabled = true; }});
+  
+  if (wybor === 'b') {{
+    punkty++;
+    btns[1].classList.add('tyler');
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (kb[nr] || 'Dobrze.');
+    k.style.display = 'block';
+  }} else {{
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (ki[nr] || 'Typowe.');
+    k.style.display = 'block';
+    k.style.borderLeftColor = '#444';
+    k.style.color = '#555';
+  }}
+
+  setTimeout(function() {{
+    if (nr < total) {{
+      pokazPytanie(nr + 1);
+    }} else {{
+      pokazWynik();
+    }}
+  }}, 1800);
+}}
+
+function pokazWynik() {{
+  document.getElementById('pasek').style.width = '100%';
+  var wynikDiv = document.getElementById('wynik');
+  wynikDiv.style.display = 'block';
+  document.getElementById('punkty-wynik').innerHTML = punkty + ' / ' + total + ' punktów Tylera';
+  var komentarz = '';
+  if (punkty <= 3) komentarz = wyniki['0_3'] || 'Rozczarowujące.';
+  else if (punkty <= 6) komentarz = wyniki['4_6'] || 'Trochę lepiej.';
+  else if (punkty <= 9) komentarz = wyniki['7_9'] || 'Prawie.';
+  else komentarz = wyniki['10'] || 'Jesteś gotowy.';
+  document.getElementById('komentarz-wynik').innerHTML = komentarz;
+  window.scrollTo(0, document.body.scrollHeight);
+}}
+</script>
+</body>
+</html>"""
+
+    html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger.info("[gra] OK: %d pytań", len(pytania))
+    return {
+        "base64": html_b64,
+        "content_type": "application/octet-stream",
+        "filename": f"gra_{ts}.htm",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIAGRAM PRZEPŁYWU SVG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_flow_diagram_svg(exec_logger) -> dict | None:
+    """Generuje diagram przepływu pokazujący INPUT → API CALLS → SECTIONS."""
+    try:
+        # Pobierz dane z exec_logger metadata (ExecutionLogger, nie logging.Logger)
+        metadata = getattr(exec_logger, "metadata", {}) or {}
+        api_calls = metadata.get("api_calls", [])
+        sections_completed = metadata.get("sections_completed", [])
+        in_history = metadata.get("in_history", "nieznany")
+        in_requiem = metadata.get("in_requiem", "nieznany")
+
+        # Przygotuj dane do wizualizacji
+        deepseek_count = sum(
+            1 for call in api_calls if call.get("provider") == "deepseek"
+        )
+        total_tokens = sum(call.get("tokens", 0) for call in api_calls)
+
+        sections_list = ", ".join(sections_completed) if sections_completed else "brak"
+
+        svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <!-- Tło -->
+  <rect width="800" height="600" fill="#1a1a1a"/>
+
+  <!-- Tytuł -->
+  <text x="400" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">DIAGRAM PRZEPŁYWU</text>
+
+  <!-- INPUT -->
+  <rect x="50" y="100" width="120" height="60" fill="#4CAF50" rx="10"/>
+  <text x="110" y="135" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">INPUT</text>
+
+  <!-- Strzałka 1 -->
+  <polygon points="180,130 200,125 200,135" fill="#ffffff"/>
+  <line x1="170" y1="130" x2="200" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- API CALLS -->
+  <rect x="220" y="80" width="140" height="100" fill="#2196F3" rx="10"/>
+  <text x="290" y="110" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">API CALLS</text>
+  <text x="290" y="135" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">DeepSeek: {deepseek_count}</text>
+  <text x="290" y="155" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Tokens: {total_tokens}</text>
+
+  <!-- Strzałka 2 -->
+  <polygon points="370,130 390,125 390,135" fill="#ffffff"/>
+  <line x1="360" y1="130" x2="390" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- SECTIONS -->
+  <rect x="410" y="100" width="140" height="60" fill="#FF9800" rx="10"/>
+  <text x="480" y="125" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">SECTIONS</text>
+  <text x="480" y="140" font-family="Arial, sans-serif" font-size="10"
+        fill="#ffffff" text-anchor="middle">{sections_list[:20]}</text>
+
+  <!-- Status użytkownika -->
+  <rect x="580" y="80" width="160" height="100" fill="#9C27B0" rx="10"/>
+  <text x="660" y="105" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">STATUS</text>
+  <text x="660" y="125" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Historia: {in_history}</text>
+  <text x="660" y="140" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Requiem: {in_requiem}</text>
+
+  <!-- Szczegóły API calls -->
+  <text x="50" y="220" font-family="Arial, sans-serif" font-size="16" font-weight="bold"
+        fill="#ffffff">SZCZEGÓŁY API CALLS:</text>
+
+  <text x="50" y="250" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Łącznie wywołań: {len(api_calls)}</text>
+  <text x="50" y="270" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Sekcje wykonane: {len(sections_completed)}</text>
+  <text x="50" y="290" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Czas przetwarzania: ~{len(api_calls) * 2}s</text>
+
+  <!-- Legenda -->
+  <text x="50" y="340" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff">LEGENDA:</text>
+
+  <rect x="50" y="360" width="15" height="15" fill="#4CAF50"/>
+  <text x="75" y="372" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wejście email</text>
+
+  <rect x="50" y="385" width="15" height="15" fill="#2196F3"/>
+  <text x="75" y="397" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wywołania AI</text>
+
+  <rect x="50" y="410" width="15" height="15" fill="#FF9800"/>
+  <text x="75" y="422" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Generowane sekcje</text>
+
+  <rect x="50" y="435" width="15" height="15" fill="#9C27B0"/>
+  <text x="75" y="447" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Status użytkownika</text>
+
+  <!-- Stopka -->
+  <text x="400" y="580" font-family="Arial, sans-serif" font-size="10"
+        fill="#666666" text-anchor="middle">Wygenerowano: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</text>
+</svg>"""
+
+        svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info("[flow_diagram] OK")
+        return {
+            "base64": svg_b64,
+            "content_type": "image/svg+xml",
+            "filename": f"flow_diagram_{ts}.svg",
+        }
+
+    except Exception as e:
+        logger.warning("[flow_diagram] Błąd: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GRA HTML
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_gra_html(body: str, res_text: str) -> dict | None:
+    """Generuje grę interaktywną HTML z wyborami Tylera."""
+    try:
+        with open(GRA_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        logger.warning("[gra] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    schema = cfg.get("output_schema", {})
+    user_msg = (
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+    )
+
+    # max_tokens=4000 — zwiększone, 10 pytań × ~200 tokenów = min 3500 potrzebnych
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=4000)
+    if not raw:
+        logger.warning("[gra] Brak odpowiedzi od AI")
+        return None
+
+    logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
+
+    try:
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
+        if not isinstance(data, dict):
+            raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
+        if not data.get("pytania"):
+            logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
+            return None
+    except Exception as e:
+        logger.warning("[gra] Błąd JSON: %s | raw: %.200s", e, raw)
+        return None
+
+    tytul = data.get("tytul_gry", "Gra Tylera Durdena")
+    wstep = data.get("wstep", "")
+    pytania = data.get("pytania", [])
+    wyniki = data.get("wyniki", {})
+    zakonczenie = data.get("zakonczenie", "— Tyler Durden")
+
+    # Buduj komentarze JS
+    komentarze_b = {}
+    komentarze_inne = {}
+    for p in pytania:
+        nr = p.get("nr", 0)
+        komentarze_b[nr] = p.get("komentarz_po_wyborze_b", "Dobrze.")
+        komentarze_inne[nr] = p.get("komentarz_po_wyborze_innym", "Typowe.")
+
+    kb_js = json.dumps(komentarze_b)
+    ki_js = json.dumps(komentarze_inne)
+    w_js = json.dumps(wyniki)
+
+    pytania_html = ""
+    for p in pytania:
+        nr = p.get("nr", "?")
+        sytuacja = p.get("sytuacja", "")
+        pytanie_txt = p.get("pytanie", "")
+        odp = p.get("odpowiedzi", {})
+        if isinstance(odp, list):
+            odp = {
+                str(item.get("klucz", item.get("key", chr(97 + i)))): str(
+                    item.get("tresc", item.get("text", ""))
+                )
+                for i, item in enumerate(odp)
+            }
+        elif not isinstance(odp, dict):
+            odp = {}
+        pytania_html += f"""
+<div class="pytanie" id="p{nr}" style="display:none">
+  <div class="nr">Pytanie {nr} / {len(pytania)}</div>
+  <div class="sytuacja">{sytuacja}</div>
+  <div class="pytanie-txt">{pytanie_txt}</div>
+  <div class="opcje">
+    <button class="opcja" onclick="odpowiedz({nr},'a')">a) {odp.get('a', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'b')">b) {odp.get('b', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'c')">c) {odp.get('c', '')}</button>
+  </div>
+  <div class="komentarz" id="k{nr}"></div>
+</div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>{tytul}</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: 'Courier New', monospace; background: #050505; color: #d0c0a0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
+  h1 {{ color: #8b0000; text-align: center; font-size: 1.6em; margin: 30px 0 10px; border-bottom: 2px solid #8b0000; padding-bottom: 10px; width: 100%; max-width: 700px; }}
+  .wstep {{ color: #666; font-style: italic; text-align: center; margin: 15px 0 30px; max-width: 600px; }}
+  .pytanie {{ background: #0f0f0f; border: 1px solid #2a1a1a; border-left: 4px solid #8b0000; padding: 25px; max-width: 700px; width: 100%; border-radius: 0 4px 4px 0; }}
+  .nr {{ color: #8b0000; font-size: 0.8em; margin-bottom: 10px; letter-spacing: 2px; }}
+  .sytuacja {{ color: #888; font-style: italic; margin-bottom: 12px; font-size: 0.9em; line-height: 1.5; }}
+  .pytanie-txt {{ font-size: 1.1em; color: #c8b89a; margin-bottom: 20px; font-weight: bold; }}
+  .opcje {{ display: flex; flex-direction: column; gap: 10px; }}
+  .opcja {{ background: #1a1a1a; border: 1px solid #333; color: #c8b89a; padding: 12px 18px; text-align: left; cursor: pointer; font-family: 'Courier New', monospace; font-size: 0.9em; transition: all 0.2s; border-radius: 2px; }}
+  .opcja:hover {{ background: #2a1a1a; border-color: #8b0000; }}
+  .opcja:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+  .opcja.tyler {{ background: #1a0a0a; border-color: #8b0000; color: #ff6666; }}
+  .komentarz {{ margin-top: 15px; padding: 10px; background: #0a0a0a; border-left: 2px solid #8b0000; color: #8b0000; font-style: italic; display: none; font-size: 0.85em; }}
+  #wynik {{ display: none; background: #0f0f0f; border: 2px solid #8b0000; padding: 30px; max-width: 700px; width: 100%; text-align: center; margin-top: 20px; }}
+  #wynik h2 {{ color: #8b0000; margin-bottom: 15px; }}
+  #wynik .punkty {{ font-size: 2em; color: #c8b89a; margin: 10px 0; }}
+  #wynik .komentarz-wynik {{ color: #888; font-style: italic; }}
+  #start {{ background: #8b0000; color: white; border: none; padding: 15px 40px; font-size: 1.1em; cursor: pointer; font-family: 'Courier New', monospace; margin: 20px 0; letter-spacing: 1px; }}
+  #start:hover {{ background: #a00000; }}
+  .pasek {{ background: #1a1a1a; height: 4px; max-width: 700px; width: 100%; margin: 10px 0; }}
+  .pasek-fill {{ background: #8b0000; height: 100%; transition: width 0.3s; width: 0%; }}
+  footer {{ color: #333; font-size: 0.75em; margin-top: 40px; text-align: center; }}
+</style>
+</head>
+<body>
+<h1>{tytul}</h1>
+<p class="wstep">{wstep}</p>
+<div class="pasek"><div class="pasek-fill" id="pasek"></div></div>
+<button id="start" onclick="startGra()">ROZPOCZNIJ GRĘ</button>
+{pytania_html}
+<div id="wynik">
+  <h2>KONIEC GRY</h2>
+  <div class="punkty" id="punkty-wynik"></div>
+  <div class="komentarz-wynik" id="komentarz-wynik"></div>
+</div>
+<footer>{zakonczenie}</footer>
+<script>
+var bieżace = 0;
+var punkty = 0;
+var total = {len(pytania)};
+var kb = {kb_js};
+var ki = {ki_js};
+var wyniki = {w_js};
+
+function startGra() {{
+  document.getElementById('start').style.display = 'none';
+  pokazPytanie(1);
+}}
+
+function pokazPytanie(nr) {{
+  bieżace = nr;
+  var el = document.getElementById('p' + nr);
+  if (el) el.style.display = 'block';
+  document.getElementById('pasek').style.width = ((nr-1)/total*100) + '%';
+  window.scrollTo(0, document.body.scrollHeight);
+}}
+
+function odpowiedz(nr, wybor) {{
+  var btns = document.querySelectorAll('#p' + nr + ' .opcja');
+  btns.forEach(function(b) {{ b.disabled = true; }});
+  
+  if (wybor === 'b') {{
+    punkty++;
+    btns[1].classList.add('tyler');
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (kb[nr] || 'Dobrze.');
+    k.style.display = 'block';
+  }} else {{
+    var k = document.getElementById('k' + nr);
+    k.innerHTML = '— ' + (ki[nr] || 'Typowe.');
+    k.style.display = 'block';
+    k.style.borderLeftColor = '#444';
+    k.style.color = '#555';
+  }}
+
+  setTimeout(function() {{
+    if (nr < total) {{
+      pokazPytanie(nr + 1);
+    }} else {{
+      pokazWynik();
+    }}
+  }}, 1800);
+}}
+
+function pokazWynik() {{
+  document.getElementById('pasek').style.width = '100%';
+  var wynikDiv = document.getElementById('wynik');
+  wynikDiv.style.display = 'block';
+  document.getElementById('punkty-wynik').innerHTML = punkty + ' / ' + total + ' punktów Tylera';
+  var komentarz = '';
+  if (punkty <= 3) komentarz = wyniki['0_3'] || 'Rozczarowujące.';
+  else if (punkty <= 6) komentarz = wyniki['4_6'] || 'Trochę lepiej.';
+  else if (punkty <= 9) komentarz = wyniki['7_9'] || 'Prawie.';
+  else komentarz = wyniki['10'] || 'Jesteś gotowy.';
+  document.getElementById('komentarz-wynik').innerHTML = komentarz;
+  window.scrollTo(0, document.body.scrollHeight);
+}}
+</script>
+</body>
+</html>"""
+
+    html_b64 = base64.b64encode(html.encode("utf-8")).decode("ascii")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger.info("[gra] OK: %d pytań", len(pytania))
+    return {
+        "base64": html_b64,
+        "content_type": "application/octet-stream",
+        "filename": f"gra_{ts}.htm",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DIAGRAM PRZEPŁYWU SVG
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_flow_diagram_svg(exec_logger) -> dict | None:
+    """Generuje diagram przepływu pokazujący INPUT → API CALLS → SECTIONS."""
+    try:
+        # Pobierz dane z exec_logger metadata (ExecutionLogger, nie logging.Logger)
+        metadata = getattr(exec_logger, "metadata", {}) or {}
+        api_calls = metadata.get("api_calls", [])
+        sections_completed = metadata.get("sections_completed", [])
+        in_history = metadata.get("in_history", "nieznany")
+        in_requiem = metadata.get("in_requiem", "nieznany")
+
+        # Przygotuj dane do wizualizacji
+        deepseek_count = sum(
+            1 for call in api_calls if call.get("provider") == "deepseek"
+        )
+        total_tokens = sum(call.get("tokens", 0) for call in api_calls)
+
+        sections_list = ", ".join(sections_completed) if sections_completed else "brak"
+
+        svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <!-- Tło -->
+  <rect width="800" height="600" fill="#1a1a1a"/>
+
+  <!-- Tytuł -->
+  <text x="400" y="40" font-family="Arial, sans-serif" font-size="24" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">DIAGRAM PRZEPŁYWU</text>
+
+  <!-- INPUT -->
+  <rect x="50" y="100" width="120" height="60" fill="#4CAF50" rx="10"/>
+  <text x="110" y="135" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">INPUT</text>
+
+  <!-- Strzałka 1 -->
+  <polygon points="180,130 200,125 200,135" fill="#ffffff"/>
+  <line x1="170" y1="130" x2="200" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- API CALLS -->
+  <rect x="220" y="80" width="140" height="100" fill="#2196F3" rx="10"/>
+  <text x="290" y="110" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">API CALLS</text>
+  <text x="290" y="135" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">DeepSeek: {deepseek_count}</text>
+  <text x="290" y="155" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Tokens: {total_tokens}</text>
+
+  <!-- Strzałka 2 -->
+  <polygon points="370,130 390,125 390,135" fill="#ffffff"/>
+  <line x1="360" y1="130" x2="390" y2="130" stroke="#ffffff" stroke-width="2"/>
+
+  <!-- SECTIONS -->
+  <rect x="410" y="100" width="140" height="60" fill="#FF9800" rx="10"/>
+  <text x="480" y="125" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">SECTIONS</text>
+  <text x="480" y="140" font-family="Arial, sans-serif" font-size="10"
+        fill="#ffffff" text-anchor="middle">{sections_list[:20]}</text>
+
+  <!-- Status użytkownika -->
+  <rect x="580" y="80" width="160" height="100" fill="#9C27B0" rx="10"/>
+  <text x="660" y="105" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff" text-anchor="middle">STATUS</text>
+  <text x="660" y="125" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Historia: {in_history}</text>
+  <text x="660" y="140" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff" text-anchor="middle">Requiem: {in_requiem}</text>
+
+  <!-- Szczegóły API calls -->
+  <text x="50" y="220" font-family="Arial, sans-serif" font-size="16" font-weight="bold"
+        fill="#ffffff">SZCZEGÓŁY API CALLS:</text>
+
+  <text x="50" y="250" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Łącznie wywołań: {len(api_calls)}</text>
+  <text x="50" y="270" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Sekcje wykonane: {len(sections_completed)}</text>
+  <text x="50" y="290" font-family="Arial, sans-serif" font-size="12"
+        fill="#cccccc">• Czas przetwarzania: ~{len(api_calls) * 2}s</text>
+
+  <!-- Legenda -->
+  <text x="50" y="340" font-family="Arial, sans-serif" font-size="14" font-weight="bold"
+        fill="#ffffff">LEGENDA:</text>
+
+  <rect x="50" y="360" width="15" height="15" fill="#4CAF50"/>
+  <text x="75" y="372" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wejście email</text>
+
+  <rect x="50" y="385" width="15" height="15" fill="#2196F3"/>
+  <text x="75" y="397" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Wywołania AI</text>
+
+  <rect x="50" y="410" width="15" height="15" fill="#FF9800"/>
+  <text x="75" y="422" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Generowane sekcje</text>
+
+  <rect x="50" y="435" width="15" height="15" fill="#9C27B0"/>
+  <text x="75" y="447" font-family="Arial, sans-serif" font-size="12"
+        fill="#ffffff">Status użytkownika</text>
+
+  <!-- Stopka -->
+  <text x="400" y="580" font-family="Arial, sans-serif" font-size="10"
+        fill="#666666" text-anchor="middle">Wygenerowano: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</text>
+</svg>"""
+
+        svg_b64 = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info("[flow_diagram] OK")
+        return {
+            "base64": svg_b64,
+            "content_type": "image/svg+xml",
+            "filename": f"flow_diagram_{ts}.svg",
+        }
+
+    except Exception as e:
+        logger.warning("[flow_diagram] Błąd: %s", e)
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GRA HTML
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_gra_html(body: str, res_text: str) -> dict | None:
+    """Generuje grę interaktywną HTML z wyborami Tylera."""
+    try:
+        with open(GRA_JSON_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        logger.warning("[gra] Brak JSON: %s", e)
+        return None
+
+    system_msg = cfg.get("system", "")
+    schema = cfg.get("output_schema", {})
+    user_msg = (
+        f"Email:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"Odpowiedź Tylera:\n{res_text[:MAX_DLUGOSC_EMAIL]}\n\n"
+        f"SCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{__import__('json').dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"Zwróć TYLKO czysty JSON. Klucz listy pytań MUSI być 'pytania'."
+    )
+
+    # max_tokens=4000 — zwiększone, 10 pytań × ~200 tokenów = min 3500 potrzebnych
+    raw = call_deepseek(_js(system_msg), _ju(user_msg), MODEL_TYLER, max_tokens=4000)
+    if not raw:
+        logger.warning("[gra] Brak odpowiedzi od AI")
+        return None
+
+    logger.info("[gra] raw AI (pierwsze 300 znaków): %.300s", raw)
+
+    try:
+        clean = _strip_json_markdown(raw)
+        data = json.loads(clean)
+        if not isinstance(data, dict):
+            raise ValueError(f"[gra] Oczekiwano dict, dostałem {type(data).__name__}")
+        if not data.get("pytania"):
+            logger.warning("[gra] JSON OK ale brak pytań — raw: %.200s", raw)
+            return None
+    except Exception as e:
+        logger.warning("[gra] Błąd JSON: %s | raw: %.200s", e, raw)
+        return None
+
+    tytul = data.get("tytul_gry", "Gra Tylera Durdena")
+    wstep = data.get("wstep", "")
+    pytania = data.get("pytania", [])
+    wyniki = data.get("wyniki", {})
+    zakonczenie = data.get("zakonczenie", "— Tyler Durden")
+
+    # Buduj komentarze JS
+    komentarze_b = {}
+    komentarze_inne = {}
+    for p in pytania:
+        nr = p.get("nr", 0)
+        komentarze_b[nr] = p.get("komentarz_po_wyborze_b", "Dobrze.")
+        komentarze_inne[nr] = p.get("komentarz_po_wyborze_innym", "Typowe.")
+
+    kb_js = json.dumps(komentarze_b)
+    ki_js = json.dumps(komentarze_inne)
+    w_js = json.dumps(wyniki)
+
+    pytania_html = ""
+    for p in pytania:
+        nr = p.get("nr", "?")
+        sytuacja = p.get("sytuacja", "")
+        pytanie_txt = p.get("pytanie", "")
+        odp = p.get("odpowiedzi", {})
+        if isinstance(odp, list):
+            odp = {
+                str(item.get("klucz", item.get("key", chr(97 + i)))): str(
+                    item.get("tresc", item.get("text", ""))
+                )
+                for i, item in enumerate(odp)
+            }
+        elif not isinstance(odp, dict):
+            odp = {}
+        pytania_html += f"""
+<div class="pytanie" id="p{nr}" style="display:none">
+  <div class="nr">Pytanie {nr} / {len(pytania)}</div>
+  <div class="sytuacja">{sytuacja}</div>
+  <div class="pytanie-txt">{pytanie_txt}</div>
+  <div class="opcje">
+    <button class="opcja" onclick="odpowiedz({nr},'a')">a) {odp.get('a', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'b')">b) {odp.get('b', '')}</button>
+    <button class="opcja" onclick="odpowiedz({nr},'c')">c) {odp.get('c', '')}</button>
+  </div>
+  <div class="komentarz" id="k{nr}"></div>
+</div>"""
+
+    html = f"""<!DOCTYPE
