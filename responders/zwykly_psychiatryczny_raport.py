@@ -469,9 +469,10 @@ def _sekcja_tydzien(
 
         if not isinstance(result, list):
             current_app.logger.warning(
-                "[psych-raport] %s: oczekiwano listy, dostałem %s",
+                "[psych-raport] %s: oczekiwano listy, dostałem %s — wartość: %.100s",
                 tydzien_key,
                 type(result).__name__,
+                result,
             )
             return []
 
@@ -801,6 +802,10 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
             raport = {}
         dane_pacjenta = raport.get("dane_pacjenta", {})
         if not isinstance(dane_pacjenta, dict):
+            current_app.logger.warning(
+                "[psych-raport] relacje_swiadkow: dane_pacjenta zły typ: %s — wartość: %.100s",
+                type(dane_pacjenta).__name__, dane_pacjenta,
+            )
             dane_pacjenta = {}
         pacjent = dane_pacjenta.get("imie_nazwisko", "pacjent")
         diagnoza = raport.get("diagnoza_wstepna", {})
@@ -847,8 +852,8 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
 
         if not isinstance(result, list):
             current_app.logger.warning(
-                "[psych-raport] świadkowie: oczekiwano listy, dostałem %s",
-                type(result).__name__,
+                "[psych-raport] świadkowie: oczekiwano listy, dostałem %s — wartość: %.100s",
+                type(result).__name__, result,
             )
             return {"relacje_swiadkow": []}
 
@@ -1210,8 +1215,11 @@ def _build_docx(
     # ══════════════════════════════════════════════════════════════════════════
     heading("I. DANE PACJENTA", 2, RED, 11)
     dp = raport.get("dane_pacjenta", {})
-    # BUGFIX: dane_pacjenta może być stringiem jeśli AI zwróciło błędny typ
     if not isinstance(dp, dict):
+        current_app.logger.warning(
+            "[psych-docx] dane_pacjenta zły typ: %s — wartość: %.100s",
+            type(dp).__name__, dp,
+        )
         dp = {}
     field("Imię i nazwisko", dp.get("imie_nazwisko", ""))
     field("Wiek", dp.get("wiek", ""))
@@ -1273,6 +1281,12 @@ def _build_docx(
     # ══════════════════════════════════════════════════════════════════════════
     heading("IV. PROTOKÓŁ DEPOZYTU — PRZEDMIOTY SKONFISKOWANE", 2, RED, 11)
     dep = raport.get("depozyt", {})
+    if not isinstance(dep, dict):
+        current_app.logger.warning(
+            "[psych-docx] depozyt zły typ: %s — wartość: %.100s",
+            type(dep).__name__, dep,
+        )
+        dep = {}
     if isinstance(dep, dict):
         lista = dep.get("lista_przedmiotow", [])
         proto = dep.get("protokol_depozytu", "")
@@ -1323,6 +1337,10 @@ def _build_docx(
     farm = raport.get("farmakologia", {})
     # BUGFIX: farmakologia może być stringiem
     if not isinstance(farm, dict):
+        current_app.logger.warning(
+            "[psych-docx] farmakologia zły typ: %s — wartość: %.100s",
+            type(farm).__name__, farm,
+        )
         farm = {}
     leki_lista = farm.get("leki", [])
 
@@ -1347,6 +1365,10 @@ def _build_docx(
             r.font.color.rgb = RED
         for lek in leki_lista:
             if not isinstance(lek, dict):
+                current_app.logger.warning(
+                    "[psych-docx] leki_lista: element zły typ: %s — wartość: %.80s",
+                    type(lek).__name__, lek,
+                )
                 continue
             row = t.add_row().cells
             row[0].text = str(lek.get("nazwa", ""))
@@ -1385,6 +1407,10 @@ def _build_docx(
 
     for d in dni_all:
         if not isinstance(d, dict):
+            current_app.logger.warning(
+                "[psych-docx] hospitalizacja: dzień zły typ: %s — wartość: %.80s",
+                type(d).__name__, d,
+            )
             continue
         dzien = d.get("dzien", "")
         data = d.get("data", "")
@@ -1431,6 +1457,10 @@ def _build_docx(
     wypis = raport.get("wypis", {})
     # BUGFIX: wypis może być stringiem
     if not isinstance(wypis, dict):
+        current_app.logger.warning(
+            "[psych-docx] wypis zły typ: %s — wartość: %.100s",
+            type(wypis).__name__, wypis,
+        )
         wypis = {}
     if isinstance(wypis, dict):
         field("Dzień wypisu", wypis.get("dzien_wypisu", ""))
@@ -1738,7 +1768,14 @@ def build_raport(
     )
     # BUGFIX: farmakologia może być stringiem gdy AI zwróci błędny typ — guard przed .get()
     _farm_tmp = sekcja_dep_leki.get("farmakologia", {})
-    leki_lista = _farm_tmp.get("leki", []) if isinstance(_farm_tmp, dict) else []
+    if not isinstance(_farm_tmp, dict):
+        current_app.logger.warning(
+            "[psych-raport] sekcja_dep_leki.farmakologia zły typ: %s — wartość: %.100s",
+            type(_farm_tmp).__name__, _farm_tmp,
+        )
+        leki_lista = []
+    else:
+        leki_lista = _farm_tmp.get("leki", [])
 
     # Runda 2 — dni hospitalizacji
     dni_1_7 = []
@@ -1786,8 +1823,19 @@ def build_raport(
 
     # ── depozyt i farmakologia
     dep_raw = sekcja_dep_leki.get("depozyt", {}) if isinstance(sekcja_dep_leki, dict) else {}
+    if not isinstance(dep_raw, dict):
+        current_app.logger.warning(
+            "[psych-raport] depozyt zły typ po scaleniu: %s — wartość: %.100s",
+            type(dep_raw).__name__, dep_raw,
+        )
     raport["depozyt"] = dep_raw if isinstance(dep_raw, dict) else {}
+
     farm_raw = sekcja_dep_leki.get("farmakologia", {}) if isinstance(sekcja_dep_leki, dict) else {}
+    if not isinstance(farm_raw, dict):
+        current_app.logger.warning(
+            "[psych-raport] farmakologia zły typ po scaleniu: %s — wartość: %.100s",
+            type(farm_raw).__name__, farm_raw,
+        )
     raport["farmakologia"] = farm_raw if isinstance(farm_raw, dict) else {}
 
     raport["hospitalizacja_tydzien_1"] = dni_1_7 if isinstance(dni_1_7, list) else []
@@ -1816,9 +1864,17 @@ def build_raport(
     PROTECTED_KEYS = {"dane_pacjenta", "depozyt", "farmakologia", "wypis"}
     for sekcja in (sekcja_diagnozy, sekcja_zalecenia):
         if not isinstance(sekcja, dict):
+            current_app.logger.warning(
+                "[psych-raport] sekcja zły typ przy scalaniu: %s",
+                type(sekcja).__name__,
+            )
             continue
         for k, v in sekcja.items():
             if k in DICT_KEYS and not isinstance(v, dict):
+                current_app.logger.warning(
+                    "[psych-raport] klucz '%s' zły typ: %s — wartość: %.100s",
+                    k, type(v).__name__, v,
+                )
                 # Nie nadpisuj poprawnego dict'a z wcześniejszej sekcji pustym {}
                 if k not in raport or not isinstance(raport.get(k), dict):
                     raport[k] = {}
