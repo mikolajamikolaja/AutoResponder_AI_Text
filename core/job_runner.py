@@ -215,24 +215,35 @@ def run_pipeline_async(
                 combined_results[section_key] = result
             sections_done.append(section_key)
 
-            try:
-                _token_refresh(get_token_fn, flask_app, section_key)
-                _send_section_email(
-                    section_key=section_key,
-                    result=result,
-                    sender=sender,
-                    sender_name=sender_name,
-                    previous_subject=previous_subject,
-                    wyslij_odpowiedz_fn=wyslij_odpowiedz,
-                    zbierz_fn=zbierz_zalaczniki_z_response,
-                    flask_app=flask_app,
-                    logger=logger,
+            # Sekcje obsługiwane wewnętrznie przez zwykly — nie wysyłaj osobnego emaila
+            # (zwykly już zawiera emocje/scrabble/analiza w swoim reply_html)
+            _SUBSEKCJE_ZWYKLEGO = {"emocje", "scrabble", "analiza"}
+            _skip_send = section_key in _SUBSEKCJE_ZWYKLEGO and "zwykly" in ordered_keys
+
+            if _skip_send:
+                flask_app.logger.info(
+                    "[async] '%s' — pomijam osobny email (zawarty już w zwykly)",
+                    section_key,
                 )
-                emails_sent += 1
-            except Exception as e:
-                flask_app.logger.error(
-                    "[async] Błąd wysyłki '%s': %s", section_key, e
-                )
+            else:
+                try:
+                    _token_refresh(get_token_fn, flask_app, section_key)
+                    _send_section_email(
+                        section_key=section_key,
+                        result=result,
+                        sender=sender,
+                        sender_name=sender_name,
+                        previous_subject=previous_subject,
+                        wyslij_odpowiedz_fn=wyslij_odpowiedz,
+                        zbierz_fn=zbierz_zalaczniki_z_response,
+                        flask_app=flask_app,
+                        logger=logger,
+                    )
+                    emails_sent += 1
+                except Exception as e:
+                    flask_app.logger.error(
+                        "[async] Błąd wysyłki '%s': %s", section_key, e
+                    )
 
             # ── Drive — zapisujemy każdą sekcję osobno ──────────────────────────
             if save_to_drive and drive_folder_id:

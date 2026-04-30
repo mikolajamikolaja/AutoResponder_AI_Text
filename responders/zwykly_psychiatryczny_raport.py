@@ -1032,12 +1032,25 @@ def _generate_photos_parallel(
             }
         return None
 
+    # Szybkie wyjście gdy brak aktywnych tokenów — nie czekaj 5 minut
+    if not get_active_tokens():
+        log.warning("[psych-flux] Brak aktywnych tokenów — pomijam FLUX, używam zastepczy.jpg")
+        sub = _load_substitute_image()
+        sub_dict = None
+        if sub:
+            sub_dict = {
+                "base64": sub.get("base64"),
+                "content_type": "image/jpeg",
+                "filename": f"zastepczy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg",
+            }
+        return sub_dict, sub_dict
+
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             fut1 = executor.submit(gen_pacjent)
             fut2 = executor.submit(gen_przedmioty)
-            p1 = fut1.result(timeout=300)
-            p2 = fut2.result(timeout=300)
+            p1 = fut1.result(timeout=120)
+            p2 = fut2.result(timeout=120)
             return p1, p2
     except Exception as e:
         log.error("[psych-flux] Błąd równoległy: %s", e)
@@ -1058,6 +1071,26 @@ def _build_docx(
     except ImportError:
         current_app.logger.error("[psych-docx] Brak python-docx")
         return None
+
+    try:
+        return _build_docx_inner(raport, photo_pacjent_b64, photo_przedmioty_b64, cfg)
+    except Exception as e:
+        current_app.logger.error(
+            "[psych-docx] Nieoczekiwany błąd budowania DOCX: %s", e, exc_info=True
+        )
+        return None
+
+
+def _build_docx_inner(
+    raport: dict,
+    photo_pacjent_b64: str | None,
+    photo_przedmioty_b64: str | None,
+    cfg: dict,
+) -> str | None:
+    """Wewnętrzna implementacja — wywoływana przez _build_docx z ochronnym try/except."""
+    from docx import Document
+    from docx.shared import Pt, Cm, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     szpital = cfg.get("szpital", {})
     doc = Document()
