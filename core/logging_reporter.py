@@ -58,16 +58,20 @@ class ExecutionLogger:
     # ── Metody logowania domenowego ────────────────────────────────────────────
 
     def log_input(self, sender: str, subject: str, body: str, sender_name: str = ""):
+        text = body or ""
         self._append_log(
             "INPUT",
             {
                 "sender": sender,
                 "sender_name": sender_name,
-                "subject": subject,
-                "body_length": len(body) if body else 0,
+                "subject": subject or "",
+                "subject_full": subject or "",
+                "subject_length": len(subject or ""),
+                "body_length": len(text),
                 "body_preview": (
-                    (body[:200] + "...") if body and len(body) > 200 else body
+                    (text[:400] + "...") if len(text) > 400 else text
                 ),
+                "body_full": text if len(text) <= 7000 else text[:7000] + "... (truncated)",
             },
         )
 
@@ -154,22 +158,31 @@ class ExecutionLogger:
         response: str,
         tokens_used: int = 0,
         duration_sec: float = 0,
+        model: str = "",
     ):
+        prompt_text = prompt or ""
+        response_text = response or ""
         self._append_log(
             "AI_RESPONSE",
             {
                 "ai_name": ai_name,
-                "prompt_length": len(prompt),
-                "response_length": len(response),
+                "model": model,
+                "prompt_length": len(prompt_text),
+                "response_length": len(response_text),
                 "tokens_used": tokens_used,
                 "duration_sec": duration_sec,
                 "prompt_preview": (
-                    prompt[:1000] + "..." if len(prompt) > 1000 else prompt
+                    prompt_text[:2000] + "..." if len(prompt_text) > 2000 else prompt_text
                 ),
                 "response_preview": (
-                    response[:2000] + "..." if len(response) > 2000 else response
+                    response_text[:2000] + "..." if len(response_text) > 2000 else response_text
                 ),
-                "full_response": response,
+                "prompt_full": (
+                    prompt_text if len(prompt_text) <= 3000 else prompt_text[:3000] + "... (truncated)"
+                ),
+                "full_response": (
+                    response_text if len(response_text) <= 10000 else response_text[:10000] + "... (truncated)"
+                ),
             },
         )
 

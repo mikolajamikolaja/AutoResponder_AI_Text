@@ -846,6 +846,17 @@ def _call_ai_with_fallback(
     """
     # Używa tylko DeepSeek
     result = call_deepseek(system, user, MODEL_TYLER, max_tokens=max_tokens)
+    try:
+        logger.log_ai_response(
+            "deepseek",
+            prompt=user,
+            response=result or "",
+            tokens_used=0,
+            duration_sec=0,
+            model=MODEL_TYLER,
+        )
+    except Exception:
+        pass
     if result:
         return result, "deepseek"
     logger.error("[zwykly] DeepSeek zawiódł!")
@@ -2876,7 +2887,7 @@ def _generate_cv_content(
             logger.warning(
                 "[cv] CV niekompletne z próby 1 — będzie ponownie generowane w próbie 2. Pola: %s",
                 {
-                    k: len(v) if isinstance(v, list) else len(str(v))
+                    k: len(cv_data[k]) if isinstance(cv_data[k], list) else len(str(cv_data[k]))
                     for k in [
                         "doswiadczenie",
                         "umiejetnosci",
@@ -5290,6 +5301,43 @@ def build_zwykly_section(
     user_msg = _render_prompt(prompt_data, body, previous_body, sender_name)
     system_msg = prompt_data.get("system", "")
 
+    logger.log_pipeline_step(
+        "zwykly_build_prompt",
+        input_data={
+            "body": body[:2000],
+            "previous_body": previous_body[:2000],
+            "sender_name": sender_name,
+        },
+        output_data={
+            "prompt_length": len(user_msg),
+            "system_length": len(system_msg),
+            "prompt_preview": (
+                user_msg[:2000] + "... (truncated)"
+                if len(user_msg) > 2000
+                else user_msg
+            ),
+            "system_preview": (
+                system_msg[:1000] + "... (truncated)"
+                if len(system_msg) > 1000
+                else system_msg
+            ),
+        },
+    )
+
+    logger.log_debug_info(
+        "DEEPSEEK_REQUEST",
+        {
+            "system_length": len(system_msg),
+            "prompt_length": len(user_msg),
+            "max_tokens": 6500,
+            "prompt_preview": (
+                user_msg[:2000] + "... (truncated)"
+                if len(user_msg) > 2000
+                else user_msg
+            ),
+        },
+    )
+
     raw, provider = _call_ai_with_fallback(
         _js(system_msg), _ju(user_msg), max_tokens=6500
     )
@@ -5347,8 +5395,22 @@ def build_zwykly_section(
                     pdf_category = m_cat.group(1)
             else:
                 res_text = raw
+        logger.log_pipeline_step(
+            "zwykly_parse_response",
+            input_data={
+                "raw_response": raw[:2000],
+                "provider": provider,
+            },
+            output_data={
+                "parsed_type": type(data).__name__ if data is not None else "None",
+                "res_text_preview": res_text[:1000],
+                "emotion_key": emotion_key,
+                "pdf_category": pdf_category,
+            },
+        )
     except Exception as e:
         logger.warning("[zwykly] Błąd parsowania JSON: %s | raw: %.200s", e, raw)
+        logger.log_error("zwykly_parse_error", str(e))
         res_text = raw
 
     main_section_html = _wrap_section_html(
