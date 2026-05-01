@@ -2774,6 +2774,20 @@ def _generate_cv_content(
 
     user_msg = "\n".join(context_parts)
 
+    execution_logger.log_pipeline_step(
+        "cv_build_prompt",
+        input_data={
+            "body_length": len(body),
+            "body_preview": body[:400],
+            "sender_name": sender_name,
+            "sender_email": sender_email,
+        },
+        output_data={
+            "user_msg_length": len(user_msg),
+            "user_msg_preview": user_msg[:2000],
+        },
+    )
+
     def _normalize_cv_data(cv_data):
         if isinstance(cv_data, list) and cv_data:
             first = cv_data[0]
@@ -2877,6 +2891,14 @@ def _generate_cv_content(
     # Próba 1 — max_tokens=8000
     raw, _ = _call_ai_with_fallback(system_msg, user_msg, max_tokens=8000)
     if raw:
+        execution_logger.log_ai_response(
+            "deepseek",
+            user_msg,
+            raw,
+            tokens_used=0,
+            duration_sec=0,
+            model=MODEL_TYLER,
+        )
         cv_data = _parse_cv(raw)
         if cv_data and _cv_is_complete(cv_data):
             logger.info(
@@ -4462,12 +4484,34 @@ def _build_raport_psychiatryczny(
     context += f"\n\nSCHEMAT JSON — użyj DOKŁADNIE tych kluczy:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
     context += "\n\nKLUCZ dane_pacjenta (dict) i diagnoza_wstepna MUSZĄ istnieć. Zwróć TYLKO czysty JSON."
 
+    execution_logger.log_pipeline_step(
+        "psychiatryczny_raport_build",
+        input_data={
+            "body_length": len(body),
+            "body_preview": body[:400],
+            "res_text_preview": res_text[:400],
+        },
+        output_data={
+            "context_length": len(context),
+            "context_preview": context[:2000],
+        },
+    )
+
     # DeepSeek dla raportu
     raw = call_deepseek(_js(system_msg), _ju(context), MODEL_TYLER)
 
     if not raw:
         logger.warning("[raport] Brak odpowiedzi od AI")
         return None
+
+    execution_logger.log_ai_response(
+        "deepseek",
+        context,
+        raw,
+        tokens_used=0,
+        duration_sec=0,
+        model=MODEL_TYLER,
+    )
 
     logger.info("[raport] raw AI (pierwsze 300 znaków): %.300s", raw)
 
