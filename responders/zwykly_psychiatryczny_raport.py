@@ -269,8 +269,13 @@ def _load_substitute_image() -> dict | None:
 
 
 def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
-    """Sekcja 1 — dane pacjenta (3 osobne DeepSeek)."""
+    """Sekcja 1 — dane pacjenta + powód przyjęcia + cytaty.
+    Wywołuje deepseek_1_pacjent (pełny schemat) jako główne źródło.
+    Jeśli powod_przyjecia lub cytaty_z_przyjecia wychodzą puste,
+    robi OSOBNE wywołania deepseek_1b i deepseek_1c jako awaryjne uzupełnienie.
+    """
     try:
+        # ── Główne wywołanie: deepseek_1_pacjent ─────────────────────────────
         pacjent_cfg = cfg.get("deepseek_1_pacjent", {})
         if not pacjent_cfg:
             current_app.logger.warning(
@@ -282,23 +287,28 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
         schema = pacjent_cfg.get("schema", {})
         instrukcje = pacjent_cfg.get("instrukcje", "")
 
-        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nSENDER_NAME: {sender_name or 'pacjent'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+        user = (
+            f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+            f"SENDER_NAME: {sender_name or 'pacjent'}\n\n"
+            f"INSTRUKCJE:\n{instrukcje}\n\n"
+            f"SCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+        )
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=4000)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja pacjent: brak odpowiedzi AI"
             )
             return {}
 
-        # Dodatkowy retry gdy wynik jest podejrzanie krótki (np. 17 znaków)
+        # Retry gdy wynik zbyt krótki
         MIN_DANE_PACJENTA_LEN = 100
         if len(raw.strip()) < MIN_DANE_PACJENTA_LEN:
             current_app.logger.warning(
-                "[psych-raport] dane_pacjenta zbyt krótkie (%d znaków) — retry z max_tokens=3000",
+                "[psych-raport] dane_pacjenta zbyt krótkie (%d znaków) — retry z max_tokens=5000",
                 len(raw.strip()),
             )
-            raw2 = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=3000)
+            raw2 = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=5000)
             if raw2 and len(raw2.strip()) > len(raw.strip()):
                 raw = raw2
 
@@ -327,6 +337,8 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                 "insurance": "numer_ubezpieczenia",
                 "data_przyjecia": "data_przyjecia",
                 "admission_date": "data_przyjecia",
+                # Obsługa literówki w starym prompcie ('powod_prijecia' bez 'ę')
+                "powod_prijecia": "powod_przyjecia",
             }
             for wrong, right in KEY_MAP.items():
                 if wrong in result and right not in result:
@@ -337,6 +349,73 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                         right,
                     )
 
+        # ── Awaryjne wywołanie 1b: powód przyjęcia ────────────────────────────
+        powod_empty = (
+            not result.get("powod_przyjecia")
+            or str(result.get("powod_przyjecia", "")).strip() in ("", "__BRAK__")
+        )
+        if powod_empty:
+            cfg_1b = cfg.get("deepseek_1b_powod_przyjecia", {})
+            if cfg_1b:
+                current_app.logger.info(
+                    "[psych-raport] powod_przyjecia pusty — wywołuję deepseek_1b"
+                )
+                try:
+                    sys_1b = cfg_1b.get("system", "")
+                    ins_1b = cfg_1b.get("instrukcje", "")
+                    usr_1b = (
+                        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+                        f"SENDER_NAME: {sender_name or 'pacjent'}\n\n"
+                        f"INSTRUKCJE:\n{ins_1b}"
+                    )
+                    raw_1b = _call_with_retry(_s(sys_1b), _u(usr_1b), max_tokens=3000)
+                    if raw_1b:
+                        parsed_1b = _parse_json_safe(raw_1b, "powod_przyjecia")
+                        if isinstance(parsed_1b, dict):
+                            # Obsługa literówki 'powod_prijecia'
+                            if "powod_prijecia" in parsed_1b and "powod_przyjecia" not in parsed_1b:
+                                parsed_1b["powod_przyjecia"] = parsed_1b.pop("powod_prijecia")
+                            powod_val = parsed_1b.get("powod_przyjecia") or parsed_1b.get("powod_prijecia")
+                            if powod_val:
+                                result["powod_przyjecia"] = powod_val
+                                current_app.logger.info("[psych-raport] deepseek_1b powod_przyjecia OK")
+                except Exception as e1b:
+                    current_app.logger.warning("[psych-raport] deepseek_1b błąd: %s", e1b)
+
+        # ── Awaryjne wywołanie 1c: cytaty z izby przyjęć ─────────────────────
+        cytaty_empty = (
+            not result.get("cytaty_z_przyjecia")
+            or (
+                isinstance(result.get("cytaty_z_przyjecia"), list)
+                and len(result["cytaty_z_przyjecia"]) == 0
+            )
+            or str(result.get("cytaty_z_przyjecia", "")).strip() in ("", "__BRAK__")
+        )
+        if cytaty_empty:
+            cfg_1c = cfg.get("deepseek_1c_cytaty", {})
+            if cfg_1c:
+                current_app.logger.info(
+                    "[psych-raport] cytaty_z_przyjecia puste — wywołuję deepseek_1c"
+                )
+                try:
+                    sys_1c = cfg_1c.get("system", "")
+                    ins_1c = cfg_1c.get("instrukcje", "")
+                    usr_1c = (
+                        f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+                        f"SENDER_NAME: {sender_name or 'pacjent'}\n\n"
+                        f"INSTRUKCJE:\n{ins_1c}"
+                    )
+                    raw_1c = _call_with_retry(_s(sys_1c), _u(usr_1c), max_tokens=4000)
+                    if raw_1c:
+                        parsed_1c = _parse_json_safe(raw_1c, "cytaty_z_przyjecia")
+                        if isinstance(parsed_1c, dict):
+                            cytaty_val = parsed_1c.get("cytaty_z_przyjecia")
+                            if cytaty_val:
+                                result["cytaty_z_przyjecia"] = cytaty_val
+                                current_app.logger.info("[psych-raport] deepseek_1c cytaty OK")
+                except Exception as e1c:
+                    current_app.logger.warning("[psych-raport] deepseek_1c błąd: %s", e1c)
+
         current_app.logger.info("[psych-raport] Sekcja pacjent OK")
         return result if isinstance(result, dict) else {"dane_pacjenta": result}
 
@@ -346,69 +425,133 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 
 
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
-    """Sekcja 2 — depozyt + leki."""
+    """Sekcja 2 — depozyt + leki.
+    Próbuje najpierw osobnych wywołań deepseek_2a (depozyt) i deepseek_2b (farmakologia).
+    Jeśli nie istnieją w konfiguracji, spada na deepseek_2_depozyt_leki (stary klucz).
+    """
+    nouns_str = (
+        ", ".join(list(nouns_dict.values())[:10])
+        if nouns_dict
+        else "przedmioty codzienne"
+    )
+
+    def _normalize_dep(result: dict) -> dict:
+        """Normalizuje klucze słownika depozytu/farmakologii."""
+        KEY_MAP = {
+            "deposit": "depozyt",
+            "przedmioty": "lista_przedmiotow",
+            "items": "lista_przedmiotow",
+            "protokol": "protokol_depozytu",
+            "protocol": "protokol_depozytu",
+            "leki": "leki",
+            "drugs": "leki",
+            "medications": "leki",
+            "nota_farmaceutyczna": "nota_farmaceutyczna",
+            "pharmacy_note": "nota_farmaceutyczna",
+        }
+        for wrong, right in KEY_MAP.items():
+            if wrong in result and right not in result:
+                result[right] = result.pop(wrong)
+        return result
+
+    merged = {}
+
+    # ── Próba 1: osobne wywołania 2a + 2b ────────────────────────────────────
+    cfg_2a = cfg.get("deepseek_2a_depozyt", {})
+    cfg_2b = cfg.get("deepseek_2b_farmakologia", {})
+
+    if cfg_2a:
+        try:
+            ins_2a = cfg_2a.get("instrukcje", "")
+            usr_2a = (
+                f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+                f"RZECZOWNIKI Z EMAILA:\n{nouns_str}\n\n"
+                f"INSTRUKCJE:\n{ins_2a}"
+            )
+            raw_2a = _call_with_retry(_s(cfg_2a.get("system", "")), _u(usr_2a), max_tokens=4000)
+            if raw_2a:
+                parsed_2a = _parse_json_safe(raw_2a, "depozyt_2a")
+                if isinstance(parsed_2a, dict):
+                    parsed_2a = _normalize_dep(parsed_2a)
+                    # Wyciągnij podklucz depozyt jeśli zagnieżdżony
+                    dep_val = parsed_2a.get("depozyt", parsed_2a)
+                    if isinstance(dep_val, dict):
+                        merged["depozyt"] = dep_val
+                    current_app.logger.info("[psych-raport] deepseek_2a depozyt OK")
+        except Exception as e2a:
+            current_app.logger.warning("[psych-raport] deepseek_2a błąd: %s", e2a)
+
+    if cfg_2b:
+        try:
+            ins_2b = cfg_2b.get("instrukcje", "")
+            usr_2b = (
+                f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+                f"RZECZOWNIKI Z EMAILA:\n{nouns_str}\n\n"
+                f"INSTRUKCJE:\n{ins_2b}"
+            )
+            raw_2b = _call_with_retry(_s(cfg_2b.get("system", "")), _u(usr_2b), max_tokens=4000)
+            if raw_2b:
+                parsed_2b = _parse_json_safe(raw_2b, "farmakologia_2b")
+                if isinstance(parsed_2b, dict):
+                    parsed_2b = _normalize_dep(parsed_2b)
+                    farm_val = parsed_2b.get("farmakologia", parsed_2b)
+                    if isinstance(farm_val, dict):
+                        merged["farmakologia"] = farm_val
+                    current_app.logger.info("[psych-raport] deepseek_2b farmakologia OK")
+        except Exception as e2b:
+            current_app.logger.warning("[psych-raport] deepseek_2b błąd: %s", e2b)
+
+    # Jeśli udało się zebrać obie sekcje — zwróć
+    if merged.get("depozyt") and merged.get("farmakologia"):
+        current_app.logger.info("[psych-raport] Sekcja depozyt+leki OK (2a+2b)")
+        return merged
+
+    # ── Fallback: stary klucz deepseek_2_depozyt_leki ────────────────────────
     try:
         dep_cfg = cfg.get("deepseek_2_depozyt_leki", {})
         if not dep_cfg:
             current_app.logger.warning(
-                "[psych-raport] Brak konfiguracji deepseek_2_depozyt_leki"
+                "[psych-raport] Brak konfiguracji deepseek_2_depozyt_leki (fallback)"
             )
-            return {}
+            return merged  # zwróć to co mamy z 2a/2b
 
         system = dep_cfg.get("system", "")
         schema = dep_cfg.get("schema", {})
         instrukcje = dep_cfg.get("instrukcje", "")
 
-        nouns_str = (
-            ", ".join(list(nouns_dict.values())[:10])
-            if nouns_dict
-            else "przedmioty codzienne"
+        user = (
+            f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+            f"RZECZOWNIKI Z EMAILA:\n{nouns_str}\n\n"
+            f"INSTRUKCJE:\n{instrukcje}\n\n"
+            f"SCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
         )
-        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nRZECZOWNIKI Z EMAILA:\n{nouns_str}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
         raw = _call_with_retry(_s(system), _u(user), max_tokens=6000)
         if not raw:
-            current_app.logger.warning(
-                "[psych-raport] Sekcja depozyt: brak odpowiedzi AI"
-            )
-            return {}
+            current_app.logger.warning("[psych-raport] Sekcja depozyt fallback: brak AI")
+            return merged
 
-        result = _parse_json_safe(raw, "depozyt")
+        result = _parse_json_safe(raw, "depozyt_fallback")
         if result is None:
-            current_app.logger.warning(
-                "[psych-raport] Sekcja depozyt: JSON nienaprawialny"
-            )
-            return {}
+            return merged
 
-        # Normalizacja kluczy
         if isinstance(result, dict):
-            KEY_MAP = {
-                "deposit": "depozyt",
-                "przedmioty": "lista_przedmiotow",
-                "items": "lista_przedmiotow",
-                "protokol": "protokol_depozytu",
-                "protocol": "protokol_depozytu",
-                "leki": "leki",
-                "drugs": "leki",
-                "medications": "leki",
-                "nota_farmaceutyczna": "nota_farmaceutyczna",
-                "pharmacy_note": "nota_farmaceutyczna",
-            }
-            for wrong, right in KEY_MAP.items():
-                if wrong in result and right not in result:
-                    result[right] = result.pop(wrong)
-                    current_app.logger.info(
-                        "[psych-raport] depozyt: znormalizowano '%s' → '%s'",
-                        wrong,
-                        right,
-                    )
+            result = _normalize_dep(result)
+            # Uzupełnij tylko brakujące
+            if not merged.get("depozyt") and result.get("depozyt"):
+                merged["depozyt"] = result["depozyt"]
+            if not merged.get("farmakologia") and result.get("farmakologia"):
+                merged["farmakologia"] = result["farmakologia"]
+            # Jeśli wynik jest płaski (bez podkluczy depozyt/farmakologia) — przekaż całość
+            if not merged.get("depozyt") and not merged.get("farmakologia"):
+                merged = result
 
-        current_app.logger.info("[psych-raport] Sekcja depozyt+leki OK")
-        return result if isinstance(result, dict) else {"depozyt": result}
+        current_app.logger.info("[psych-raport] Sekcja depozyt+leki OK (fallback)")
+        return merged if isinstance(merged, dict) else {"depozyt": merged}
 
     except Exception as e:
         current_app.logger.error("[psych-raport] Błąd sekcji depozyt: %s", e)
-        return {}
+        return merged
 
 
 def _sekcja_tydzien(
@@ -576,36 +719,104 @@ def _sekcja_wypis(cfg: dict, body: str, data_przyjecia: str) -> dict:
 
 
 def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
-    """Sekcja 6 — diagnozy łacińskie."""
+    """Sekcja 6 — diagnozy łacińskie + objawy.
+    Próbuje najpierw deepseek_6a (diagnozy główne) i deepseek_6b (objawy).
+    Jeśli nie istnieją, spada na deepseek_6_diagnozy_lacina (stary klucz).
+    """
+    historia = (previous_body or "brak historii choroby")[:MAX_DLUGOSC_EMAIL]
+    merged = {}
+
+    # ── Próba 1: osobne wywołania 6a + 6b ────────────────────────────────────
+    cfg_6a = cfg.get("deepseek_6a_diagnozy_glowne", {})
+    cfg_6b = cfg.get("deepseek_6b_objawy", {})
+
+    if cfg_6a:
+        try:
+            ins_6a = cfg_6a.get("instrukcje", "")
+            usr_6a = (
+                f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+                f"HISTORIA CHOROBY:\n{historia}\n\n"
+                f"INSTRUKCJE:\n{ins_6a}"
+            )
+            raw_6a = _call_with_retry(_s(cfg_6a.get("system", "")), _u(usr_6a), max_tokens=4000)
+            if raw_6a:
+                parsed_6a = _parse_json_safe(raw_6a, "diagnozy_6a")
+                if isinstance(parsed_6a, dict):
+                    merged.update(parsed_6a)
+                    current_app.logger.info("[psych-raport] deepseek_6a diagnozy OK")
+        except Exception as e6a:
+            current_app.logger.warning("[psych-raport] deepseek_6a błąd: %s", e6a)
+
+    if cfg_6b:
+        try:
+            ins_6b = cfg_6b.get("instrukcje", "")
+            usr_6b = (
+                f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+                f"INSTRUKCJE:\n{ins_6b}"
+            )
+            raw_6b = _call_with_retry(_s(cfg_6b.get("system", "")), _u(usr_6b), max_tokens=3000)
+            if raw_6b:
+                parsed_6b = _parse_json_safe(raw_6b, "objawy_6b")
+                if isinstance(parsed_6b, dict):
+                    # Uzupełnij merged tylko kluczami których jeszcze nie ma
+                    for k, v in parsed_6b.items():
+                        if k not in merged:
+                            merged[k] = v
+                    current_app.logger.info("[psych-raport] deepseek_6b objawy OK")
+        except Exception as e6b:
+            current_app.logger.warning("[psych-raport] deepseek_6b błąd: %s", e6b)
+
+    # Jeśli mamy cokolwiek — sprawdź czy wystarczające
+    if merged.get("diagnoza_wstepna"):
+        # Normalizacja kluczy
+        KEY_MAP = {
+            "primary_diagnosis": "diagnoza_wstepna",
+            "diagnoza": "diagnoza_wstepna",
+            "diagnosis": "diagnoza_wstepna",
+            "rozpoznanie": "diagnoza_wstepna",
+            "additional_diagnosis": "diagnoza_dodatkowa",
+            "diagnoza_dod": "diagnoza_dodatkowa",
+            "comorbidity": "choroba_wspolistniejaca",
+            "choroba_wspol": "choroba_wspolistniejaca",
+            "symptoms": "objawy",
+            "symptomy": "objawy",
+            "objaw": "objawy",
+        }
+        for wrong, right in KEY_MAP.items():
+            if wrong in merged and right not in merged:
+                merged[right] = merged.pop(wrong)
+        current_app.logger.info("[psych-raport] Sekcja diagnozy OK (6a+6b)")
+        return merged
+
+    # ── Fallback: stary klucz deepseek_6_diagnozy_lacina ─────────────────────
     try:
         diagnozy_cfg = cfg.get("deepseek_6_diagnozy_lacina", {})
         if not diagnozy_cfg:
             current_app.logger.warning(
-                "[psych-raport] Brak konfiguracji deepseek_6_diagnozy_lacina"
+                "[psych-raport] Brak konfiguracji deepseek_6_diagnozy_lacina (fallback)"
             )
-            return {}
+            return merged
 
         system = diagnozy_cfg.get("system", "")
         schema = diagnozy_cfg.get("schema", {})
         instrukcje = diagnozy_cfg.get("instrukcje", "")
 
-        user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nHISTORIA CHOROBY:\n{(previous_body or 'brak historii choroby')[:MAX_DLUGOSC_EMAIL]}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+        user = (
+            f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+            f"HISTORIA CHOROBY:\n{historia}\n\n"
+            f"INSTRUKCJE:\n{instrukcje}\n\n"
+            f"SCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+        )
 
         raw = _call_with_retry(_s(system), _u(user), max_tokens=4000)
         if not raw:
-            current_app.logger.warning(
-                "[psych-raport] Sekcja diagnozy: brak odpowiedzi AI"
-            )
-            return {}
+            current_app.logger.warning("[psych-raport] Sekcja diagnozy fallback: brak AI")
+            return merged
 
-        result = _parse_json_safe(raw, "diagnozy")
+        result = _parse_json_safe(raw, "diagnozy_fallback")
         if result is None:
-            current_app.logger.warning(
-                "[psych-raport] Sekcja diagnozy: JSON nienaprawialny"
-            )
-            return {}
+            return merged
 
-        # Normalizacja kluczy
         if isinstance(result, dict):
             KEY_MAP = {
                 "primary_diagnosis": "diagnoza_wstepna",
@@ -623,18 +834,17 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
             for wrong, right in KEY_MAP.items():
                 if wrong in result and right not in result:
                     result[right] = result.pop(wrong)
-                    current_app.logger.info(
-                        "[psych-raport] diagnozy: znormalizowano '%s' → '%s'",
-                        wrong,
-                        right,
-                    )
+            # Uzupełnij merged brakującymi polami
+            for k, v in result.items():
+                if k not in merged:
+                    merged[k] = v
 
-        current_app.logger.info("[psych-raport] Sekcja diagnozy OK")
-        return result if isinstance(result, dict) else {"diagnoza_wstepna": result}
+        current_app.logger.info("[psych-raport] Sekcja diagnozy OK (fallback)")
+        return merged if isinstance(merged, dict) else {"diagnoza_wstepna": merged}
 
     except Exception as e:
         current_app.logger.error("[psych-raport] Błąd sekcji diagnozy: %s", e)
-        return {}
+        return merged
 
 
 def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:

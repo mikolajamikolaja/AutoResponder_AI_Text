@@ -2739,42 +2739,104 @@ def _generate_cv_content(
         context_parts.append(
             f"\nINSTRUKCJE:\n" + "\n".join(f"- {i}" for i in instrukcje)
         )
-    context_parts.append("\nZwróć TYLKO czysty JSON bez żadnego tekstu poza klamrami.")
+    context_parts.append(
+        "\nKRYTYCZNE: Zwróć TYLKO czysty JSON bez żadnego tekstu poza klamrami. "
+        "WSZYSTKIE pola schematu MUSZĄ być wypełnione — doswiadczenie, wyksztalcenie, "
+        "umiejetnosci, jezyki, zainteresowania, zyciorys, cytat_tylera. "
+        "ZAKAZ zwracania pustych list [] lub pustych stringów dla tych pól."
+    )
 
     user_msg = "\n".join(context_parts)
 
-    raw, _ = _call_ai_with_fallback(system_msg, user_msg, max_tokens=7000)
-
-    if not raw:
-        logger.warning("[cv] Brak odpowiedzi od AI")
-        return None
-
-    try:
-        clean = _strip_json_markdown(raw)
-        # Użyj raw_decode zamiast json.loads — obsługuje "Extra data"
-        decoder = json.JSONDecoder()
-        cv_data = None
+    def _parse_cv(raw: str) -> dict | None:
+        if not raw:
+            return None
         try:
-            cv_data, _ = decoder.raw_decode(clean)
-        except json.JSONDecodeError:
-            for match in re.finditer(r"[{\[]", clean):
-                start = match.start()
-                try:
-                    obj, end = decoder.raw_decode(clean[start:])
-                    if obj is not None:
-                        cv_data = obj
-                        break
-                except json.JSONDecodeError:
-                    continue
-        if cv_data is None:
-            raise ValueError("Nie znaleziono JSON")
-        if not isinstance(cv_data, dict):
-            raise ValueError(f"[cv] Oczekiwano dict, dostałem {type(cv_data).__name__}")
-        logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
+            clean = _strip_json_markdown(raw)
+            decoder = json.JSONDecoder()
+            cv_data = None
+            try:
+                cv_data, _ = decoder.raw_decode(clean)
+            except json.JSONDecodeError:
+                for match in re.finditer(r"[{\[]", clean):
+                    start = match.start()
+                    try:
+                        obj, end = decoder.raw_decode(clean[start:])
+                        if obj is not None:
+                            cv_data = obj
+                            break
+                    except json.JSONDecodeError:
+                        continue
+            if cv_data is None or not isinstance(cv_data, dict):
+                return None
+            return cv_data
+        except Exception:
+            return None
+
+    def _cv_is_complete(cv: dict) -> bool:
+        """Sprawdza czy kluczowe tablicowe sekcje CV są wypełnione."""
+        if not cv:
+            return False
+        required_lists = ["doswiadczenie", "umiejetnosci", "jezyki"]
+        for key in required_lists:
+            val = cv.get(key)
+            if not val or (isinstance(val, list) and len(val) == 0):
+                return False
+        if not cv.get("imie_nazwisko") or cv.get("imie_nazwisko") in ("Anonim Bezdomny", ""):
+            return False
+        return True
+
+    # Próba 1 — max_tokens=8000
+    raw, _ = _call_ai_with_fallback(system_msg, user_msg, max_tokens=8000)
+    if raw:
+        cv_data = _parse_cv(raw)
+        if cv_data and _cv_is_complete(cv_data):
+            logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
+            return cv_data
+        elif cv_data:
+            logger.warning(
+                "[cv] CV niekompletne (puste sekcje) — retry z max_tokens=10000. Pola: %s",
+                {k: type(v).__name__ + f"(len={len(v)})" if isinstance(v, list) else type(v).__name__
+                 for k in ["doswiadczenie", "umiejetnosci", "jezyki", "imie_nazwisko"]
+                 if k in cv_data}
+            )
+
+    # Próba 2 — uproszczony prompt, więcej tokenów
+    context_parts_retry = [
+        f"EMAIL:\n{body[:MAX_DLUGOSC_EMAIL]}",
+    ]
+    if sender_name:
+        context_parts_retry.append(f"\nIMIĘ NADAWCY: {sender_name}")
+    context_parts_retry.append(
+        f"\nWYGENERUJ CV W STYLU TYLERA DURDENA. Zwróć TYLKO czysty JSON z tymi dokładnie polami:\n"
+        f"{json.dumps(schema, ensure_ascii=False, indent=2)}\n\n"
+        f"OBOWIĄZKOWE: doswiadczenie (lista 3 firm), umiejetnosci (lista 5), jezyki (lista min 5), "
+        f"wyksztalcenie (lista 1), zainteresowania (lista 3), zyciorys (string), cytat_tylera (string). "
+        f"ABSOLUTNY ZAKAZ pustych list. Zwróć TYLKO JSON, zaczynając od {{."
+    )
+    user_msg_retry = "\n".join(context_parts_retry)
+    raw2, _ = _call_ai_with_fallback(system_msg, user_msg_retry, max_tokens=10000)
+    if raw2:
+        cv_data2 = _parse_cv(raw2)
+        if cv_data2 and _cv_is_complete(cv_data2):
+            logger.info("[cv] CV (retry) wygenerowane OK: %s", cv_data2.get("imie_nazwisko", "?"))
+            return cv_data2
+        # Zwróć częściowy wynik z pierwszej lub drugiej próby (co bardziej kompletne)
+        if cv_data2:
+            # Uzupełnij pola z pierwszej próby jeśli druga ma braki
+            if cv_data:
+                for k, v in cv_data.items():
+                    if k not in cv_data2 or not cv_data2[k]:
+                        cv_data2[k] = v
+            logger.warning("[cv] CV zwrócone jako częściowe po 2 próbach")
+            return cv_data2
+
+    if cv_data:
+        logger.warning("[cv] CV zwrócone jako częściowe (tylko 1 próba)")
         return cv_data
-    except Exception as e:
-        logger.warning("[cv] Błąd JSON: %s | raw: %.200s", e, raw)
-        return None
+
+    logger.warning("[cv] Brak danych CV po 2 próbach")
+    return None
 
 
 def _generate_cv_photo(body: str, cv_data: dict, test_mode: bool = False) -> str | None:
