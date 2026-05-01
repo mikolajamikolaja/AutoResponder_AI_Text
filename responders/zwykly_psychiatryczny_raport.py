@@ -2236,8 +2236,31 @@ def build_raport(
                     type(v).__name__,
                     v,
                 )
+                # ── BUG FIX 1-3: diagnoza_wstepna / diagnoza_dodatkowa / choroba_wspolistniejaca
+                # AI zwraca string zamiast dict — zawiń tekst w opis_kliniczny żeby nie tracić treści
+                if k in ("diagnoza_wstepna", "diagnoza_dodatkowa", "choroba_wspolistniejaca") and isinstance(v, str) and v.strip():
+                    # Wyciągnij nazwę po "Diagnoza: " jeśli istnieje, resztę do opis_kliniczny
+                    tekst = v.strip()
+                    # Usuń prefiks "Diagnoza: " jeśli AI go dodało
+                    if tekst.lower().startswith("diagnoza:"):
+                        tekst = tekst[len("Diagnoza:"):].strip()
+                    raport[k] = {"nazwa_lacinska": "", "nazwa_polska": "", "kod_dsm": "", "opis_kliniczny": tekst}
+                    current_app.logger.warning(
+                        "[psych-raport] klucz '%s' naprawiony: str→dict z opis_kliniczny", k
+                    )
+                # ── BUG FIX 4: zalecenia_tylera jako lista notatek pielęgniarek
+                # AI myli klucze — lista z imie_pielegniarki trafia do zalecenia_tylera zamiast do notatki
+                elif k == "zalecenia_tylera" and isinstance(v, list) and v and isinstance(v[0], dict) and "imie_pielegniarki" in v[0]:
+                    # Przenieś do notatki_pielegniarek tylko gdy tam jeszcze nic nie ma
+                    if not raport.get("notatki_pielegniarek"):
+                        raport["notatki_pielegniarek"] = v
+                        current_app.logger.warning(
+                            "[psych-raport] zalecenia_tylera (lista pielęgniarek) → przeniesiono do notatki_pielegniarek"
+                        )
+                    # zalecenia_tylera zostają jako pusty dict — sekcja IX nie będzie pusta z błędną treścią
+                    raport[k] = {}
                 # Nie nadpisuj poprawnego dict'a z wcześniejszej sekcji pustym {}
-                if isinstance(v, list) and v:
+                elif isinstance(v, list) and v:
                     raport[k] = v
                 elif k not in raport or not isinstance(raport.get(k), dict):
                     raport[k] = {}
