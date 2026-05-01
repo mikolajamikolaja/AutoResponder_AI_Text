@@ -1068,6 +1068,82 @@ def _sekcja_flux_prompty(
         return {}
 
 
+def _sekcja_leczenie_specjalne(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
+    """Sekcja 9 — leczenie specjalne (deepseek_9_leczenie_specjalne).
+    Zwraca dict z kluczem 'leczenie_specjalne' zawierającym listę metod leczenia.
+    """
+    try:
+        leczenie_cfg = cfg.get("deepseek_9_leczenie_specjalne", {})
+        if not leczenie_cfg:
+            current_app.logger.warning(
+                "[psych-raport] Brak konfiguracji deepseek_9_leczenie_specjalne"
+            )
+            return {}
+
+        system = leczenie_cfg.get("system", "")
+        schema = leczenie_cfg.get("schema", {})
+        instrukcje = leczenie_cfg.get("instrukcje", "")
+
+        # Podsumowanie przebiegu leczenia dla kontekstu
+        dni_str = ""
+        for d in (dni_1_7 or [])[:4] + (dni_8_14 or [])[:4]:
+            if isinstance(d, dict):
+                dni_str += (
+                    f"Dzień {d.get('dzien', '?')}: {d.get('zdarzenie', '')[:100]}\n"
+                )
+
+        user = (
+            f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
+            f"PRZEBIEG HOSPITALIZACJI:\n{dni_str[:600] or 'brak danych'}\n\n"
+            f"INSTRUKCJE:\n{instrukcje}\n\n"
+            f"SCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
+        )
+
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=3000)
+        if not raw:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja leczenie_specjalne: brak odpowiedzi AI"
+            )
+            return {}
+
+        result = _parse_json_safe(raw, "leczenie_specjalne")
+        if result is None:
+            current_app.logger.warning(
+                "[psych-raport] Sekcja leczenie_specjalne: JSON nienaprawialny"
+            )
+            return {}
+
+        # Normalizacja: oczekujemy listy metod lub dict z kluczem leczenie_specjalne
+        if isinstance(result, dict):
+            for key in ("leczenie_specjalne", "metody_leczenia", "treatments", "methods"):
+                if key in result:
+                    val = result[key]
+                    if isinstance(val, list):
+                        current_app.logger.info(
+                            "[psych-raport] leczenie_specjalne: wyciągnięto z klucza '%s' (%d el.)",
+                            key, len(val),
+                        )
+                        return {"leczenie_specjalne": val}
+            # Jeśli dict ale bez listy — zwróć jako słownik metod
+            current_app.logger.info("[psych-raport] leczenie_specjalne: dict → zachowano jako dict")
+            return {"leczenie_specjalne": result}
+
+        if isinstance(result, list):
+            current_app.logger.info(
+                "[psych-raport] leczenie_specjalne OK (%d metod)", len(result)
+            )
+            return {"leczenie_specjalne": result}
+
+        current_app.logger.warning(
+            "[psych-raport] leczenie_specjalne: nieoczekiwany typ %s", type(result).__name__
+        )
+        return {}
+
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Błąd sekcji leczenie_specjalne: %s", e)
+        return {}
+
+
 def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
     """Sekcja relacji świadków (DeepSeek)."""
     try:
@@ -2144,12 +2220,20 @@ def build_raport(
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda2 wypis błąd: %s", e)
 
-    # Runda 3 — zalecenia
+    # Runda 3 — zalecenia + leczenie specjalne
     sekcja_zalecenia = {}
+    sekcja_leczenie_specjalne = {}
     try:
         sekcja_zalecenia = _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14) or {}
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
+
+    try:
+        sekcja_leczenie_specjalne = (
+            _sekcja_leczenie_specjalne(cfg, body, dni_1_7, dni_8_14) or {}
+        )
+    except Exception as e:
+        current_app.logger.error("[psych-raport] Runda3 leczenie_specjalne błąd: %s", e)
 
     # Scalenie całości
     raport = {}
@@ -2344,6 +2428,9 @@ def build_raport(
     except Exception as e:
         current_app.logger.error("[psych-raport] Relacje świadków błąd: %s", e)
     raport["relacje_swiadkow"] = relacje_result.get("relacje_swiadkow", [])
+
+    # Leczenie specjalne (deepseek_9)
+    raport["leczenie_specjalne"] = sekcja_leczenie_specjalne.get("leczenie_specjalne", [])
 
     # FLUX — zdjęcia równolegle
     prompt_pacjent = sekcja_flux.get("prompt_pacjent", "")

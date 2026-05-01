@@ -1,25 +1,116 @@
 {
-  "description": "Prompt dla FLUX — JEDNO zdjęcie przedstawiające stół gabinetowy z 15 rozrzuconymi polaroidami. Każdy polaroid pokazuje inny kąt ujęcia tego samego pacjenta psychiatrycznego w kaftanie, otoczonego przedmiotami z emaila. Zmienne: {{OBJECTS}} = rzeczowniki z Groq (do 8 szt.), {{GENDER}} = płeć, {{NAME}} = imię.",
-
-  "prompt_template": "A top-down documentary photograph of a worn wooden psychiatric examination table. Scattered across the table surface are four Polaroid photographs, slightly overlapping, some tilted at random angles as if tossed there by a doctor. Each Polaroid shows a different shot of the same {{GENDER}} in a white canvas straitjacket with buckled leather straps, surrounded by these objects: {{OBJECTS}}. The four Polaroids show: (1) straight-on frontal shot — patient staring directly into the camera with hollow, thousand-yard-stare eyes, objects arranged on the table beside them; (2) overhead bird's-eye view — patient slumped on hospital bed, objects scattered around on the mattress; (3) close-up detail shot — hands bound in straitjacket straps, one or two objects resting against the restraints; (4) side profile shot — patient seated on metal chair, objects on the floor beside the chair legs. All four Polaroids share the same aesthetic: faded desaturated colors, slight overexposure, soft vignette, visible film grain, white Polaroid borders with handwritten labels: 'Ward B — frontal', 'Ward B — overhead', 'Ward B — detail', 'Ward B — profile'. The examination table itself has a metal tray with medical clipboard, a pen, and a coffee-stained manila folder labeled 'ADMISSION'. Background: cracked institutional green plaster wall, fluorescent strip light casting harsh shadows. Hyper-realistic, 1990s documentary photography style, 35mm grain.Additionally, in the background is a detailed, authentic art photograph depicting a fully nude female silhouette as a canvas for art, with a figure stylized as Helena Bonham Carter as Marla Singer, with uncombed bird's nest hair, heavy, smudged raccoon eye makeup, a nihilistic smile, a trace of blood on her teeth, and a cigarette in her ash-covered fingers, where her entire body from neck to thighs is covered in intricate, symmetrical black-work and dot-work tattoos with precise lines and stippling, displayed as an integral work of art, set in a dilapidated hallway with peeling wallpaper.",
-
-  "notes": [
-    "{{OBJECTS}} — JEDYNA poprawna metoda wstawiania rzeczowników. Kod wstawia automatycznie do 8 rzeczowników z Groq (nouns_dict). NIE pisz [RZECZ001] — to działa tylko w plikach renderowanych przez _render_template.",
-    "{{GENDER}} — zastępowane: 'male patient' lub 'female patient' lub 'patient'",
-    "{{NAME}} — zastępowane imieniem z sender_name (lub 'unknown') — opcjonalnie dodaj do manila folder label",
-    "Efekt końcowy: JEDNO zdjęcie FLUX pokazujące stół z 4 rozrzuconymi polaroidami",
-    "Każdy z 4 polaroidów = inne ujęcie: frontal / overhead / detail (dłonie) / side profile",
-    "Każdy z 4 polaroidów = inne ujęcie: frontal / overhead / detail (dłonie) / side profile",
-    "Przedmioty z emaila widoczne na KAŻDYM polaroidzie w innym układzie",
-    "dopuszczlna brutalna przemoc, krew, nagość "
-  ],
-
-  "fallback_objects": "{{OBJECTS}}",
-
-  "hf_parameters": {
-    "num_inference_steps": 5,
-    "guidance_scale": 5,
-    "width": 1024,
-    "height": 1024
+  "description": "Prompty dla 9 wywołań DeepSeek + 2 DeepSeek. Styl: Dzielny Wojak Szwejk + Monty Python + filozofia Tylera Durdena. Maszynopis psychiatryczny, czarny humor, absurd, nihilizm. v5 — STABILNY JSON: ograniczenia długości + jawne fallbacki.",
+  "szpital": {
+    "nazwa": "Szpital Psychiatryczny im. Tylera Durdena",
+    "adres": "742 Evergreen Terrace, New York, NY 10001",
+    "oddzial": "Oddział Egzystencjalny — Piętro B2 (Poziom Głęboki)",
+    "lekarz": "Dr. T. Durden, MD, PhD, FIGHT"
+  },
+  "deepseek_1_pacjent": {
+    "system": "Jesteś ordynatorem. Generujesz dane pacjenta + powód + cytaty. KLUCZOWE: ogranicz długość — zbyt długi output powoduje brak JSON. Powód przyjęcia: max 6 zdań. Cytaty: max 3. Komentarze: max 5 zdań. ZAWSZE zwróć poprawny JSON. Jeśli brak danych → '__BRAK__'.",
+    "schema": {
+      "numer_historii_choroby": "Losowy numer NY-2026-XXXXX",
+      "data_przyjecia": "DD.MM.YYYY",
+      "dane_pacjenta": {
+        "imie_nazwisko": "sender_name",
+        "rodowód": "Max 3 zdania",
+        "wiek": "Opis",
+        "adres": "Opis lub '__BRAK__'",
+        "zawod": "Opis lub '__BRAK__'",
+        "stan_cywilny": "Opis lub '__BRAK__'",
+        "numer_ubezpieczenia": "Losowy"
+      },
+      "powod_przyjecia": "Max 6 zdań lub '__BRAK__'",
+      "cytaty_z_przyjecia": "Max 3 elementy lub '__BRAK__'"
+    },
+    "instrukcje": "Struktura MUSI być poprawnym JSON. dane_pacjenta = obiekt. Ogranicz długość. Jeśli nie możesz wygenerować → '__BRAK__'.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_1b_powod_przyjecia": {
+    "system": "Jesteś ordynatorem. Piszesz TYLKO powód przyjęcia. Max 6-8 zdań. Każde zdanie odnosi się do emaila. Jeśli brak danych → '__BRAK__'. Zwróć WYŁĄCZNIE JSON.",
+    "instrukcje": "Zwróć JSON: {powod_przyjecia}. Max 8 zdań. TYLKO JSON.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_1c_cytaty": {
+    "system": "Generujesz cytaty. Max 3 cytaty. Każdy: cytat + komentarz 3-5 zdań. Krótkie odpowiedzi = poprawny JSON. Zwróć WYŁĄCZNIE JSON.",
+    "instrukcje": "JSON: cytaty_z_przyjecia = max 3 elementy. Jeśli brak → '__BRAK__'.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_2_depozyt_leki": {
+    "system": "Generujesz depozyt i leki. OGRANICZENIE: max 5 przedmiotów i 5 leków. Każdy opis = 1 zdanie. Zbyt długie odpowiedzi powodują błędy JSON.",
+    "schema": {
+      "depozyt": {
+        "lista_przedmiotow": [
+          "Max 5"
+        ],
+        "protokol_depozytu": "3 zdania lub '__BRAK__'"
+      },
+      "farmakologia": {
+        "leki": [
+          "Max 5"
+        ],
+        "nota_farmaceutyczna": "3 zdania lub '__BRAK__'"
+      }
+    },
+    "instrukcje": "Max 5 elementów. Krótkie opisy. TYLKO JSON.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_2a_depozyt": {
+    "system": "Generujesz tylko depozyt. Max 5 przedmiotów. Każdy = 1 zdanie. Zwróć WYŁĄCZNIE JSON.",
+    "instrukcje": "Min 3, max 5 elementów. Jeśli brak danych → wygeneruj. TYLKO JSON.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_2b_farmakologia": {
+    "system": "Generujesz tylko leki. Max 5 leków. Każdy opis krótki. Zwróć WYŁĄCZNIE JSON.",
+    "instrukcje": "Lista max 5. Jeśli brak → '__BRAK__'.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_3_tydzien1": {
+    "system": "Opis dni 1 i 3. Max 6 zdań na zdarzenie. Jeśli brak → '__BRAK__'.",
+    "instrukcje": "2 dni. Krótkie wpisy. JSON only.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_4_tydzien2": {
+    "system": "Opis dni 14 i 30. Max 6 zdań. Eskalacja absurdu. Jeśli brak → '__BRAK__'.",
+    "instrukcje": "2 dni. JSON only.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_5_wypis": {
+    "system": "Karta wypisu. OGRANICZENIE: każde pole max 5-6 zdań. Zalecenia max 8 punktów.",
+    "instrukcje": "Krótko. JSON only.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_6_diagnozy_lacina": {
+    "system": "Diagnozy. Max 5 zdań na opis. Objawy max 5.",
+    "instrukcje": "JSON only.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_7_zalecenia_notatki": {
+    "system": "Zalecenia + notatki. OGRANICZENIE: krótkie formy. Max 3 notatki.",
+    "instrukcje": "JSON only.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_8_flux_prompty": {
+    "system": "Prompty FLUX. Max 120 słów każdy.",
+    "instrukcje": "JSON only.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "deepseek_9_leczenie_specjalne": {
+    "system": "8 metod leczenia. Każda max 3 zdania.",
+    "instrukcje": "JSON only.",
+    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+  },
+  "_json_output_rules": {
+    "_comment": "REGUŁY ODPORNOŚCI JSON — nie zmieniać wytycznych, tylko format odpowiedzi",
+    "format": "Odpowiedź WYŁĄCZNIE jako czysty JSON. Pierwszy znak: { lub [. Ostatni znak: } lub ]. Zakaz tekstu poza nawiasami.",
+    "brak_danych": "Gdy brak danych użyj '__BRAK__' (string), nigdy null ani pominięcia klucza.",
+    "listy_puste": "Gdy lista pusta użyj [] — nigdy null ani brak klucza.",
+    "obiekty_puste": "Gdy obiekt pusty użyj {} — nigdy null ani brak klucza.",
+    "max_tokens_warning": "Jeśli output może być za długi — skróć opisy. Nigdy nie ucinaj zamykających nawiasów }].",
+    "typy": {
+      "string": "Zawsze w cudzysłowach. Zakaz niezamkniętych ciągów.",
+      "lista": "Zawsze [ ... ]. Ostatni element bez przecinka.",
+      "obiekt": "Zawsze { ... }. Ostatnie pole bez przecinka."
+    }
   }
 }

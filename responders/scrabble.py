@@ -237,7 +237,7 @@ def build_scrabble_section(body: str) -> dict:
     """
     prompt_template = load_prompt(
         "prompt_scrabble.txt",
-        fallback="Odpowiedz krótko i ciekawie na poniższy tekst: {{USER_TEXT}}",
+        fallback="Odpowiedz krótko i inspiurująco i wymijająco na poniższy tekst: {{USER_TEXT}}",
     )
     prompt_for_model = prompt_template.replace("{{USER_TEXT}}", body[:3000])
 

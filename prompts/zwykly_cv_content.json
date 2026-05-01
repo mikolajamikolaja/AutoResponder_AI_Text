@@ -86,5 +86,32 @@
     "ZAKAZ: Imion/nazw firm które nie mają związku z emailem (zakaz 'Kocie Sprawki' gdy email jest o górnictwie).",
     "ZAKAZ: Ogólnych fraz w stylu 'praca w różnych firmach', 'komunikacja interpersonalna', 'obsługa komputera'.",
     "ZAKAZ: Życiorysu bez konkretnych faktów z emaila — każde zdanie musi mieć zakotwiczenie w treści wiadomości."
-  ]
+  ],
+  "_json_output_rules": {
+    "_comment": "REGUŁY ODPORNOŚCI JSON — nie zmieniać wytycznych, tylko format odpowiedzi",
+    "format": "Odpowiedź WYŁĄCZNIE jako czysty JSON. Pierwszy znak: {. Ostatni znak: }. Zakaz tekstu poza nawiasami.",
+    "brak_danych": "Gdy brak danych użyj '__BRAK__' (string), nigdy null ani pominięcia klucza.",
+    "listy": "Wszystkie listy (doswiadczenie, wyksztalcenie, umiejetnosci, jezyki, zainteresowania) zawsze jako [ ... ]. Zakaz pominięcia.",
+    "max_tokens_warning": "Jeśli output może być za długi — skróć opis w polach. Nigdy nie ucinaj zamykających nawiasów }].",
+    "typy": {
+      "string_fields": "imie_nazwisko, tytul_zawodowy, email, telefon, miasto, podsumowanie, zyciorys, cytat_tylera — zawsze string w cudzysłowach.",
+      "lista_fields": "doswiadczenie, wyksztalcenie, umiejetnosci, jezyki, zainteresowania — zawsze tablica [].",
+      "obiekt_w_liscie": "Każdy element doswiadczenie[] i wyksztalcenie[] to obiekt {} z wymaganymi kluczami."
+    },
+    "wymagane_klucze": [
+      "imie_nazwisko",
+      "tytul_zawodowy",
+      "email",
+      "telefon",
+      "miasto",
+      "podsumowanie",
+      "doswiadczenie",
+      "wyksztalcenie",
+      "umiejetnosci",
+      "jezyki",
+      "zainteresowania",
+      "zyciorys",
+      "cytat_tylera"
+    ]
+  }
 }

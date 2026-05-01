@@ -1,0 +1,54 @@
+„Słuchaj, przejrzałem ten plik JSON i to jest jedna wielka mina techniczna. Przez brak rygoru w strukturze wszystko się sypie przy pierwszej lepszej próbie parsowania.
+
+**Przyjrzyj plik pod kątem poniższych błędów i napraw to natychmiast:**
+
+*   **Maskowanie cudzysłowów (Double Escaping):** Wewnątrz stringów instrukcji mamy cudzysłowy, które nie są poprawnie maskowane. AI głupieje, a parser wywala błąd składni, bo myśli, że string kończy się wcześniej. Używaj wszędzie `\\\"` tam, gdzie wewnątrz opisu pojawia się cudzysłów.
+*   **Apostrofy zamiast cudzysłowów:** JSON nie uznaje pojedynczych apostrofów `'` jako ograniczników stringów. Wszystkie przykłady typu `'__BRAK__'` mają być zamienione na poprawne, maskowane cudzysłowy.
+*   **Brakujące pola `schema`:** Niektóre moduły opierają się tylko na opisie słownym. AI potrzebuje technicznego wzorca w polu `schema`, żeby wiedzieć, czy ma zwrócić obiekt, tablicę czy string. Dopisz brakujące schematy do każdego zapytania.
+*   **Błędy w zagnieżdżeniach:** Pola takie jak `dane_pacjenta` muszą być jawnymi obiektami w JSON-ie, a nie spłaszczonym tekstem.
+*   **Znaki nowej linii:** Wymuś w instrukcjach, żeby AI nie wstawiało enterów wewnątrz wartości (stringów), bo to najprostsza droga do błędu `Unterminated string`.
+
+Ma być czysto, stabilnie i gotowe pod automatyzację. Niech ten JSON w końcu zacznie przechodzić walidację bez błędów.”
+
+
+To świetna decyzja. W systemach opartych na JSON nadmiar tekstu to „śmierć” dla stabilności – zwiększa ryzyko ucięcia danych, błędu składni i kosztuje fortunę w tokenach.
+
+Oto poprawiony, „ostry” prompt dla Twojego programisty. Skopiuj mu to w całości:
+
+---
+
+### **FIX: Optymalizacja struktury JSON i limitowanie odpowiedzi (KRYTYCZNE)**
+
+Słuchaj, przejrzałem konfigurację i musimy ją natychmiast uszczelnić, zanim system zacznie wypluwać błędy `Invalid JSON` albo `Unterminated string`. Model DeepSeek jest zbyt gadatliwy – musimy mu założyć „kaganiec”.
+
+**Zmień podejście w pliku konfiguracyjnym według tych punktów:**
+
+1.  **ZAMIEŃ MINIMA NA SZTYWNE RAMY (Kluczowe!):**
+    *   Koniec z instrukcjami typu „Minimum 8 zdań”. To otwiera drogę do nieskończonych elaboratów, które ucinają JSON-a.
+    *   Wszędzie wprowadzamy limity typu: **„Dokładnie 4-6 zwięzłych zdań”** lub **„Maksymalnie 3 zdania”**. 
+    *   Dodaj w instrukcjach: **„ZAKAZ lania wody, wstępów i zbędnych uprzejmości. Pisz gęsto i konkretnie”**.
+
+2.  **USZCZELNIJ SKŁADNIĘ (Standard JSON):**
+    *   **Double Escaping:** Każdy cudzysłów wewnątrz stringów instrukcji musi być maskowany potrójnie: `\\\"`. To zapobiega rozsypaniu się całego obiektu.
+    *   **Zero apostrofów:** JSON nie zna apostrofów. Wszystkie `'__BRAK__'` czy `'Jan Kowalski'` mają być zamienione na `\\\"__BRAK__\\\"`.
+
+3.  **WYMUŚ JEDNĄ LINIĘ (Inline JSON):**
+    *   Dodaj do każdego modułu wymóg: **„Wartości tekstowe nie mogą zawierać znaków nowej linii (enterów). Cały tekst musi być w jednej linii”**. To uratuje nas przed błędami parsera.
+
+4.  **STABILIZACJA SCHEMATU:**
+    *   Każdy moduł musi mieć jawne pole `schema`. Jeśli oczekujemy listy cytatów, schemat musi pokazywać tablicę: `[{"cytat": "...", "komentarz": "..."}]`. Dzięki temu AI nie wyśle nam płaskiego tekstu, którego nie da się obrobić.
+
+5.  **WYCINKA TOKENÓW:**
+    *   Usuń zbędne powtórzenia o „pierwszym i ostatnim znaku” z sekcji `system`. Zostaw to tylko raz w `instrukcje`. Im mniej szumu w prompcie, tym model lepiej trzyma się limitów długości.
+
+**Przykład wzorcowego pola (do wdrożenia):**
+> `"komentarz": "Dokładnie 4-5 zdań analizy. Maksymalnie 500 znaków. Zero znaków nowej linii."`
+
+**Zrób to teraz we wszystkich modułach (1, 1a, 1b, 1c, 2). Ma być krótko, absurdalnie i technicznie kuloodpornie.**
+
+---
+
+### **Dla Ciebie (co to zmieni):**
+Dzięki temu zamiast czekać 30 sekund na wygenerowanie powieści przez AI, dostaniesz wynik w 5 sekund. Odpowiedzi będą „gęstsze”, bardziej uderzające humorem, a błędy techniczne spadną niemal do zera.
+
+Czy chcesz, żebym teraz przeredagował jeden z Twoich modułów (np. `1c_cytaty`), pokazując jak zastosować te sztywne limity w praktyce?
