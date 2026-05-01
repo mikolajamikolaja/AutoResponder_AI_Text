@@ -2690,7 +2690,7 @@ def _generate_icon_flux(emotion_key: str, sender_name: str = "") -> str | None:
 
 
 def _generate_cv_content(
-    body: str, previous_body: str | None, sender_email: str
+    body: str, previous_body: str | None, sender_email: str, sender_name: str = ""
 ) -> dict | None:
     """
     Generuje treść CV w stylu Tylera przez DeepSeek AI.
@@ -2710,6 +2710,13 @@ def _generate_cv_content(
     instrukcje = cv_cfg.get("instrukcje_dodatkowe", [])
 
     context_parts = [f"EMAIL:\n{body[:MAX_DLUGOSC_EMAIL]}"]
+    if sender_name and sender_name.strip():
+        context_parts.append(f"\nIMIĘ NADAWCY (SENDER_NAME): {sender_name}")
+        context_parts.append(
+            f"KRYTYCZNE: pole 'imie_nazwisko' w CV MUSI zaczynać się od '{sender_name}' "
+            f"lub zawierać imię '{sender_name}' + wymyślone nazwisko nawiązujące do emaila. "
+            f"ZAKAZ 'Anonim Bezdomny' lub jakiegokolwiek imienia bez związku z nadawcą."
+        )
     if previous_body and previous_body.strip():
         context_parts.append(
             f"\nPOPRZEDNIA WIADOMOŚĆ:\n{previous_body[:MAX_DLUGOSC_EMAIL]}"
@@ -5088,7 +5095,7 @@ def build_zwykly_section(
         }
 
     cv_pdf = None
-    cv_data = _generate_cv_content(body, previous_body, sender_email)
+    cv_data = _generate_cv_content(body, previous_body, sender_email, sender_name)
     if cv_data:
         cv_photo = _generate_cv_photo(body, cv_data, test_mode=test_mode)
         cv_pdf = _build_cv_pdf(cv_data, cv_photo)

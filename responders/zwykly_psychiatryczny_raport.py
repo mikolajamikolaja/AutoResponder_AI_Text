@@ -283,7 +283,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
 
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nSENDER_NAME: {sender_name or 'pacjent'}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=400)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=2000)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja pacjent: brak odpowiedzi AI"
@@ -291,13 +291,13 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
             return {}
 
         # Dodatkowy retry gdy wynik jest podejrzanie krótki (np. 17 znaków)
-        MIN_DANE_PACJENTA_LEN = 30
+        MIN_DANE_PACJENTA_LEN = 100
         if len(raw.strip()) < MIN_DANE_PACJENTA_LEN:
             current_app.logger.warning(
-                "[psych-raport] dane_pacjenta zbyt krótkie (%d znaków) — retry z max_tokens=4000",
+                "[psych-raport] dane_pacjenta zbyt krótkie (%d znaków) — retry z max_tokens=3000",
                 len(raw.strip()),
             )
-            raw2 = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=4000)
+            raw2 = call_deepseek(_s(system), _u(user), MODEL_TYLER, max_tokens=3000)
             if raw2 and len(raw2.strip()) > len(raw.strip()):
                 raw = raw2
 
@@ -705,6 +705,34 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
                         wrong,
                         right,
                     )
+
+            # Naprawa: AI czasem zwraca zalecenia_tylera jako listę notatek pielęgniarek
+            # zamiast dict {naglowek, zadanie_1, zadanie_2, zadanie_3, podpis}
+            zt = result.get("zalecenia_tylera")
+            if isinstance(zt, list):
+                current_app.logger.warning(
+                    "[psych-raport] zalecenia_tylera jest listą (%d el.) — próba rekonstrukcji dict",
+                    len(zt),
+                )
+                # Sprawdź czy to lista notatek pielęgniarek zamiast zadań
+                if zt and isinstance(zt[0], dict) and "imie_pielegniarki" in zt[0]:
+                    # AI pomyliło klucze — przenieś listę do notatek_pielegniarek
+                    if not result.get("notatki_pielegniarek"):
+                        result["notatki_pielegniarek"] = zt
+                    result["zalecenia_tylera"] = {}
+                    current_app.logger.warning(
+                        "[psych-raport] zalecenia_tylera → przeniesiono do notatki_pielegniarek"
+                    )
+                else:
+                    # Lista zadań — przebuduj jako dict
+                    rebuilt = {}
+                    for i, item in enumerate(zt[:3], 1):
+                        if isinstance(item, dict):
+                            task = item.get("zadanie") or item.get("tresc") or item.get(f"zadanie_{i}", "")
+                        else:
+                            task = str(item)
+                        rebuilt[f"zadanie_{i}"] = task
+                    result["zalecenia_tylera"] = rebuilt
 
         current_app.logger.info("[psych-raport] Sekcja zalecenia OK")
         return result if isinstance(result, dict) else {"zalecenia_tylera": result}
@@ -1855,6 +1883,8 @@ def build_raport(
 
     # ── dane_pacjenta: _sekcja_pacjent zwraca PŁASKI dict — opakowujemy
     PACJENT_FIELDS = {"imie_nazwisko", "wiek", "adres", "zawod", "stan_cywilny", "numer_ubezpieczenia", "rodowod", "rodowód"}
+    # Klucze które mogą być na płaskim poziomie obok dane_pacjenta
+    RAPORT_TOP_KEYS = {"numer_historii_choroby", "data_przyjecia", "powod_przyjecia", "cytaty_z_przyjecia"}
     if isinstance(sekcja_pacjent, dict):
         if "dane_pacjenta" in sekcja_pacjent and isinstance(sekcja_pacjent["dane_pacjenta"], dict):
             raport["dane_pacjenta"] = sekcja_pacjent["dane_pacjenta"]
@@ -1864,6 +1894,10 @@ def build_raport(
         else:
             # AI zwróciło płaski dict — zbieramy pola pacjenta
             dane_pac = {k: v for k, v in sekcja_pacjent.items() if k in PACJENT_FIELDS}
+            # Zbieramy też top-level klucze raportu (numer, data, powód, cytaty)
+            for k, v in sekcja_pacjent.items():
+                if k in RAPORT_TOP_KEYS:
+                    raport[k] = v
             # Zabezpieczenie: dane_pacjenta MUSI być dict, nigdy stringiem
             raport["dane_pacjenta"] = dane_pac if dane_pac else {
                 "imie_nazwisko": sender_name or "pacjent",
@@ -1874,7 +1908,7 @@ def build_raport(
                 "numer_ubezpieczenia": "__BRAK__",
             }
             for k, v in sekcja_pacjent.items():
-                if k not in PACJENT_FIELDS:
+                if k not in PACJENT_FIELDS and k not in RAPORT_TOP_KEYS:
                     raport[k] = v
 
     # ── depozyt i farmakologia
