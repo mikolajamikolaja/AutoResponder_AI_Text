@@ -181,17 +181,68 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     except Exception:
         pass
 
-    # Fallback: jeśli to czyste słowa (bez JSON), zapakuj w dict
+    # Fallback: jeśli to czyste słowa (bez JSON), zapakuj w raw text wrapper
     if len(clean) > 10 and "{" not in clean and "[" not in clean:
         current_app.logger.warning(
             "[psych-raport] Sekcja %s: fallback tekstowy (brak JSON)", section
         )
-        return {"content": clean}
+        return {"__raw_text__": clean}
 
     current_app.logger.error(
         "[psych-raport] JSON nienaprawialny sekcja=%s (raw_len=%d)", section, len(raw)
     )
-    return None
+    return {"__error__": "parse_failed", "raw": raw[:500]}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SEKCJE WYNIKÓW I WALIDACJA
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def validate_section(data, required_keys):
+    if not isinstance(data, dict):
+        return False
+    for key in required_keys:
+        value = data.get(key)
+        if not value or str(value).strip() in ("", "__BRAK__"):
+            return False
+    return True
+
+
+def _section_result(data, status: str) -> dict:
+    return {"data": data, "status": status}
+
+
+def _unwrap_section(section):
+    if isinstance(section, dict) and "data" in section and "status" in section:
+        return section["data"]
+    return section
+
+
+def _section_status(section):
+    if isinstance(section, dict) and "status" in section:
+        return section["status"]
+    return "unknown"
+
+
+def _wrap_section(raw, section_name: str) -> dict:
+    if isinstance(raw, dict) and "data" in raw and "status" in raw:
+        return raw
+    if raw is None:
+        current_app.logger.warning(
+            "[psych-raport] sekcja %s: brak wyniku (None)", section_name
+        )
+        return {"data": {"__error__": "empty_result", "raw": "None"}, "status": "error"}
+    if raw == {}:
+        current_app.logger.warning(
+            "[psych-raport] sekcja %s: pusty dict — traktuję jako błąd", section_name
+        )
+        return {"data": {"__error__": "empty_result", "raw": "{}"}, "status": "error"}
+    if isinstance(raw, dict) and raw.get("__error__"):
+        return {"data": raw, "status": "error"}
+    if isinstance(raw, dict) and raw.get("__raw_text__"):
+        return {"data": raw, "status": "fallback"}
+    return {"data": raw, "status": "ok"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -292,7 +343,10 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
             current_app.logger.warning(
                 "[psych-raport] Brak konfiguracji deepseek_1_pacjent"
             )
-            return {}
+            return _section_result(
+                {"__error__": "missing_configuration", "raw": "no deepseek_1_pacjent"},
+                "error",
+            )
 
         system = pacjent_cfg.get("system", "")
         schema = pacjent_cfg.get("schema", {})
@@ -310,7 +364,10 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
             current_app.logger.warning(
                 "[psych-raport] Sekcja pacjent: brak odpowiedzi AI"
             )
-            return {}
+            return _section_result(
+                {"__error__": "no_ai_response", "raw": ""},
+                "error",
+            )
 
         # Retry gdy wynik zbyt krótki
         MIN_DANE_PACJENTA_LEN = 100
@@ -324,11 +381,35 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                 raw = raw2
 
         result = _parse_json_safe(raw, "dane_pacjenta")
-        if result is None:
+        if isinstance(result, dict) and result.get("__error__"):
             current_app.logger.warning(
                 "[psych-raport] Sekcja pacjent: JSON nienaprawialny"
             )
-            return {}
+            return _section_result(result, "error")
+
+        if isinstance(result, dict) and result.get("__raw_text__"):
+            current_app.logger.warning(
+                "[psych-raport] Sekcja pacjent: otrzymano surowy tekst zamiast JSON"
+            )
+            return _section_result(result, "fallback")
+
+        if isinstance(result, dict) and not validate_section(
+            result, ["powod_przyjecia"]
+        ):
+            current_app.logger.warning(
+                "[psych-raport] Sekcja pacjent: brak powodu przyjęcia — retry główne wywołanie"
+            )
+            raw_retry = call_deepseek(
+                _s(system), _u(user), MODEL_TYLER, max_tokens=5000
+            )
+            if raw_retry:
+                result_retry = _parse_json_safe(raw_retry, "dane_pacjenta")
+                if isinstance(result_retry, dict) and not result_retry.get("__error__"):
+                    if validate_section(result_retry, ["powod_przyjecia"]):
+                        current_app.logger.info(
+                            "[psych-raport] Sekcja pacjent: powod_przyjecia uzyskany po retry"
+                        )
+                        result = result_retry
 
         # Obsługa listy zamiast dict — bierz pierwszy element jeśli to dict
         if isinstance(result, list):
@@ -350,7 +431,7 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                 current_app.logger.warning(
                     "[psych-raport] dane_pacjenta: list bez dict — fallback do pustego dict"
                 )
-                result = {}
+                result = {"__error__": "no_dict_in_list", "raw": str(result)[:500]}
 
         # Normalizacja kluczy
         if isinstance(result, dict):
@@ -465,12 +546,20 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                         "[psych-raport] deepseek_1c błąd: %s", e1c
                     )
 
-        current_app.logger.info("[psych-raport] Sekcja pacjent OK")
-        return result if isinstance(result, dict) else {"dane_pacjenta": result}
+        status = "ok"
+        if isinstance(result, dict) and result.get("__raw_text__"):
+            status = "fallback"
+        current_app.logger.info("[psych-raport] Sekcja pacjent %s", status)
+        if isinstance(result, dict):
+            return _section_result(result, status)
+        return _section_result({"dane_pacjenta": result}, status)
 
     except Exception as e:
         current_app.logger.error("[psych-raport] Błąd sekcji pacjent: %s", e)
-        return {}
+        return _section_result(
+            {"__error__": "exception", "raw": str(e)[:500]},
+            "error",
+        )
 
 
 def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
@@ -1556,7 +1645,16 @@ def _build_docx_inner(
         r.font.color.rgb = color
         return p
 
+    def _docx_unwrap(value):
+        if isinstance(value, dict):
+            if "__error__" in value:
+                return "[BŁĄD GENEROWANIA]"
+            if "__raw_text__" in value:
+                return value["__raw_text__"]
+        return value
+
     def field(label, value, label_color=DARK, val_color=DARK, size=10):
+        value = _docx_unwrap(value)
         if value in (None, "", [], {}, "__BRAK__"):
             value = "[brak danych]"
             val_color = LGREY
@@ -1641,19 +1739,29 @@ def _build_docx_inner(
     # ══════════════════════════════════════════════════════════════════════════
     heading("I. DANE PACJENTA", 2, RED, 11)
     dp = raport.get("dane_pacjenta", {})
-    if not isinstance(dp, dict):
-        current_app.logger.warning(
-            "[psych-docx] dane_pacjenta zły typ: %s — wartość: %.100s",
-            type(dp).__name__,
-            dp,
+    if isinstance(dp, dict) and "__error__" in dp:
+        para(
+            "[BŁĄD GENEROWANIA DANYCH PACJENTA]",
+            italic=True,
+            color=LGREY,
+            size=9,
         )
-        dp = {}
-    field("Imię i nazwisko", dp.get("imie_nazwisko", ""))
-    field("Wiek", dp.get("wiek", ""))
-    field("Adres", dp.get("adres", ""))
-    field("Zawód", dp.get("zawod", ""))
-    field("Stan cywilny", dp.get("stan_cywilny", ""))
-    field("Nr ubezpieczenia", dp.get("numer_ubezpieczenia", ""))
+    elif isinstance(dp, dict) and "__raw_text__" in dp:
+        para(dp["__raw_text__"], italic=True, color=GREY, size=9)
+    else:
+        if not isinstance(dp, dict):
+            current_app.logger.warning(
+                "[psych-docx] dane_pacjenta zły typ: %s — wartość: %.100s",
+                type(dp).__name__,
+                dp,
+            )
+            dp = {}
+        field("Imię i nazwisko", dp.get("imie_nazwisko", ""))
+        field("Wiek", dp.get("wiek", ""))
+        field("Adres", dp.get("adres", ""))
+        field("Zawód", dp.get("zawod", ""))
+        field("Stan cywilny", dp.get("stan_cywilny", ""))
+        field("Nr ubezpieczenia", dp.get("numer_ubezpieczenia", ""))
     doc.add_paragraph()
 
     if photo_pacjent_b64:
@@ -1670,7 +1778,8 @@ def _build_docx_inner(
     # SEKCJA 2 — POWÓD PRZYJĘCIA
     # ══════════════════════════════════════════════════════════════════════════
     heading("II. POWÓD PRZYJĘCIA", 2, RED, 11)
-    powod = raport.get("powod_przyjecia") or ""
+    powod = raport.get("powod_przyjecia")
+    powod = _docx_unwrap(powod)
     if not powod or powod == "__BRAK__":
         para(
             "[brak danych — sekcja nie została wygenerowana]",
@@ -1687,7 +1796,24 @@ def _build_docx_inner(
     # ══════════════════════════════════════════════════════════════════════════
     heading("III. CYTATY Z IZBY PRZYJĘĆ", 2, RED, 11)
     cytaty = raport.get("cytaty_z_przyjecia")
-    if not cytaty or cytaty == "__BRAK__":
+    if isinstance(cytaty, dict):
+        if "__error__" in cytaty:
+            para(
+                "[BŁĄD GENEROWANIA]",
+                italic=True,
+                color=LGREY,
+                size=9,
+            )
+        elif "__raw_text__" in cytaty:
+            para(cytaty["__raw_text__"], italic=True, color=GREY, size=9)
+        else:
+            para(
+                "[brak danych — cytaty nie zostały wygenerowane]",
+                italic=True,
+                color=LGREY,
+                size=9,
+            )
+    elif not cytaty or cytaty == "__BRAK__":
         para(
             "[brak danych — cytaty nie zostały wygenerowane]",
             italic=True,
@@ -2182,42 +2308,56 @@ def build_raport(
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Runda 1 — sekcje niezależne (równolegle)
-    sekcja_pacjent = {}
-    sekcja_dep_leki = {}
-    sekcja_diagnozy = {}
-    sekcja_flux = {}
+    sekcja_pacjent = {"data": {}, "status": "error"}
+    sekcja_dep_leki = {"data": {}, "status": "error"}
+    sekcja_diagnozy = {"data": {}, "status": "error"}
+    sekcja_flux = {"data": {}, "status": "error"}
 
     try:
-        sekcja_pacjent = _sekcja_pacjent(cfg, body, sender_name) or {}
+        sekcja_pacjent = _wrap_section(
+            _sekcja_pacjent(cfg, body, sender_name),
+            "pacjent",
+        )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda1 pacjent błąd: %s", e)
 
     try:
-        sekcja_dep_leki = _sekcja_depozyt_leki(cfg, body, nouns_dict) or {}
+        sekcja_dep_leki = _wrap_section(
+            _sekcja_depozyt_leki(cfg, body, nouns_dict),
+            "depozyt",
+        )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda1 depozyt błąd: %s", e)
 
     try:
-        sekcja_diagnozy = _sekcja_diagnozy(cfg, body, previous_body) or {}
+        sekcja_diagnozy = _wrap_section(
+            _sekcja_diagnozy(cfg, body, previous_body),
+            "diagnozy",
+        )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda1 diagnozy błąd: %s", e)
 
     try:
-        sekcja_flux = (
+        sekcja_flux = _wrap_section(
             _sekcja_flux_prompty(
                 cfg, body, nouns_dict, sender_name, gender, test_mode=test_mode
-            )
-            or {}
+            ),
+            "flux",
         )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda1 flux błąd: %s", e)
 
+    sekcja_pacjent_data = _unwrap_section(sekcja_pacjent)
+    sekcja_dep_leki_data = _unwrap_section(sekcja_dep_leki)
+    sekcja_diagnozy_data = _unwrap_section(sekcja_diagnozy)
+    sekcja_flux_data = _unwrap_section(sekcja_flux)
+
     # Wyznaczenie daty przyjęcia
-    data_przyjecia = sekcja_pacjent.get(
+    data_przyjecia = sekcja_pacjent_data.get(
         "data_przyjecia", datetime.now().strftime("%d.%m.%Y")
     )
     # BUGFIX: farmakologia może być stringiem gdy AI zwróci błędny typ — guard przed .get()
-    _farm_tmp = sekcja_dep_leki.get("farmakologia", {})
+    _farm_tmp = sekcja_dep_leki_data.get("farmakologia", {})
     if not isinstance(_farm_tmp, dict):
         current_app.logger.warning(
             "[psych-raport] sekcja_dep_leki.farmakologia zły typ: %s — wartość: %.100s",
@@ -2231,37 +2371,64 @@ def build_raport(
     # Runda 2 — dni hospitalizacji
     dni_1_7 = []
     dni_8_14 = []
-    sekcja_wypis = {}
+    sekcja_wypis = {"data": {}, "status": "error"}
 
     try:
-        dni_1_7 = _sekcja_tydzien(cfg, body, leki_lista, 1, data_przyjecia) or []
+        dni_1_7 = (
+            _unwrap_section(
+                _wrap_section(
+                    _sekcja_tydzien(cfg, body, leki_lista, 1, data_przyjecia),
+                    "tydzien1",
+                )
+            )
+            or []
+        )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda2 tydzien1 błąd: %s", e)
 
     try:
-        dni_8_14 = _sekcja_tydzien(cfg, body, leki_lista, 2, data_przyjecia) or []
+        dni_8_14 = (
+            _unwrap_section(
+                _wrap_section(
+                    _sekcja_tydzien(cfg, body, leki_lista, 2, data_przyjecia),
+                    "tydzien2",
+                )
+            )
+            or []
+        )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda2 tydzien2 błąd: %s", e)
 
     try:
-        sekcja_wypis = _sekcja_wypis(cfg, body, data_przyjecia) or {}
+        sekcja_wypis = _wrap_section(
+            _sekcja_wypis(cfg, body, data_przyjecia),
+            "wypis",
+        )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda2 wypis błąd: %s", e)
 
     # Runda 3 — zalecenia + leczenie specjalne
-    sekcja_zalecenia = {}
-    sekcja_leczenie_specjalne = {}
+    sekcja_zalecenia = {"data": {}, "status": "error"}
+    sekcja_leczenie_specjalne = {"data": {}, "status": "error"}
     try:
-        sekcja_zalecenia = _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14) or {}
+        sekcja_zalecenia = _wrap_section(
+            _sekcja_zalecenia(cfg, body, dni_1_7, dni_8_14),
+            "zalecenia",
+        )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda3 zalecenia błąd: %s", e)
 
     try:
-        sekcja_leczenie_specjalne = (
-            _sekcja_leczenie_specjalne(cfg, body, dni_1_7, dni_8_14) or {}
+        sekcja_leczenie_specjalne = _wrap_section(
+            _sekcja_leczenie_specjalne(cfg, body, dni_1_7, dni_8_14),
+            "leczenie_specjalne",
         )
     except Exception as e:
         current_app.logger.error("[psych-raport] Runda3 leczenie_specjalne błąd: %s", e)
+
+    sekcja_wypis_data = _unwrap_section(sekcja_wypis)
+    sekcja_zalecenia_data = _unwrap_section(sekcja_zalecenia)
+    sekcja_leczenie_specjalne_data = _unwrap_section(sekcja_leczenie_specjalne)
 
     # Scalenie całości
     raport = {}
@@ -2284,19 +2451,23 @@ def build_raport(
         "powod_przyjecia",
         "cytaty_z_przyjecia",
     }
-    if isinstance(sekcja_pacjent, dict):
-        if "dane_pacjenta" in sekcja_pacjent and isinstance(
-            sekcja_pacjent["dane_pacjenta"], dict
+    if isinstance(sekcja_pacjent_data, dict):
+        if "__error__" in sekcja_pacjent_data or "__raw_text__" in sekcja_pacjent_data:
+            raport["dane_pacjenta"] = sekcja_pacjent_data
+        elif "dane_pacjenta" in sekcja_pacjent_data and isinstance(
+            sekcja_pacjent_data["dane_pacjenta"], dict
         ):
-            raport["dane_pacjenta"] = sekcja_pacjent["dane_pacjenta"]
-            for k, v in sekcja_pacjent.items():
+            raport["dane_pacjenta"] = sekcja_pacjent_data["dane_pacjenta"]
+            for k, v in sekcja_pacjent_data.items():
                 if k != "dane_pacjenta":
                     raport[k] = v
         else:
             # AI zwróciło płaski dict — zbieramy pola pacjenta
-            dane_pac = {k: v for k, v in sekcja_pacjent.items() if k in PACJENT_FIELDS}
+            dane_pac = {
+                k: v for k, v in sekcja_pacjent_data.items() if k in PACJENT_FIELDS
+            }
             # Zbieramy też top-level klucze raportu (numer, data, powód, cytaty)
-            for k, v in sekcja_pacjent.items():
+            for k, v in sekcja_pacjent_data.items():
                 if k in RAPORT_TOP_KEYS:
                     raport[k] = v
             # Zabezpieczenie: dane_pacjenta MUSI być dict, nigdy stringiem
@@ -2312,7 +2483,7 @@ def build_raport(
                     "numer_ubezpieczenia": "__BRAK__",
                 }
             )
-            for k, v in sekcja_pacjent.items():
+            for k, v in sekcja_pacjent_data.items():
                 if k not in PACJENT_FIELDS and k not in RAPORT_TOP_KEYS:
                     raport[k] = v
 
@@ -2352,17 +2523,23 @@ def build_raport(
         "stan_przy_wypisie",
         "opis_pozegnania",
     }
-    if isinstance(sekcja_wypis, dict):
-        if "wypis" in sekcja_wypis and isinstance(sekcja_wypis["wypis"], dict):
-            raport["wypis"] = sekcja_wypis["wypis"]
-            for k, v in sekcja_wypis.items():
+    if (
+        isinstance(sekcja_wypis_data, dict)
+        and "__error__" not in sekcja_wypis_data
+        and "__raw_text__" not in sekcja_wypis_data
+    ):
+        if "wypis" in sekcja_wypis_data and isinstance(
+            sekcja_wypis_data["wypis"], dict
+        ):
+            raport["wypis"] = sekcja_wypis_data["wypis"]
+            for k, v in sekcja_wypis_data.items():
                 if k != "wypis":
                     raport[k] = v
         else:
             raport["wypis"] = {
-                k: v for k, v in sekcja_wypis.items() if k in WYPIS_FIELDS
+                k: v for k, v in sekcja_wypis_data.items() if k in WYPIS_FIELDS
             }
-            for k, v in sekcja_wypis.items():
+            for k, v in sekcja_wypis_data.items():
                 if k not in WYPIS_FIELDS:
                     raport[k] = v
 
@@ -2379,8 +2556,12 @@ def build_raport(
     }
     # Klucze które NIE powinny nadpisywać wartości już ustawionych przez wcześniejsze sekcje
     PROTECTED_KEYS = {"dane_pacjenta", "depozyt", "farmakologia", "wypis"}
-    for sekcja in (sekcja_diagnozy, sekcja_zalecenia):
-        if not isinstance(sekcja, dict):
+    for sekcja in (sekcja_diagnozy_data, sekcja_zalecenia_data):
+        if (
+            not isinstance(sekcja, dict)
+            or "__error__" in sekcja
+            or "__raw_text__" in sekcja
+        ):
             current_app.logger.warning(
                 "[psych-raport] sekcja zły typ przy scalaniu: %s",
                 type(sekcja).__name__,
@@ -2458,7 +2639,7 @@ def build_raport(
     raport["relacje_swiadkow"] = relacje_result.get("relacje_swiadkow", [])
 
     # Leczenie specjalne (deepseek_9)
-    raport["leczenie_specjalne"] = sekcja_leczenie_specjalne.get(
+    raport["leczenie_specjalne"] = sekcja_leczenie_specjalne_data.get(
         "leczenie_specjalne", []
     )
 
