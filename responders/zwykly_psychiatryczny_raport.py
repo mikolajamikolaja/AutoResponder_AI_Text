@@ -261,6 +261,12 @@ def _unwrap_section(section):
     return section
 
 
+def _is_wrapped_section(section):
+    return isinstance(section, dict) and (
+        "__error__" in section or "__raw_text__" in section
+    )
+
+
 def _section_status(section):
     if isinstance(section, dict) and "status" in section:
         return section["status"]
@@ -1775,6 +1781,21 @@ def _build_docx_inner(
                 return value["__raw_text__"]
         return value
 
+    def _docx_render_error_or_raw(value):
+        if isinstance(value, dict):
+            if "__error__" in value:
+                para(
+                    "[BŁĄD GENEROWANIA SEKCJI]",
+                    italic=True,
+                    color=LGREY,
+                    size=9,
+                )
+                return True
+            if "__raw_text__" in value:
+                para(value["__raw_text__"], italic=True, color=GREY, size=9)
+                return True
+        return False
+
     def field(label, value, label_color=DARK, val_color=DARK, size=10):
         value = _docx_unwrap(value)
         if value in (None, "", [], {}, "__BRAK__"):
@@ -1956,16 +1977,19 @@ def _build_docx_inner(
     # ══════════════════════════════════════════════════════════════════════════
     heading("IV. PROTOKÓŁ DEPOZYTU — PRZEDMIOTY SKONFISKOWANE", 2, RED, 11)
     dep = raport.get("depozyt", {})
-    if not isinstance(dep, dict):
-        current_app.logger.warning(
-            "[psych-docx] depozyt zły typ: %s — wartość: %.100s",
-            type(dep).__name__,
-            dep,
-        )
-        dep = {}
-    if isinstance(dep, dict):
-        lista = dep.get("lista_przedmiotow", [])
-        proto = dep.get("protokol_depozytu", "")
+    if _docx_render_error_or_raw(dep):
+        doc.add_paragraph()
+    else:
+        if not isinstance(dep, dict):
+            current_app.logger.warning(
+                "[psych-docx] depozyt zły typ: %s — wartość: %.100s",
+                type(dep).__name__,
+                dep,
+            )
+            dep = {}
+        if isinstance(dep, dict):
+            lista = dep.get("lista_przedmiotow", [])
+            proto = dep.get("protokol_depozytu", "")
         if isinstance(lista, str):
             lista = [x.strip() for x in lista.split(",") if x.strip()]
         if lista and lista != ["__BRAK__"]:
@@ -1986,13 +2010,6 @@ def _build_docx_inner(
         if proto and proto != "__BRAK__":
             doc.add_paragraph()
             para(proto, italic=True, color=GREY, size=9)
-    else:
-        para(
-            "[brak danych — sekcja depozytu nie została wygenerowana]",
-            italic=True,
-            color=LGREY,
-            size=9,
-        )
     doc.add_paragraph()
 
     if photo_przedmioty_b64:
@@ -2011,15 +2028,19 @@ def _build_docx_inner(
     # ══════════════════════════════════════════════════════════════════════════
     heading("V. FARMAKOLOGIA — PEŁNA LISTA LEKÓW ZASTOSOWANYCH", 2, RED, 11)
     farm = raport.get("farmakologia", {})
-    # BUGFIX: farmakologia może być stringiem
-    if not isinstance(farm, dict):
-        current_app.logger.warning(
-            "[psych-docx] farmakologia zły typ: %s — wartość: %.100s",
-            type(farm).__name__,
-            farm,
-        )
-        farm = {}
-    leki_lista = farm.get("leki", [])
+    if _docx_render_error_or_raw(farm):
+        doc.add_paragraph()
+        leki_lista = []
+    else:
+        # BUGFIX: farmakologia może być stringiem
+        if not isinstance(farm, dict):
+            current_app.logger.warning(
+                "[psych-docx] farmakologia zły typ: %s — wartość: %.100s",
+                type(farm).__name__,
+                farm,
+            )
+            farm = {}
+        leki_lista = farm.get("leki", [])
 
     # Filtruj leki z wartością __BRAK__
     leki_lista = [
@@ -2134,22 +2155,24 @@ def _build_docx_inner(
     # ══════════════════════════════════════════════════════════════════════════
     heading("VII. KARTA WYPISU", 2, RED, 11)
     wypis = raport.get("wypis", {})
-    # BUGFIX: wypis może być stringiem
-    if not isinstance(wypis, dict):
-        current_app.logger.warning(
-            "[psych-docx] wypis zły typ: %s — wartość: %.100s",
-            type(wypis).__name__,
-            wypis,
-        )
-        wypis = {}
-    if isinstance(wypis, dict):
-        field("Dzień wypisu", wypis.get("dzien_wypisu", ""))
-        field("Powód wypisu", wypis.get("powod_wypisu", ""))
+    if _docx_render_error_or_raw(wypis):
         doc.add_paragraph()
-        para(wypis.get("stan_przy_wypisie", ""), size=10)
-        doc.add_paragraph()
-        heading("Zalecenia po wypisie:", 3, DARK, 10)
-        zal = wypis.get("zalecenia_po_wypisie", [])
+    else:
+        if not isinstance(wypis, dict):
+            current_app.logger.warning(
+                "[psych-docx] wypis zły typ: %s — wartość: %.100s",
+                type(wypis).__name__,
+                wypis,
+            )
+            wypis = {}
+        if isinstance(wypis, dict):
+            field("Dzień wypisu", wypis.get("dzien_wypisu", ""))
+            field("Powód wypisu", wypis.get("powod_wypisu", ""))
+            doc.add_paragraph()
+            para(wypis.get("stan_przy_wypisie", ""), size=10)
+            doc.add_paragraph()
+            heading("Zalecenia po wypisie:", 3, DARK, 10)
+            zal = wypis.get("zalecenia_po_wypisie", [])
         if isinstance(zal, list):
             for z in zal:
                 p_z = doc.add_paragraph(style="List Bullet")
@@ -2231,7 +2254,9 @@ def _build_docx_inner(
     # ══════════════════════════════════════════════════════════════════════════
     heading("IX. ZALECENIA TERAPEUTYCZNE", 2, RED, 11)
     zt = raport.get("zalecenia_tylera", {})
-    if isinstance(zt, list):
+    if _docx_render_error_or_raw(zt):
+        doc.add_paragraph()
+    elif isinstance(zt, list):
         # AI zwróciło listę zamiast dict — renderuj każdy element
         for item in zt:
             if isinstance(item, dict):
@@ -2574,8 +2599,10 @@ def build_raport(
         "cytaty_z_przyjecia",
     }
     if isinstance(sekcja_pacjent_data, dict):
-        if "__error__" in sekcja_pacjent_data or "__raw_text__" in sekcja_pacjent_data:
+        if _is_wrapped_section(sekcja_pacjent_data):
             raport["dane_pacjenta"] = sekcja_pacjent_data
+            raport["powod_przyjecia"] = sekcja_pacjent_data
+            raport["cytaty_z_przyjecia"] = sekcja_pacjent_data
         elif "dane_pacjenta" in sekcja_pacjent_data and isinstance(
             sekcja_pacjent_data["dane_pacjenta"], dict
         ):
@@ -2610,29 +2637,33 @@ def build_raport(
                     raport[k] = v
 
     # ── depozyt i farmakologia
-    dep_raw = (
-        sekcja_dep_leki.get("depozyt", {}) if isinstance(sekcja_dep_leki, dict) else {}
-    )
-    if not isinstance(dep_raw, dict):
-        current_app.logger.warning(
-            "[psych-raport] depozyt zły typ po scaleniu: %s — wartość: %.100s",
-            type(dep_raw).__name__,
-            dep_raw,
+    if _is_wrapped_section(sekcja_dep_leki_data):
+        raport["depozyt"] = sekcja_dep_leki_data
+        raport["farmakologia"] = sekcja_dep_leki_data
+    else:
+        dep_raw = (
+            sekcja_dep_leki_data.get("depozyt", {}) if isinstance(sekcja_dep_leki_data, dict) else {}
         )
-    raport["depozyt"] = dep_raw if isinstance(dep_raw, dict) else {}
+        if not isinstance(dep_raw, dict):
+            current_app.logger.warning(
+                "[psych-raport] depozyt zły typ po scaleniu: %s — wartość: %.100s",
+                type(dep_raw).__name__,
+                dep_raw,
+            )
+        raport["depozyt"] = dep_raw if isinstance(dep_raw, dict) else {}
 
-    farm_raw = (
-        sekcja_dep_leki.get("farmakologia", {})
-        if isinstance(sekcja_dep_leki, dict)
-        else {}
-    )
-    if not isinstance(farm_raw, dict):
-        current_app.logger.warning(
-            "[psych-raport] farmakologia zły typ po scaleniu: %s — wartość: %.100s",
-            type(farm_raw).__name__,
-            farm_raw,
+        farm_raw = (
+            sekcja_dep_leki_data.get("farmakologia", {})
+            if isinstance(sekcja_dep_leki_data, dict)
+            else {}
         )
-    raport["farmakologia"] = farm_raw if isinstance(farm_raw, dict) else {}
+        if not isinstance(farm_raw, dict):
+            current_app.logger.warning(
+                "[psych-raport] farmakologia zły typ po scaleniu: %s — wartość: %.100s",
+                type(farm_raw).__name__,
+                farm_raw,
+            )
+        raport["farmakologia"] = farm_raw if isinstance(farm_raw, dict) else {}
 
     raport["hospitalizacja_tydzien_1"] = dni_1_7 if isinstance(dni_1_7, list) else []
     raport["hospitalizacja_tydzien_2"] = dni_8_14 if isinstance(dni_8_14, list) else []
@@ -2645,7 +2676,9 @@ def build_raport(
         "stan_przy_wypisie",
         "opis_pozegnania",
     }
-    if (
+    if _is_wrapped_section(sekcja_wypis_data):
+        raport["wypis"] = sekcja_wypis_data
+    elif (
         isinstance(sekcja_wypis_data, dict)
         and "__error__" not in sekcja_wypis_data
         and "__raw_text__" not in sekcja_wypis_data
@@ -2664,6 +2697,9 @@ def build_raport(
             for k, v in sekcja_wypis_data.items():
                 if k not in WYPIS_FIELDS:
                     raport[k] = v
+
+    if _is_wrapped_section(sekcja_zalecenia_data):
+        raport["zalecenia_tylera"] = sekcja_zalecenia_data
 
     # ── diagnozy i zalecenia: ochrona przed stringami zamiast dict
     DICT_KEYS = {
@@ -2761,9 +2797,12 @@ def build_raport(
     raport["relacje_swiadkow"] = relacje_result.get("relacje_swiadkow", [])
 
     # Leczenie specjalne (deepseek_9)
-    raport["leczenie_specjalne"] = sekcja_leczenie_specjalne_data.get(
-        "leczenie_specjalne", []
-    )
+    if _is_wrapped_section(sekcja_leczenie_specjalne_data):
+        raport["leczenie_specjalne"] = sekcja_leczenie_specjalne_data
+    else:
+        raport["leczenie_specjalne"] = sekcja_leczenie_specjalne_data.get(
+            "leczenie_specjalne", []
+        )
 
     # Twarda walidacja typu dla dane_pacjenta
     dane_pacjenta = raport.get("dane_pacjenta", {})

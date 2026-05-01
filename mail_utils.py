@@ -1,4 +1,5 @@
 import os
+import re
 import imaplib
 import smtplib
 import socket
@@ -79,27 +80,42 @@ def fetch_unseen_allowed():
 
 def extract_body(msg):
     """
-    Zwraca treść wiadomości jako tekst (najpierw text/plain, potem text/html).
+    Zwraca treść wiadomości jako tekst (najpierw najlepszy text/plain, potem text/html).
     W razie błędu zwraca pusty string.
     """
     try:
         if msg.is_multipart():
+            plain_parts = []
+            html_part = None
             for part in msg.walk():
                 ctype = part.get_content_type()
                 disp = str(part.get("Content-Disposition") or "")
                 if ctype == "text/plain" and "attachment" not in disp:
-                    return part.get_payload(decode=True).decode(
+                    payload = part.get_payload(decode=True)
+                    if not payload:
+                        continue
+                    text = payload.decode(
                         part.get_content_charset() or "utf-8", errors="ignore"
-                    )
-            for part in msg.walk():
-                if part.get_content_type() == "text/html":
-                    return part.get_payload(decode=True).decode(
-                        part.get_content_charset() or "utf-8", errors="ignore"
-                    )
+                    ).strip()
+                    if text:
+                        plain_parts.append(text)
+                elif ctype == "text/html" and "attachment" not in disp:
+                    payload = part.get_payload(decode=True)
+                    if payload and html_part is None:
+                        html_part = payload.decode(
+                            part.get_content_charset() or "utf-8",
+                            errors="ignore",
+                        )
+            if plain_parts:
+                return max(plain_parts, key=len)
+            if html_part:
+                return re.sub(r"<[^>]+>", " ", html_part).strip()
         else:
-            return msg.get_payload(decode=True).decode(
-                msg.get_content_charset() or "utf-8", errors="ignore"
-            )
+            payload = msg.get_payload(decode=True)
+            if payload:
+                return payload.decode(
+                    msg.get_content_charset() or "utf-8", errors="ignore"
+                )
     except Exception as e:
         print("Błąd extract_body:", e)
     return ""

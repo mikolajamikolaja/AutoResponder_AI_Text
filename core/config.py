@@ -11,7 +11,7 @@ Najlszepszy byłby model Groq llama-3.3-70b-versatile: limit ~128 000 tokenów (
 # GŁÓWNA STAŁA — limit długości emaila przekazywanego do AI
 # Zmień tutaj aby sterować dla całego zwykly.py naraz.
 # ─────────────────────────────────────────────────────────────────────────────
-MAX_DLUGOSC_EMAIL = 7000
+MAX_DLUGOSC_EMAIL = 30000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DEEPSEEK API
