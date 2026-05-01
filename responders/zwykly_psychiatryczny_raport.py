@@ -319,6 +319,24 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
             )
             return {}
 
+        # Obsługa listy zamiast dict — bierz pierwszy element jeśli to dict
+        if isinstance(result, list):
+            current_app.logger.warning(
+                "[psych-raport] dane_pacjenta zwrócono jako list (len=%d) — próba wyciągnięcia pierwszego dict",
+                len(result),
+            )
+            extracted = next((item for item in result if isinstance(item, dict)), None)
+            if extracted:
+                result = extracted
+                current_app.logger.warning(
+                    "[psych-raport] dane_pacjenta: list→dict OK (użyto pierwszego elementu)"
+                )
+            else:
+                current_app.logger.warning(
+                    "[psych-raport] dane_pacjenta: list bez dict — fallback do pustego dict"
+                )
+                result = {}
+
         # Normalizacja kluczy
         if isinstance(result, dict):
             KEY_MAP = {
@@ -350,10 +368,9 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                     )
 
         # ── Awaryjne wywołanie 1b: powód przyjęcia ────────────────────────────
-        powod_empty = (
-            not result.get("powod_przyjecia")
-            or str(result.get("powod_przyjecia", "")).strip() in ("", "__BRAK__")
-        )
+        powod_empty = not result.get("powod_przyjecia") or str(
+            result.get("powod_przyjecia", "")
+        ).strip() in ("", "__BRAK__")
         if powod_empty:
             cfg_1b = cfg.get("deepseek_1b_powod_przyjecia", {})
             if cfg_1b:
@@ -373,14 +390,25 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                         parsed_1b = _parse_json_safe(raw_1b, "powod_przyjecia")
                         if isinstance(parsed_1b, dict):
                             # Obsługa literówki 'powod_prijecia'
-                            if "powod_prijecia" in parsed_1b and "powod_przyjecia" not in parsed_1b:
-                                parsed_1b["powod_przyjecia"] = parsed_1b.pop("powod_prijecia")
-                            powod_val = parsed_1b.get("powod_przyjecia") or parsed_1b.get("powod_prijecia")
+                            if (
+                                "powod_prijecia" in parsed_1b
+                                and "powod_przyjecia" not in parsed_1b
+                            ):
+                                parsed_1b["powod_przyjecia"] = parsed_1b.pop(
+                                    "powod_prijecia"
+                                )
+                            powod_val = parsed_1b.get(
+                                "powod_przyjecia"
+                            ) or parsed_1b.get("powod_prijecia")
                             if powod_val:
                                 result["powod_przyjecia"] = powod_val
-                                current_app.logger.info("[psych-raport] deepseek_1b powod_przyjecia OK")
+                                current_app.logger.info(
+                                    "[psych-raport] deepseek_1b powod_przyjecia OK"
+                                )
                 except Exception as e1b:
-                    current_app.logger.warning("[psych-raport] deepseek_1b błąd: %s", e1b)
+                    current_app.logger.warning(
+                        "[psych-raport] deepseek_1b błąd: %s", e1b
+                    )
 
         # ── Awaryjne wywołanie 1c: cytaty z izby przyjęć ─────────────────────
         cytaty_empty = (
@@ -412,9 +440,13 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                             cytaty_val = parsed_1c.get("cytaty_z_przyjecia")
                             if cytaty_val:
                                 result["cytaty_z_przyjecia"] = cytaty_val
-                                current_app.logger.info("[psych-raport] deepseek_1c cytaty OK")
+                                current_app.logger.info(
+                                    "[psych-raport] deepseek_1c cytaty OK"
+                                )
                 except Exception as e1c:
-                    current_app.logger.warning("[psych-raport] deepseek_1c błąd: %s", e1c)
+                    current_app.logger.warning(
+                        "[psych-raport] deepseek_1c błąd: %s", e1c
+                    )
 
         current_app.logger.info("[psych-raport] Sekcja pacjent OK")
         return result if isinstance(result, dict) else {"dane_pacjenta": result}
@@ -468,7 +500,9 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
                 f"RZECZOWNIKI Z EMAILA:\n{nouns_str}\n\n"
                 f"INSTRUKCJE:\n{ins_2a}"
             )
-            raw_2a = _call_with_retry(_s(cfg_2a.get("system", "")), _u(usr_2a), max_tokens=4000)
+            raw_2a = _call_with_retry(
+                _s(cfg_2a.get("system", "")), _u(usr_2a), max_tokens=4000
+            )
             if raw_2a:
                 parsed_2a = _parse_json_safe(raw_2a, "depozyt_2a")
                 if isinstance(parsed_2a, dict):
@@ -489,7 +523,9 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
                 f"RZECZOWNIKI Z EMAILA:\n{nouns_str}\n\n"
                 f"INSTRUKCJE:\n{ins_2b}"
             )
-            raw_2b = _call_with_retry(_s(cfg_2b.get("system", "")), _u(usr_2b), max_tokens=4000)
+            raw_2b = _call_with_retry(
+                _s(cfg_2b.get("system", "")), _u(usr_2b), max_tokens=4000
+            )
             if raw_2b:
                 parsed_2b = _parse_json_safe(raw_2b, "farmakologia_2b")
                 if isinstance(parsed_2b, dict):
@@ -497,7 +533,9 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
                     farm_val = parsed_2b.get("farmakologia", parsed_2b)
                     if isinstance(farm_val, dict):
                         merged["farmakologia"] = farm_val
-                    current_app.logger.info("[psych-raport] deepseek_2b farmakologia OK")
+                    current_app.logger.info(
+                        "[psych-raport] deepseek_2b farmakologia OK"
+                    )
         except Exception as e2b:
             current_app.logger.warning("[psych-raport] deepseek_2b błąd: %s", e2b)
 
@@ -528,7 +566,9 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
 
         raw = _call_with_retry(_s(system), _u(user), max_tokens=6000)
         if not raw:
-            current_app.logger.warning("[psych-raport] Sekcja depozyt fallback: brak AI")
+            current_app.logger.warning(
+                "[psych-raport] Sekcja depozyt fallback: brak AI"
+            )
             return merged
 
         result = _parse_json_safe(raw, "depozyt_fallback")
@@ -738,7 +778,9 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
                 f"HISTORIA CHOROBY:\n{historia}\n\n"
                 f"INSTRUKCJE:\n{ins_6a}"
             )
-            raw_6a = _call_with_retry(_s(cfg_6a.get("system", "")), _u(usr_6a), max_tokens=4000)
+            raw_6a = _call_with_retry(
+                _s(cfg_6a.get("system", "")), _u(usr_6a), max_tokens=4000
+            )
             if raw_6a:
                 parsed_6a = _parse_json_safe(raw_6a, "diagnozy_6a")
                 if isinstance(parsed_6a, dict):
@@ -754,7 +796,9 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
                 f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
                 f"INSTRUKCJE:\n{ins_6b}"
             )
-            raw_6b = _call_with_retry(_s(cfg_6b.get("system", "")), _u(usr_6b), max_tokens=3000)
+            raw_6b = _call_with_retry(
+                _s(cfg_6b.get("system", "")), _u(usr_6b), max_tokens=3000
+            )
             if raw_6b:
                 parsed_6b = _parse_json_safe(raw_6b, "objawy_6b")
                 if isinstance(parsed_6b, dict):
@@ -810,7 +854,9 @@ def _sekcja_diagnozy(cfg: dict, body: str, previous_body: str) -> dict:
 
         raw = _call_with_retry(_s(system), _u(user), max_tokens=4000)
         if not raw:
-            current_app.logger.warning("[psych-raport] Sekcja diagnozy fallback: brak AI")
+            current_app.logger.warning(
+                "[psych-raport] Sekcja diagnozy fallback: brak AI"
+            )
             return merged
 
         result = _parse_json_safe(raw, "diagnozy_fallback")
@@ -2238,19 +2284,40 @@ def build_raport(
                 )
                 # ── BUG FIX 1-3: diagnoza_wstepna / diagnoza_dodatkowa / choroba_wspolistniejaca
                 # AI zwraca string zamiast dict — zawiń tekst w opis_kliniczny żeby nie tracić treści
-                if k in ("diagnoza_wstepna", "diagnoza_dodatkowa", "choroba_wspolistniejaca") and isinstance(v, str) and v.strip():
+                if (
+                    k
+                    in (
+                        "diagnoza_wstepna",
+                        "diagnoza_dodatkowa",
+                        "choroba_wspolistniejaca",
+                    )
+                    and isinstance(v, str)
+                    and v.strip()
+                ):
                     # Wyciągnij nazwę po "Diagnoza: " jeśli istnieje, resztę do opis_kliniczny
                     tekst = v.strip()
                     # Usuń prefiks "Diagnoza: " jeśli AI go dodało
                     if tekst.lower().startswith("diagnoza:"):
-                        tekst = tekst[len("Diagnoza:"):].strip()
-                    raport[k] = {"nazwa_lacinska": "", "nazwa_polska": "", "kod_dsm": "", "opis_kliniczny": tekst}
+                        tekst = tekst[len("Diagnoza:") :].strip()
+                    raport[k] = {
+                        "nazwa_lacinska": "",
+                        "nazwa_polska": "",
+                        "kod_dsm": "",
+                        "opis_kliniczny": tekst,
+                    }
                     current_app.logger.warning(
-                        "[psych-raport] klucz '%s' naprawiony: str→dict z opis_kliniczny", k
+                        "[psych-raport] klucz '%s' naprawiony: str→dict z opis_kliniczny",
+                        k,
                     )
                 # ── BUG FIX 4: zalecenia_tylera jako lista notatek pielęgniarek
                 # AI myli klucze — lista z imie_pielegniarki trafia do zalecenia_tylera zamiast do notatki
-                elif k == "zalecenia_tylera" and isinstance(v, list) and v and isinstance(v[0], dict) and "imie_pielegniarki" in v[0]:
+                elif (
+                    k == "zalecenia_tylera"
+                    and isinstance(v, list)
+                    and v
+                    and isinstance(v[0], dict)
+                    and "imie_pielegniarki" in v[0]
+                ):
                     # Przenieś do notatki_pielegniarek tylko gdy tam jeszcze nic nie ma
                     if not raport.get("notatki_pielegniarek"):
                         raport["notatki_pielegniarek"] = v

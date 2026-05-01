@@ -25,8 +25,8 @@ DEEPSEEK_MODEL = "deepseek-chat"
 HF_API_URL = (
     "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
 )
-HF_STEPS = 2
-HF_GUIDANCE = 2
+HF_STEPS = 1
+HF_GUIDANCE = 1
 HF_TIMEOUT = 55
 TYLER_JPG_QUALITY = 90  # Kompresja JPG paneli tryptyku (95% = minimalna strata)
 

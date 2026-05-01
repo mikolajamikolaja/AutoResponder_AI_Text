@@ -2743,7 +2743,22 @@ def _generate_cv_content(
         "\nKRYTYCZNE: Zwróć TYLKO czysty JSON bez żadnego tekstu poza klamrami. "
         "WSZYSTKIE pola schematu MUSZĄ być wypełnione — doswiadczenie, wyksztalcenie, "
         "umiejetnosci, jezyki, zainteresowania, zyciorys, cytat_tylera. "
-        "ZAKAZ zwracania pustych list [] lub pustych stringów dla tych pól."
+        "ZAKAZ zwracania pustych list [] lub pustych stringów dla tych pól.\n\n"
+        "PRZYKŁAD PRAWIDŁOWEGO OUTPUT (każde pole MUSI być wypełnione):\n"
+        "{\n"
+        '  "imie_nazwisko": "Imię z konkretnym nazwiskiem",\n'
+        '  "tytul_zawodowy": "Konkretny tytuł",\n'
+        '  "doswiadczenie": [\n'
+        '    {"firma": "Konkretna firma", "stanowisko": "Stanowisko", "okres": "Lata", "obowiazki": ["Obowiązek 1", "Obowiązek 2", "Obowiązek 3"]},\n'
+        '    {"firma": "Druga firma", "stanowisko": "Stanowisko", "okres": "Lata", "obowiazki": ["Obowiązek 1", "Obowiązek 2"]}\n'
+        "  ],\n"
+        '  "umiejetnosci": ["Umiejętność 1", "Umiejętność 2", "Umiejętność 3", "Umiejętność 4", "Umiejętność 5"],\n'
+        '  "jezyki": ["Język 1", "Język 2", "Język 3", "Język 4", "Język 5"],\n'
+        '  "zainteresowania": ["Zainteresowanie 1", "Zainteresowanie 2"],\n'
+        '  "zyciorys": "Kilka zdań",\n'
+        '  "cytat_tylera": "Jedno zdanie podsumowania"\n'
+        "}\n\n"
+        "ZAKAZ ZWRACANIA CZEGO KOKOLWIEK POZA JSON. Każda lista MUSI mieć min 3 elementy. Każdy string MUSI mieć min 5 słów."
     )
 
     user_msg = "\n".join(context_parts)
@@ -2774,15 +2789,39 @@ def _generate_cv_content(
             return None
 
     def _cv_is_complete(cv: dict) -> bool:
-        """Sprawdza czy kluczowe tablicowe sekcje CV są wypełnione."""
+        """Sprawdza czy kluczowe tablicowe sekcje CV są wypełnione (z minimalną zawartością)."""
         if not cv:
             return False
-        required_lists = ["doswiadczenie", "umiejetnosci", "jezyki"]
-        for key in required_lists:
+
+        # Minimalne progi list
+        list_minimums = {
+            "doswiadczenie": 2,
+            "umiejetnosci": 5,
+            "jezyki": 5,
+            "zainteresowania": 1,
+        }
+        for key, min_len in list_minimums.items():
             val = cv.get(key)
-            if not val or (isinstance(val, list) and len(val) == 0):
+            if not val or not isinstance(val, list) or len(val) < min_len:
+                logger.warning(
+                    "[cv] _cv_is_complete: '%s' niekompletne (len=%d, wymagane>=%d)",
+                    key,
+                    len(val) if isinstance(val, list) else 0,
+                    min_len,
+                )
                 return False
-        if not cv.get("imie_nazwisko") or cv.get("imie_nazwisko") in ("Anonim Bezdomny", ""):
+
+        # Sprawdzenie czy stringi nie są puste
+        required_strings = ["imie_nazwisko", "zyciorys", "cytat_tylera"]
+        for key in required_strings:
+            val = cv.get(key, "").strip()
+            if not val or len(val) < 5:  # Min 5 znaków
+                logger.warning(
+                    "[cv] _cv_is_complete: '%s' pusty lub za krótki", key
+                )
+                return False
+
+        if cv.get("imie_nazwisko") in ("Anonim Bezdomny", ""):
             return False
         return True
 
@@ -2791,15 +2830,25 @@ def _generate_cv_content(
     if raw:
         cv_data = _parse_cv(raw)
         if cv_data and _cv_is_complete(cv_data):
-            logger.info("[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?"))
+            logger.info(
+                "[cv] CV wygenerowane OK: %s", cv_data.get("imie_nazwisko", "?")
+            )
             return cv_data
         elif cv_data:
             logger.warning(
-                "[cv] CV niekompletne (puste sekcje) — retry z max_tokens=10000. Pola: %s",
-                {k: type(v).__name__ + f"(len={len(v)})" if isinstance(v, list) else type(v).__name__
-                 for k in ["doswiadczenie", "umiejetnosci", "jezyki", "imie_nazwisko"]
-                 if k in cv_data}
+                "[cv] CV niekompletne z próby 1 — będzie ponownie generowane w próbie 2. Pola: %s",
+                {
+                    k: len(v) if isinstance(v, list) else len(str(v))
+                    for k in [
+                        "doswiadczenie",
+                        "umiejetnosci",
+                        "jezyki",
+                        "imie_nazwisko",
+                    ]
+                    if k in cv_data
+                },
             )
+            cv_data = None  # Nie zwracaj niekompletne — spróbuj jeszcze raz
 
     # Próba 2 — uproszczony prompt, więcej tokenów
     context_parts_retry = [
@@ -2819,24 +2868,145 @@ def _generate_cv_content(
     if raw2:
         cv_data2 = _parse_cv(raw2)
         if cv_data2 and _cv_is_complete(cv_data2):
-            logger.info("[cv] CV (retry) wygenerowane OK: %s", cv_data2.get("imie_nazwisko", "?"))
+            logger.info(
+                "[cv] CV (retry) wygenerowane OK: %s",
+                cv_data2.get("imie_nazwisko", "?"),
+            )
             return cv_data2
-        # Zwróć częściowy wynik z pierwszej lub drugiej próby (co bardziej kompletne)
-        if cv_data2:
-            # Uzupełnij pola z pierwszej próby jeśli druga ma braki
-            if cv_data:
-                for k, v in cv_data.items():
-                    if k not in cv_data2 or not cv_data2[k]:
-                        cv_data2[k] = v
-            logger.warning("[cv] CV zwrócone jako częściowe po 2 próbach")
-            return cv_data2
+        elif cv_data2:
+            logger.warning(
+                "[cv] CV zwrócone z próby 2 ale niekompletne — będzie użyty fallback"
+            )
+            # Nie zwracaj niekompletne — przejdź do fallback
 
-    if cv_data:
-        logger.warning("[cv] CV zwrócone jako częściowe (tylko 1 próba)")
-        return cv_data
+    # Obie próby zawiodły lub CV niekompletne — użyj fallback generator
 
-    logger.warning("[cv] Brak danych CV po 2 próbach")
-    return None
+    # Fallback: Jeśli obydwie próby zawiodły, wygeneruj minimalne CV
+    logger.error("[cv] Fallback: Wygenerowanie minimalnego CV ze zmyślonymi danymi")
+    return _generate_fallback_cv(body, sender_name, sender_email)
+
+
+def _generate_fallback_cv(
+    body: str, sender_name: str = "", sender_email: str = ""
+) -> dict | None:
+    """
+    Fallback generator CV — tworzy minimalne ale kompletne CV
+    na podstawie ekstrahowanych danych z emaila.
+    """
+    try:
+        # Ekstrahuj podstawowe dane z emaila
+        nouns = _extract_nouns_from_body(body)
+        main_noun = nouns[0] if nouns else "Pracownik"
+
+        # Wygeneruj imię i nazwisko
+        if sender_name and sender_name.strip():
+            imie_nazwisko = sender_name
+        else:
+            imie_nazwisko = f"{main_noun} {main_noun}ski"
+
+        # Podstawowe dane
+        job_title = "Specjalista ds. " + main_noun
+        email_fallback = (
+            sender_email or f"{imie_nazwisko.replace(' ', '.').lower()}@nieznany.pl"
+        )
+        city_detected = _detect_city(body) or "Polska"
+
+        # Wygeneruj minimalne sekcje
+        return {
+            "imie_nazwisko": imie_nazwisko[:60],
+            "tytul_zawodowy": job_title[:80],
+            "email": email_fallback[:100],
+            "telefon": f"666-{main_noun.upper()[:10]}-00{len(nouns)}",
+            "miasto": city_detected[:50],
+            "podsumowanie": (
+                f"{imie_nazwisko} to specjalista od {main_noun.lower()}. "
+                f"Wiele lat doświadczenia. Zawsze dostępny do pracy nad nowymi projektami."
+            ),
+            "doswiadczenie": [
+                {
+                    "firma": f"{main_noun} Solutions Sp. z o.o.",
+                    "stanowisko": f"Senior {main_noun} Engineer",
+                    "okres": "2020-2026",
+                    "obowiazki": [
+                        f"Wdrażanie rozwiązań związanych z {main_noun.lower()}",
+                        f"Zarządzanie projektami z {main_noun.lower()}",
+                        "Konsultacje i wsparcie techniczne dla klientów",
+                    ],
+                },
+                {
+                    "firma": f"{main_noun} & Co.",
+                    "stanowisko": f"{main_noun} Consultant",
+                    "okres": "2018-2020",
+                    "obowiazki": [
+                        f"Analiza i optymalizacja procesów {main_noun.lower()}",
+                        "Szkolenia zespołu",
+                        "Raportowanie wyników do zarządu",
+                    ],
+                },
+            ],
+            "wyksztalcenie": [
+                {
+                    "uczelnia": f"Akademia {main_noun} w Polsce",
+                    "kierunek": f"Inżynieria {main_noun} i Systemów",
+                    "rok": 2018,
+                }
+            ],
+            "umiejetnosci": [
+                f"{main_noun} - zaawansowany",
+                "Zarządzanie projektami",
+                "Komunikacja międzykulturowa",
+                "Problem solving",
+                "Analiza danych",
+            ],
+            "jezyki": [
+                "Polski - ojczysty",
+                "Angielski - biegły",
+                f"Język {main_noun} - biegły",
+                "Niemiecki - średnio zaawansowany",
+                "Komunikacja niewerbal - zaawansowana",
+            ],
+            "zainteresowania": [
+                f"Nowinki technologiczne w {main_noun}",
+                "Rozwijanie umiejętności zawodowych",
+                "Podróże biznesowe",
+            ],
+            "zyciorys": (
+                f"{imie_nazwisko} to profesjonalista z bogatym doświadczeniem w dziedzinie {main_noun.lower()}. "
+                f"Od wielu lat pracuje nad rozwojem innowacyjnych rozwiązań dla klientów z całej Polski. "
+                f"Specjalizuje się w zarządzaniu złożonymi projektami i budowaniu efektywnych zespołów. "
+                f"W wolnym czasie rozwija swoje umiejętności poprzez udział w konferencjach branżowych i szkoleniach."
+            ),
+            "cytat_tylera": (
+                f"Jesteś egzempem zawodowca. Wiesz co robić, robisz to dobrze, ale nie wiesz dlaczego."
+            ),
+        }
+    except Exception as e:
+        logger.error("[cv-fallback] Błąd w fallback generatorze: %s", e)
+        # Ostateczny fallback - puste ale kompletne CV
+        return {
+            "imie_nazwisko": sender_name or "Pracownik",
+            "tytul_zawodowy": "Specjalista",
+            "email": sender_email or "pracownik@nieznany.pl",
+            "telefon": "666-000-000",
+            "miasto": "Polska",
+            "podsumowanie": "Profesjonalista o bogatym doświadczeniu.",
+            "doswiadczenie": [
+                {
+                    "firma": "Firma A",
+                    "stanowisko": "Stanowisko A",
+                    "okres": "2020-2026",
+                    "obowiazki": ["Obowiązek 1", "Obowiązek 2"],
+                }
+            ],
+            "wyksztalcenie": [
+                {"uczelnia": "Akademia", "kierunek": "Kierunek", "rok": 2018}
+            ],
+            "umiejetnosci": ["Umiejętność 1", "Umiejętność 2"],
+            "jezyki": ["Polski", "Angielski"],
+            "zainteresowania": ["Praca", "Rozwój"],
+            "zyciorys": "Osoba o znacznym doświadczeniu zawodowym.",
+            "cytat_tylera": "Pracujesz, ale nie wiesz po co.",
+        }
 
 
 def _generate_cv_photo(body: str, cv_data: dict, test_mode: bool = False) -> str | None:
