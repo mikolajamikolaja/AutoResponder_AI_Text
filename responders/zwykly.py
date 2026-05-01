@@ -5375,7 +5375,7 @@ def build_zwykly_section(
             )
             # Fallback: wyciągnij odpowiedz_tekstowa bezpośrednio z ucietego JSON-a
             m = re.search(
-                r'"odpowiedz_tekstowa"\s*:\s*"((?:[^"\]|\.)*)',
+                r'"odpowiedz_tekstowa"\s*:\s*"((?:[^"\\]|\.)*)',
                 raw,
                 re.DOTALL,
             )
@@ -5414,7 +5414,7 @@ def build_zwykly_section(
         )
     except Exception as e:
         logger.warning("[zwykly] Błąd parsowania JSON: %s | raw: %.200s", e, raw)
-        logger.log_error("zwykly_parse_error", str(e))
+        execution_logger.log_error("zwykly_parse_error", str(e))
         res_text = raw
 
     main_section_html = _wrap_section_html(
