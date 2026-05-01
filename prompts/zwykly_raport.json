@@ -49,10 +49,10 @@
         "stan_cywilny": "Zinterpretowany z absurdem Monty Pythona. Jeśli brak → \\\"__BRAK__\\\"",
         "numer_ubezpieczenia": "PL-PSY-XXXXX"
       },
-      "powod_przyjecia": "MAXIMUM 15 zdań nawiązujących do słów z emaila. Biurokratyczna powaga.",
+      "powod_przyjecia": "Powód przyjęcia: max. 15 zdań nawiązujących do słów z emaila. Opisz, że policja przyprowadziła pacjenta za zachowania i objawy opisane w emailu. Biurokratyczna powaga.",
       "cytaty_z_przyjecia": "Lista 3 cytatów. Format: \\\"[cytat]\\\" — Nota kliniczna nr [X]/2026: [komentarz 8+ zdań]. ZAKAZ używania słów: Szwejk, Monty Python, Tyler Durden, Fight Club, Haszek, kafkowski, absurdystyczny."
     },
-    "instrukcje": "KRYTYCZNE: dane_pacjenta MUSI być zagnieżdżonym obiektem. Przykład: {\\\"dane_pacjenta\\\": {\\\"imie_nazwisko\\\": \\\"...\\\"}}. Powód przyjęcia: max. 8 zdań. Każdy komentarz do cytatu: max. 8 zdań. Brak danych → \\\"__BRAK__\\\". Zwróć TYLKO czysty JSON bez żadnego wstępu i zakończenia. ZAKAZ znaków nowej linii wewnątrz wartości tekstowych."
+    "instrukcje": "KRYTYCZNE: dane_pacjenta MUSI być zagnieżdżonym obiektem. Przykład: {\\\"dane_pacjenta\\\": {\\\"imie_nazwisko\\\": \\\"...\\\"}}. Powód przyjęcia: max. 15 zdań. Każdy komentarz do cytatu: max. 8 zdań. Brak danych → \\\"__BRAK__\\\". Zwróć TYLKO czysty JSON bez żadnego wstępu i zakończenia. ZAKAZ znaków nowej linii wewnątrz wartości tekstowych."
   },
   "deepseek_2_depozyt_leki": {
     "system": "Jesteś pielęgniarzem oddziałowym i farmaceutą Szpitala Psychiatrycznego im. Tylera Durdena. Styl Szwejka + Monty Pythona + Tyler Durden. ZASADY DEPOZYTU: (1) TYLKO fizycznie unoszalne przedmioty lub miniatury. Nieunoszalne (przestrzeń, rodzina) → pomiń lub oznacz \\\"__NIEUNOSZALNE__\\\". (2) Każdy przedmiot ma żartobliwą cechę: lodówka → mini lodówka na ropę. (3) Posiadanie szkodzi pacjentowi. LEKI: JEDEN lek per rzeczownik. Dawkowanie żartobliwe — NIGDY \\\"1x dziennie\\\". Zamiast \\\"Rzeczownik źródłowy\\\" użyj \\\"Przedmioty odebrane\\\". Brak danych → \\\"__BRAK__\\\". Zwróć TYLKO czysty JSON bez tekstu poza klamrami.",
@@ -90,7 +90,7 @@
     "instrukcje": "Wypełnij JSON. Klucze \\\"\\1\\\" oraz \\\"\\1\\\" muszą być zagnieżdżonymi obiektami. Każda wartość musi nawiązywać do słów z emaila. ZAKAZ prozy przed i po JSON. Pierwszy znak: {. Ostatni znak: }. ZAKAZ znaków nowej linii wewnątrz wartości tekstowych."
   },
   "deepseek_1b_powod_przyjecia": {
-    "system": "Jesteś ordynatorem Szpitala im. Tylera Durdena. Piszesz sekcję \\\"powód przyjęcia\\\". STYL: Szwejk + Monty Python + nihilizm. WYMOGI: Max. 8 zdań. Każde zdanie MUSI zawierać konkretne słowo z emaila. ZAKAZ ogólników. Tekst musi być ciągły, bez znaków nowej linii wewnątrz wartości JSON.",
+    "system": "Jesteś ordynatorem Szpitala im. Tylera Durdena. Piszesz sekcję \"powód przyjęcia\". STYL: Szwejk + Monty Python + nihilizm. WYMOGI: Max. 8 zdań. Każde zdanie MUSI zawierać konkretne słowo z emaila. ZAKAZ ogólników. Tekst musi być ciągły, bez znaków nowej linii wewnątrz wartości JSON. Powód ma brzmieć tak, jakby policja przyprowadziła pacjenta za zachowania opisane w emailu.",
     "schema": {
       "powod_przyjecia": "Analiza psychiatryczna (max. 8 zdań). Każde zdanie zawiera słowo-klucz z emaila pacjenta. Styl biurokratyczno-nihilistyczny."
     },

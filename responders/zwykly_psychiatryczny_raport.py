@@ -336,11 +336,15 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                 "[psych-raport] dane_pacjenta zwrócono jako list (len=%d) — próba wyciągnięcia pierwszego dict",
                 len(result),
             )
-            extracted = next((item for item in result if isinstance(item, dict)), None)
-            if extracted:
-                result = extracted
+            dict_items = [item for item in result if isinstance(item, dict)]
+            if dict_items:
+                merged = {}
+                for item in dict_items:
+                    merged.update(item)
+                result = merged
                 current_app.logger.warning(
-                    "[psych-raport] dane_pacjenta: list→dict OK (użyto pierwszego elementu)"
+                    "[psych-raport] dane_pacjenta: list→dict OK (scalono %d dictów)",
+                    len(dict_items),
                 )
             else:
                 current_app.logger.warning(
@@ -394,7 +398,8 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                     usr_1b = (
                         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
                         f"SENDER_NAME: {sender_name or 'pacjent'}\n\n"
-                        f"INSTRUKCJE:\n{ins_1b}"
+                        f"INSTRUKCJE:\n{ins_1b}\n\n"
+                        f"SCHEMAT JSON:\n{json.dumps(cfg_1b.get('schema', {}), ensure_ascii=False, indent=2)}"
                     )
                     raw_1b = _call_with_retry(_s(sys_1b), _u(usr_1b), max_tokens=3000)
                     if raw_1b:
@@ -442,7 +447,8 @@ def _sekcja_pacjent(cfg: dict, body: str, sender_name: str) -> dict:
                     usr_1c = (
                         f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\n"
                         f"SENDER_NAME: {sender_name or 'pacjent'}\n\n"
-                        f"INSTRUKCJE:\n{ins_1c}"
+                        f"INSTRUKCJE:\n{ins_1c}\n\n"
+                        f"SCHEMAT JSON:\n{json.dumps(cfg_1c.get('schema', {}), ensure_ascii=False, indent=2)}"
                     )
                     raw_1c = _call_with_retry(_s(sys_1c), _u(usr_1c), max_tokens=4000)
                     if raw_1c:

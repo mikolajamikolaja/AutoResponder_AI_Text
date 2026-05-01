@@ -2763,6 +2763,43 @@ def _generate_cv_content(
 
     user_msg = "\n".join(context_parts)
 
+    def _normalize_cv_data(cv_data):
+        if isinstance(cv_data, list) and cv_data:
+            first = cv_data[0]
+            if isinstance(first, dict):
+                logger.warning(
+                    "[cv] _parse_cv: root list zamiast dict — używam pierwszego obiektu"
+                )
+                cv_data = first
+        if not isinstance(cv_data, dict):
+            return cv_data
+
+        def _try_parse_json(value):
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except Exception:
+                    pass
+            return value
+
+        for key in [
+            "doswiadczenie",
+            "wyksztalcenie",
+            "umiejetnosci",
+            "jezyki",
+            "zainteresowania",
+        ]:
+            if key in cv_data and isinstance(cv_data[key], str):
+                parsed = _try_parse_json(cv_data[key])
+                if isinstance(parsed, list):
+                    logger.warning(
+                        "[cv] _parse_cv: sparsowano stringowe %s jako listę",
+                        key,
+                    )
+                    cv_data[key] = parsed
+
+        return cv_data
+
     def _parse_cv(raw: str) -> dict | None:
         if not raw:
             return None
@@ -2782,6 +2819,9 @@ def _generate_cv_content(
                             break
                     except json.JSONDecodeError:
                         continue
+            if cv_data is None:
+                return None
+            cv_data = _normalize_cv_data(cv_data)
             if cv_data is None or not isinstance(cv_data, dict):
                 return None
             return cv_data
@@ -2816,9 +2856,7 @@ def _generate_cv_content(
         for key in required_strings:
             val = cv.get(key, "").strip()
             if not val or len(val) < 5:  # Min 5 znaków
-                logger.warning(
-                    "[cv] _cv_is_complete: '%s' pusty lub za krótki", key
-                )
+                logger.warning("[cv] _cv_is_complete: '%s' pusty lub za krótki", key)
                 return False
 
         if cv.get("imie_nazwisko") in ("Anonim Bezdomny", ""):
