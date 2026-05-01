@@ -847,7 +847,7 @@ def _call_ai_with_fallback(
     # Używa tylko DeepSeek
     result = call_deepseek(system, user, MODEL_TYLER, max_tokens=max_tokens)
     try:
-        logger.log_ai_response(
+        execution_logger.log_ai_response(
             "deepseek",
             prompt=user,
             response=result or "",
@@ -2887,7 +2887,11 @@ def _generate_cv_content(
             logger.warning(
                 "[cv] CV niekompletne z próby 1 — będzie ponownie generowane w próbie 2. Pola: %s",
                 {
-                    k: len(cv_data[k]) if isinstance(cv_data[k], list) else len(str(cv_data[k]))
+                    k: (
+                        len(cv_data[k])
+                        if isinstance(cv_data[k], list)
+                        else len(str(cv_data[k]))
+                    )
                     for k in [
                         "doswiadczenie",
                         "umiejetnosci",
@@ -5301,7 +5305,7 @@ def build_zwykly_section(
     user_msg = _render_prompt(prompt_data, body, previous_body, sender_name)
     system_msg = prompt_data.get("system", "")
 
-    logger.log_pipeline_step(
+    execution_logger.log_pipeline_step(
         "zwykly_build_prompt",
         input_data={
             "body": body[:2000],
@@ -5324,7 +5328,7 @@ def build_zwykly_section(
         },
     )
 
-    logger.log_debug_info(
+    execution_logger.log_debug_info(
         "DEEPSEEK_REQUEST",
         {
             "system_length": len(system_msg),
@@ -5395,7 +5399,7 @@ def build_zwykly_section(
                     pdf_category = m_cat.group(1)
             else:
                 res_text = raw
-        logger.log_pipeline_step(
+        execution_logger.log_pipeline_step(
             "zwykly_parse_response",
             input_data={
                 "raw_response": raw[:2000],
