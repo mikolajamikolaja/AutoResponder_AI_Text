@@ -1584,12 +1584,25 @@ def _build_docx_inner(
     # ══════════════════════════════════════════════════════════════════════════
     heading("IX. ZALECENIA TERAPEUTYCZNE", 2, RED, 11)
     zt = raport.get("zalecenia_tylera", {})
-    if isinstance(zt, dict):
+    if isinstance(zt, list):
+        # AI zwróciło listę zamiast dict — renderuj każdy element
+        for item in zt:
+            if isinstance(item, dict):
+                tresc = item.get("tresc") or item.get("zadanie") or item.get("zadanie_1") or ""
+                if tresc and tresc != "__BRAK__":
+                    p_z = doc.add_paragraph(style="List Number")
+                    p_z.add_run(str(tresc)).font.size = Pt(10)
+            elif item and str(item) != "__BRAK__":
+                p_z = doc.add_paragraph(style="List Number")
+                p_z.add_run(str(item)).font.size = Pt(10)
+    elif isinstance(zt, dict):
         if zt.get("naglowek"):
             para(zt["naglowek"], bold=True, color=RED, size=10)
-        if zt.get("zadanie_1") and zt["zadanie_1"] != "__BRAK__":
-            p_z = doc.add_paragraph(style="List Number")
-            p_z.add_run(str(zt["zadanie_1"])).font.size = Pt(10)
+        for zadanie_key in ("zadanie_1", "zadanie_2", "zadanie_3"):
+            zadanie_val = zt.get(zadanie_key, "")
+            if zadanie_val and zadanie_val != "__BRAK__":
+                p_z = doc.add_paragraph(style="List Number")
+                p_z.add_run(str(zadanie_val)).font.size = Pt(10)
         if zt.get("podpis"):
             doc.add_paragraph()
             para(zt["podpis"], italic=True, color=GREY, size=9)
@@ -1841,7 +1854,7 @@ def build_raport(
     raport = {}
 
     # ── dane_pacjenta: _sekcja_pacjent zwraca PŁASKI dict — opakowujemy
-    PACJENT_FIELDS = {"imie_nazwisko", "wiek", "adres", "zawod", "stan_cywilny", "numer_ubezpieczenia"}
+    PACJENT_FIELDS = {"imie_nazwisko", "wiek", "adres", "zawod", "stan_cywilny", "numer_ubezpieczenia", "rodowod", "rodowód"}
     if isinstance(sekcja_pacjent, dict):
         if "dane_pacjenta" in sekcja_pacjent and isinstance(sekcja_pacjent["dane_pacjenta"], dict):
             raport["dane_pacjenta"] = sekcja_pacjent["dane_pacjenta"]
@@ -1849,7 +1862,17 @@ def build_raport(
                 if k != "dane_pacjenta":
                     raport[k] = v
         else:
-            raport["dane_pacjenta"] = {k: v for k, v in sekcja_pacjent.items() if k in PACJENT_FIELDS}
+            # AI zwróciło płaski dict — zbieramy pola pacjenta
+            dane_pac = {k: v for k, v in sekcja_pacjent.items() if k in PACJENT_FIELDS}
+            # Zabezpieczenie: dane_pacjenta MUSI być dict, nigdy stringiem
+            raport["dane_pacjenta"] = dane_pac if dane_pac else {
+                "imie_nazwisko": sender_name or "pacjent",
+                "wiek": "__BRAK__",
+                "adres": "__BRAK__",
+                "zawod": "__BRAK__",
+                "stan_cywilny": "__BRAK__",
+                "numer_ubezpieczenia": "__BRAK__",
+            }
             for k, v in sekcja_pacjent.items():
                 if k not in PACJENT_FIELDS:
                     raport[k] = v
@@ -1941,7 +1964,8 @@ def build_raport(
         current_app.logger.error("[psych-raport] DOCX nie wygenerowany")
         return {"raport_pdf": None, "psych_photo_1": photo_1, "psych_photo_2": photo_2}
 
-    imie = raport.get("dane_pacjenta", {}).get("imie_nazwisko", "pacjent")
+    _dp_tmp = raport.get("dane_pacjenta", {})
+    imie = _dp_tmp.get("imie_nazwisko", "pacjent") if isinstance(_dp_tmp, dict) else (sender_name or "pacjent")
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", imie)[:30]
 
     raport_pdf_dict = {

@@ -435,9 +435,34 @@ def _generate_flux_image(prompt: str, etap: int = 0, return_token_info: bool = F
             return substitute
         current_app.logger.warning("[smierc-flux] test_mode — brak zastepczy.jpg, pomijam obrazek dla etapu %d", etap)
         return None
+
+    # Retry jeśli warm-up hf_token_manager jeszcze nie skończył
+    import time
     tokens = get_active_tokens()
+    if not tokens and not hf_tokens.all_dead():
+        current_app.logger.warning(
+            "[smierc-flux] Brak tokenów — warm-up w toku, czekam 5s i próbuję ponownie"
+        )
+        time.sleep(5)
+        tokens = get_active_tokens()
+        if not tokens and not hf_tokens.all_dead():
+            current_app.logger.warning("[smierc-flux] Nadal brak tokenów po 5s — czekam jeszcze 10s")
+            time.sleep(10)
+            tokens = get_active_tokens()
+
     if not tokens:
-        current_app.logger.error("[flux] Brak tokenow HF!")
+        if hf_tokens.all_dead():
+            current_app.logger.error(
+                "[smierc-flux] WSZYSTKIE TOKENY HF MARTWE (401/402/403) — "
+                "sprawdź zmienne środowiskowe HF_TOKEN* na Render. Używam zastepczy.jpg."
+            )
+        else:
+            current_app.logger.error("[smierc-flux] Brak tokenów HF po retry — używam zastepczy.jpg.")
+        substitute = _load_substitute_image()
+        if substitute:
+            substitute = dict(substitute)
+            substitute["filename"] = f"smierc_etap{etap}_zastepczy.jpg"
+            return substitute
         return None
 
     current_app.logger.info(
