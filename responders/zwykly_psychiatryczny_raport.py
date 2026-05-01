@@ -86,6 +86,11 @@ def _extract_best_json(raw: str) -> tuple:
                 best_text = raw[start : start + end]
         except json.JSONDecodeError:
             continue
+    if isinstance(best_obj, list) and best_obj:
+        current_app.logger.warning(
+            "[psych-raport] _extract_best_json: root list zamiast obiektu — używam pierwszego elementu"
+        )
+        best_obj = best_obj[0]
     return best_obj, best_text
 
 
@@ -139,6 +144,12 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     # Próba 2: ekstrakcja największego JSON fragmentu
     extracted, extracted_text = _extract_best_json(clean)
     if extracted is not None:
+        if isinstance(extracted, list) and extracted:
+            current_app.logger.warning(
+                "[psych-raport] JSON ekstrakcja sekcja=%s zwrócono listę — używam pierwszego elementu",
+                section,
+            )
+            extracted = extracted[0]
         current_app.logger.warning(
             "[psych-raport] JSON ekstrakcja sekcja=%s OK (%d znaków)",
             section,
@@ -1068,7 +1079,9 @@ def _sekcja_flux_prompty(
         return {}
 
 
-def _sekcja_leczenie_specjalne(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> dict:
+def _sekcja_leczenie_specjalne(
+    cfg: dict, body: str, dni_1_7: list, dni_8_14: list
+) -> dict:
     """Sekcja 9 — leczenie specjalne (deepseek_9_leczenie_specjalne).
     Zwraca dict z kluczem 'leczenie_specjalne' zawierającym listę metod leczenia.
     """
@@ -1115,17 +1128,25 @@ def _sekcja_leczenie_specjalne(cfg: dict, body: str, dni_1_7: list, dni_8_14: li
 
         # Normalizacja: oczekujemy listy metod lub dict z kluczem leczenie_specjalne
         if isinstance(result, dict):
-            for key in ("leczenie_specjalne", "metody_leczenia", "treatments", "methods"):
+            for key in (
+                "leczenie_specjalne",
+                "metody_leczenia",
+                "treatments",
+                "methods",
+            ):
                 if key in result:
                     val = result[key]
                     if isinstance(val, list):
                         current_app.logger.info(
                             "[psych-raport] leczenie_specjalne: wyciągnięto z klucza '%s' (%d el.)",
-                            key, len(val),
+                            key,
+                            len(val),
                         )
                         return {"leczenie_specjalne": val}
             # Jeśli dict ale bez listy — zwróć jako słownik metod
-            current_app.logger.info("[psych-raport] leczenie_specjalne: dict → zachowano jako dict")
+            current_app.logger.info(
+                "[psych-raport] leczenie_specjalne: dict → zachowano jako dict"
+            )
             return {"leczenie_specjalne": result}
 
         if isinstance(result, list):
@@ -1135,7 +1156,8 @@ def _sekcja_leczenie_specjalne(cfg: dict, body: str, dni_1_7: list, dni_8_14: li
             return {"leczenie_specjalne": result}
 
         current_app.logger.warning(
-            "[psych-raport] leczenie_specjalne: nieoczekiwany typ %s", type(result).__name__
+            "[psych-raport] leczenie_specjalne: nieoczekiwany typ %s",
+            type(result).__name__,
         )
         return {}
 
@@ -2430,7 +2452,51 @@ def build_raport(
     raport["relacje_swiadkow"] = relacje_result.get("relacje_swiadkow", [])
 
     # Leczenie specjalne (deepseek_9)
-    raport["leczenie_specjalne"] = sekcja_leczenie_specjalne.get("leczenie_specjalne", [])
+    raport["leczenie_specjalne"] = sekcja_leczenie_specjalne.get(
+        "leczenie_specjalne", []
+    )
+
+    # Twarda walidacja typu dla dane_pacjenta
+    dane_pacjenta = raport.get("dane_pacjenta", {})
+    if not isinstance(dane_pacjenta, dict):
+        if isinstance(dane_pacjenta, list) and dane_pacjenta:
+            first = dane_pacjenta[0]
+            if isinstance(first, dict):
+                raport["dane_pacjenta"] = first
+            else:
+                current_app.logger.warning(
+                    "[psych-raport] dane_pacjenta: root list bez dict — fallback do domyślnych",
+                )
+                raport["dane_pacjenta"] = {
+                    "imie_nazwisko": sender_name or "pacjent",
+                    "wiek": "__BRAK__",
+                    "adres": "__BRAK__",
+                    "zawod": "__BRAK__",
+                    "stan_cywilny": "__BRAK__",
+                    "numer_ubezpieczenia": "__BRAK__",
+                }
+        elif isinstance(dane_pacjenta, str) and dane_pacjenta.strip():
+            raport["dane_pacjenta"] = {
+                "imie_nazwisko": dane_pacjenta.strip(),
+                "wiek": "__BRAK__",
+                "adres": "__BRAK__",
+                "zawod": "__BRAK__",
+                "stan_cywilny": "__BRAK__",
+                "numer_ubezpieczenia": "__BRAK__",
+            }
+        else:
+            current_app.logger.warning(
+                "[psych-raport] dane_pacjenta: zły typ %s — używam domyślnych",
+                type(dane_pacjenta).__name__,
+            )
+            raport["dane_pacjenta"] = {
+                "imie_nazwisko": sender_name or "pacjent",
+                "wiek": "__BRAK__",
+                "adres": "__BRAK__",
+                "zawod": "__BRAK__",
+                "stan_cywilny": "__BRAK__",
+                "numer_ubezpieczenia": "__BRAK__",
+            }
 
     # FLUX — zdjęcia równolegle
     prompt_pacjent = sekcja_flux.get("prompt_pacjent", "")

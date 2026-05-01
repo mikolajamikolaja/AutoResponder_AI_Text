@@ -1,5 +1,5 @@
 {
-  "description": "Prompty dla 9 wywołań DeepSeek + 2 DeepSeek. Styl: Dzielny Wojak Szwejk + Monty Python + filozofia Tylera Durdena. Maszynopis psychiatryczny, czarny humor, absurd, nihilizm. v5 — STABILNY JSON: ograniczenia długości + jawne fallbacki.",
+  "description": "Prompty dla 9 wywołań DeepSeek + 2 DeepSeek. Styl: Dzielny Wojak Szwejk + Monty Python + filozofia Tylera Durdena. Maszynopis psychiatryczny, czarny humor, absurd, nihilizm. v5 — STABILNY JSON: ograniczenia długości + jawne fallbacki. Pierwszym znakiem odpowiedzi MUSI być {. Zakaz root = []. Zakaz enterów wewnątrz wartości tekstowych. Wewnętrzne cudzysłowy muszą być maskowane jako \\\".",
   "szpital": {
     "nazwa": "Szpital Psychiatryczny im. Tylera Durdena",
     "adres": "742 Evergreen Terrace, New York, NY 10001",
@@ -23,8 +23,8 @@
       "powod_przyjecia": "Max 6 zdań lub '__BRAK__'",
       "cytaty_z_przyjecia": "Max 3 elementy lub '__BRAK__'"
     },
-    "instrukcje": "Struktura MUSI być poprawnym JSON. dane_pacjenta = obiekt. Ogranicz długość. Jeśli nie możesz wygenerować → '__BRAK__'.",
-    "_output_format": "TYLKO JSON. Pierwszy znak { lub [. Ostatni znak } lub ]. Zakaz markdown i tekstu poza JSON."
+    "instrukcje": "Struktura MUSI być poprawnym JSON. dane_pacjenta = obiekt. Pierwszym znakiem odpowiedzi MUSI być {. ZAKAZ root = []. ZAKAZ nowych linii wewnątrz wartości tekstowych. Wewnętrzne cudzysłowy muszą być maskowane jako \\\". Jeśli nie możesz wygenerować → '__BRAK__'.",
+    "_output_format": "TYLKO JSON. Pierwszy znak {, ostatni }. Zakaz root = []. Zakaz markdown i tekstu poza JSON."
   },
   "deepseek_1b_powod_przyjecia": {
     "system": "Jesteś ordynatorem. Piszesz TYLKO powód przyjęcia. Max 6-8 zdań. Każde zdanie odnosi się do emaila. Jeśli brak danych → '__BRAK__'. Zwróć WYŁĄCZNIE JSON.",

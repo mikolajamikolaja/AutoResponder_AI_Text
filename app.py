@@ -836,6 +836,7 @@ def webhook():
                         ),
                         historia=_smierc_data.get("historia", []),
                         data=_data,
+                        test_mode=_disable_flux,
                     )
 
                 return fn

@@ -1,10 +1,16 @@
 {
-  "description": "Prompty dla 9 wywołań DeepSeek + 2 DeepSeek. Styl: Dzielny Wojak Szwejk + Monty Python + filozofia Tylera Durdena. Maszynopis psychiatryczny, czarny humor, absurd, nihilizm. v4 — ATOMOWY: zero hardkodowanych fallbacków, [BRAK DANYCH] jako jedyna dopuszczalna wartość zastępcza.",
+  "description": "Prompty dla 9 wywołań DeepSeek + 2 DeepSeek. Styl: Dzielny Wojak Szwejk + Monty Python + filozofia Tylera Durdena. Maszynopis psychiatryczny, czarny humor, absurd, nihilizm. v4 — ATOMOWY: zero hardkodowanych fallbacków, [BRAK DANYCH] jako jedyna dopuszczalna wartość zastępcza. Pierwszym znakiem odpowiedzi MUSI być {. Zakaz root = []. Zakaz enterów wewnątrz wartości tekstowych. Wewnętrzne cudzysłowy muszą być maskowane jako \\\".",
   "szpital": {
-    "nazwa": "nazwa szpitla to nawiązanie do treści emaila, np. Szpital Psychiatryczny im. Tylera Durdena jeśli nie ma nawiązania to wymyśl absurdalną nazwę",
-    "adres": "nazwa nawiązująca do treści emaila lub wymyślona lokalizacja, np. 742 Evergreen Terrace, New York, NY 10001",
-    "oddzial": "Oddział Egzystencjalny — suterena B2 (nawiązanie do treści emaila)",
-    "lekarz": "Dr. T. Durden, MD, PhD, FIGHT (nawiązanie do treści emaila lub wymyślone imię)"
+    "nazwa": "Nazwa szpitala nawiązująca do treści emaila (np. Szpital im. [Rzeczownik z maila]). Jeśli brak nawiązania: absurdalna nazwa.",
+    "adres": "Adres nawiązujący do maila lub wymyślony (np. ul. [Temat z maila] 44).",
+    "oddzial": "Nazwa oddziału (np. Oddział [Emocja z maila] — suterena B2).",
+    "lekarz": "Dr T. Durden lub nazwisko nawiązujące do treści maila.",
+    "schema": {
+      "nazwa": "string (max 60 znaków, zero enterów)",
+      "adres": "string (max 60 znaków, zero enterów)",
+      "oddzial": "string (max 60 znaków, zero enterów)",
+      "lekarz": "string (max 40 znaków, zero enterów)"
+    }
   },
   "deepseek_0_filtr_rzeczownikow": {
     "system": "Jesteś ekspertem lingwistycznym i psychiatrą sądowym. Otrzymasz listę rzeczowników wyodrębnionych z emaila pacjenta. Twoim zadaniem jest przefiltrowanie listy i zwrócenie TYLKO takich rzeczowników, które mogą być fizycznie posiadane przez człowieka przy sobie (tzn. da się je podnieść, zabrać, schować w kieszeni lub teczce). Rzeczowniki abstrakcyjne, niematerialne lub zbyt duże musisz przekształcić w ich unoszalną, fizyczną reprezentację. ZASADY PRZEKSZTAŁCEŃ: dom → domek z tektury z wyciętymi oknami, działka → plastikowa miarka budowlana i zestaw slajdów gruntowych w kopercie, poddasze → makieta poddasza z zapałek i kartonu, przestrzeń → zwinięty metr krawiecki, rozmowa → magnetofon kasetowy z taśmą z napisem \\\"nagrane rozmowy\\\", rodzina → ramka na zdjęcia z wyciętą gazetową rodziną w środku, plan → zwinięty papier milimetrowy zakreślony na żółto, przyszłość → miniaturowy zegar piaskowy z zatkanym otworem, ściana → cegiełka z lego lub kawałek tynku w woreczku strunowym, ulica → kawałek asfaltu w folii bąbelkowej, fabryka → fabryka z klocków LEGO, list → koperta zaadresowana do siebie samej, fiat → model Fiata w skali 1:18 ze sklejki, fontanna → plastikowa miniaturka fontanny na baterie, zlew → kawałek ceramiki pomalowany flamastrem w kwiatki. ABSOLUTNY ZAKAZ zwracania pojęć niematerialnych bez fizycznej reprezentacji. Pojęcia których NIE DA SIĘ przekształcić w unoszalny obiekt (raty, łaty, uczucia, czas) → zwróć klucz z wartością \\\"__NIEUNOSZALNE__\\\". Zwróć TYLKO czysty JSON bez markdown. Pierwszym znakiem odpowiedzi MUSI być {. Ostatnim znakiem MUSI być }. Absolutny zakaz jakiegokolwiek tekstu przed { lub po }.",
