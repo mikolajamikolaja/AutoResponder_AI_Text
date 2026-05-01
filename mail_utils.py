@@ -8,10 +8,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from config import (
-    IMAP_HOST, SMTP_HOST, SMTP_PORT,
-    MAIL_USER, MAIL_PASS,
-    ALLOWED_EMAILS_FILE
+    IMAP_HOST,
+    SMTP_HOST,
+    SMTP_PORT,
+    MAIL_USER,
+    MAIL_PASS,
+    ALLOWED_EMAILS_FILE,
 )
+
 
 def load_allowed_emails():
     emails = set()
@@ -25,7 +29,9 @@ def load_allowed_emails():
         print("Błąd ładowania dozwolonych emaili:", e)
     return emails
 
+
 ALLOWED_EMAILS = load_allowed_emails()
+
 
 def fetch_unseen_allowed():
     """
@@ -39,7 +45,7 @@ def fetch_unseen_allowed():
         mail = imaplib.IMAP4_SSL(IMAP_HOST)
         mail.login(MAIL_USER, MAIL_PASS)
         mail.select("INBOX")
-        status, data = mail.search(None, 'UNSEEN')
+        status, data = mail.search(None, "UNSEEN")
         if status != "OK":
             return []
         ids = data[0].split()
@@ -70,6 +76,7 @@ def fetch_unseen_allowed():
             pass
     return messages
 
+
 def extract_body(msg):
     """
     Zwraca treść wiadomości jako tekst (najpierw text/plain, potem text/html).
@@ -82,25 +89,25 @@ def extract_body(msg):
                 disp = str(part.get("Content-Disposition") or "")
                 if ctype == "text/plain" and "attachment" not in disp:
                     return part.get_payload(decode=True).decode(
-                        part.get_content_charset() or "utf-8",
-                        errors="ignore"
+                        part.get_content_charset() or "utf-8", errors="ignore"
                     )
             for part in msg.walk():
                 if part.get_content_type() == "text/html":
                     return part.get_payload(decode=True).decode(
-                        part.get_content_charset() or "utf-8",
-                        errors="ignore"
+                        part.get_content_charset() or "utf-8", errors="ignore"
                     )
         else:
             return msg.get_payload(decode=True).decode(
-                msg.get_content_charset() or "utf-8",
-                errors="ignore"
+                msg.get_content_charset() or "utf-8", errors="ignore"
             )
     except Exception as e:
         print("Błąd extract_body:", e)
     return ""
 
-def send_reply_with_attachments(to_addr, subject, html_body, inline_images=None, attachments=None, from_name=None):
+
+def send_reply_with_attachments(
+    to_addr, subject, html_body, inline_images=None, attachments=None, from_name=None
+):
     """
     Wysyła mail HTML z opcjonalnymi inline images i załącznikami.
     inline_images: dict cid->blob_bytes_tuple (content_type, filename, bytes)
@@ -126,7 +133,9 @@ def send_reply_with_attachments(to_addr, subject, html_body, inline_images=None,
                     part.set_payload(data_bytes)
                     encoders.encode_base64(part)
                     part.add_header("Content-ID", f"<{cid}>")
-                    part.add_header("Content-Disposition", f'inline; filename="{filename}"')
+                    part.add_header(
+                        "Content-Disposition", f'inline; filename="{filename}"'
+                    )
                     msg.attach(part)
                 except Exception as e:
                     print("Błąd dołączania inline image:", e)
@@ -140,7 +149,9 @@ def send_reply_with_attachments(to_addr, subject, html_body, inline_images=None,
                     part = MIMEBase(maintype, subtype)
                     part.set_payload(data_bytes)
                     encoders.encode_base64(part)
-                    part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+                    part.add_header(
+                        "Content-Disposition", f'attachment; filename="{filename}"'
+                    )
                     msg.attach(part)
                 except Exception as e:
                     print("Błąd dołączania załącznika:", e)
@@ -150,6 +161,7 @@ def send_reply_with_attachments(to_addr, subject, html_body, inline_images=None,
             server.send_message(msg)
     except Exception as e:
         print("Błąd wysyłania maila:", e)
+
 
 def send_error_email(error_text):
     try:

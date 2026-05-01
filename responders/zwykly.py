@@ -158,6 +158,7 @@ from core.hf_token_manager import get_active_tokens, mark_dead, hf_tokens
 # HELPER: pakowanie pliku do ZIP (Gmail blokuje .html, .htm, .svg)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _to_zip(content: bytes, inner_filename: str, zip_filename: str) -> dict:
     """Pakuje bytes do ZIP i zwraca dict {base64, content_type, filename}."""
     buf = io.BytesIO()
@@ -316,6 +317,7 @@ def _build_combined_reply_html(sections: list[str]) -> str:
 </body>
 </html>"""
 
+
 def _wrap_section_html(content: str, title: str | None = None) -> str:
     if not content:
         return ""
@@ -347,14 +349,18 @@ def _collect_section_attachments(
         fname = item.get("filename", "").lower()
         ct = item.get("content_type", "").lower()
         return (
-            fname.endswith(".htm") or fname.endswith(".html")
+            fname.endswith(".htm")
+            or fname.endswith(".html")
             or ct in ("text/html", "text/htm")
         )
 
     if section_output.get("docs"):
         docs.extend(
-            [item for item in section_output.get("docs", [])
-             if isinstance(item, dict) and not _is_html_file(item)]
+            [
+                item
+                for item in section_output.get("docs", [])
+                if isinstance(item, dict) and not _is_html_file(item)
+            ]
         )
     if section_output.get("docx_list"):
         docx_list.extend(
@@ -445,7 +451,7 @@ def _strip_json_markdown(raw: str) -> str:
     # Szukaj pierwszego '{' lub '[' (po słowie "json", backtickach itp.)
     match = re.search(r"[\{\[]", raw)
     if match:
-        candidate = raw[match.start():]
+        candidate = raw[match.start() :]
         fragment = _extract_first_json_object(candidate)
         if fragment:
             return fragment
@@ -579,7 +585,10 @@ def _parse_json_safe(raw: str, label: str = "json") -> dict | list | None:
                 }.get(label.split("-")[0].split("_")[0], "items")
                 result = {key_guess: dict_items}
                 logger.warning(
-                    "[%s] raw_decode: %d jednorod. obiektów → {%s: [...]}", label, len(dict_items), key_guess
+                    "[%s] raw_decode: %d jednorod. obiektów → {%s: [...]}",
+                    label,
+                    len(dict_items),
+                    key_guess,
                 )
             elif dict_items:
                 # Różne sekcje — scalaj (oryginalne zachowanie)
@@ -2734,7 +2743,7 @@ def _generate_cv_content(
 
     user_msg = "\n".join(context_parts)
 
-    raw, _ = _call_ai_with_fallback(system_msg, user_msg, max_tokens=2000)
+    raw, _ = _call_ai_with_fallback(system_msg, user_msg, max_tokens=7000)
 
     if not raw:
         logger.warning("[cv] Brak odpowiedzi od AI")
@@ -3235,10 +3244,14 @@ def _build_ankieta(res_text: str, body: str) -> tuple[dict | None, dict | None]:
         # AI zwróciło tablicę pytań bez wrappera — owijamy
         if isinstance(data, list):
             if len(data) > 0 and isinstance(data[0], dict):
-                logger.warning("[ankieta] AI zwróciło listę — owijam w {pytania: [...]}")
+                logger.warning(
+                    "[ankieta] AI zwróciło listę — owijam w {pytania: [...]}"
+                )
                 data = {"pytania": data}
             else:
-                raise ValueError(f"Oczekiwano dict, dostałem list (pusta lub bez dictów)")
+                raise ValueError(
+                    f"Oczekiwano dict, dostałem list (pusta lub bez dictów)"
+                )
         if not isinstance(data, dict):
             raise ValueError(f"Oczekiwano dict, dostałem {type(data).__name__}")
         if not data.get("pytania"):
@@ -3384,7 +3397,9 @@ function sprawdz() {{
         c.drawCentredString(W / 2, H - 28 * mm, tytul_pdf)
         c.setFont(FN, 9)
         c.setFillColorRGB(0.7, 0.5, 0.5)
-        c.drawCentredString(W / 2, H - 35 * mm, f"{len(pytania)} pytań | odpowiedź poprawna: b")
+        c.drawCentredString(
+            W / 2, H - 35 * mm, f"{len(pytania)} pytań | odpowiedź poprawna: b"
+        )
 
         y = H - 50 * mm
 
@@ -3418,7 +3433,10 @@ function sprawdz() {{
             pytanie_txt = p.get("pytanie", "")
             odp = p.get("odpowiedzi", {})
             if isinstance(odp, list):
-                odp = {str(it.get("klucz", chr(97 + i))): str(it.get("tresc", "")) for i, it in enumerate(odp)}
+                odp = {
+                    str(it.get("klucz", chr(97 + i))): str(it.get("tresc", ""))
+                    for i, it in enumerate(odp)
+                }
             wyjasnienie = p.get("wyjasnienie", "")
 
             # Nagłówek pytania
@@ -3624,7 +3642,9 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
         c.rect(10 * mm, H - 40 * mm, W - 20 * mm, 30 * mm, fill=1, stroke=0)
         c.setFont(FB, 8)
         c.setFillColorRGB(0.6, 0.6, 0.6)
-        c.drawCentredString(W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA — HOROSKOP TYLERA")
+        c.drawCentredString(
+            W / 2, H - 18 * mm, "GAZETA NIHILISTYCZNA — HOROSKOP TYLERA"
+        )
 
         znak = str(data.get("znak_zodiaku", "Nieznany Znak"))[:50]
         c.setFont(FB, 16)
@@ -3648,11 +3668,11 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
                     line_txt = test
                 else:
                     c.drawString(x + indent, y_pos, line_txt)
-                    y_pos -= (size + 2)
+                    y_pos -= size + 2
                     line_txt = w
             if line_txt:
                 c.drawString(x + indent, y_pos, line_txt)
-                y_pos -= (size + 2)
+                y_pos -= size + 2
             return y_pos
 
         # Dni
@@ -3691,7 +3711,9 @@ def _build_horoskop(body: str, res_text: str) -> dict | None:
             if rada:
                 c.setFont(FN, 8)
                 c.setFillColorRGB(*RED)
-                y = wrap_text(f"→ {rada}", FN, 8, cw - 3 * mm, lm + 3 * mm, y, color=RED)
+                y = wrap_text(
+                    f"→ {rada}", FN, 8, cw - 3 * mm, lm + 3 * mm, y, color=RED
+                )
 
             y -= 6 * mm
 
@@ -4706,7 +4728,9 @@ def _build_flow_diagram_svg(exec_logger) -> dict | None:
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         logger.info("[flow_diagram] OK")
-        return _to_zip(svg.encode("utf-8"), f"flow_diagram_{ts}.svg", f"flow_diagram_{ts}.zip")
+        return _to_zip(
+            svg.encode("utf-8"), f"flow_diagram_{ts}.svg", f"flow_diagram_{ts}.zip"
+        )
 
     except Exception as e:
         logger.warning("[flow_diagram] Błąd: %s", e)
@@ -5041,7 +5065,9 @@ def build_zwykly_section(
                 except Exception:
                     pass
                 res_text = extracted
-                logger.warning("[zwykly] regex fallback OK — wyciągnięto %d znaków", len(res_text))
+                logger.warning(
+                    "[zwykly] regex fallback OK — wyciągnięto %d znaków", len(res_text)
+                )
                 # Spróbuj też wyciągnąć emocję i kategorię
                 m_em = re.search(r'"emocja"\s*:\s*"([^"]*)"', raw)
                 if m_em:
@@ -5122,7 +5148,10 @@ def build_zwykly_section(
             psych_photo_1 = raport_result.get("psych_photo_1")
             psych_photo_2 = raport_result.get("psych_photo_2")
         else:
-            logger.warning("[zwykly] build_raport zwrócił %s zamiast dict", type(raport_result).__name__)
+            logger.warning(
+                "[zwykly] build_raport zwrócił %s zamiast dict",
+                type(raport_result).__name__,
+            )
     except Exception as e:
         logger.warning("[zwykly] Błąd raportu psychiatrycznego: %s", e)
 

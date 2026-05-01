@@ -11,6 +11,7 @@ OPTYMALIZACJE PAMIĘCI (512 MB):
   - logger.entries czyszczone po wygenerowaniu log.txt
   - Brak importów na poziomie modułu — lazy import wewnątrz funkcji
 """
+
 import gc
 import os
 import traceback
@@ -545,13 +546,15 @@ def _update_smierc_sheet(smierc_sheet_id, sender, data, smierc_result):
         current_row = 2  # Minimum wiersz 2 (wiersz 1 to nagłówki)
 
     range_current = f"{sheet_tab}!A{current_row}:E{current_row}"
-    values_current = [[
-        etap_biezacy,   # A: nr_etapu (bieżący)
-        "",             # B: data_smierci (GAS ustawia, nie nadpisujemy)
-        body_text,      # C: mail_od_osoby
-        odpowiedz,      # D: odpowiedz_pawla — PLAIN TEXT, czytelny
-        msg_id,         # E: last_msg_id
-    ]]
+    values_current = [
+        [
+            etap_biezacy,  # A: nr_etapu (bieżący)
+            "",  # B: data_smierci (GAS ustawia, nie nadpisujemy)
+            body_text,  # C: mail_od_osoby
+            odpowiedz,  # D: odpowiedz_pawla — PLAIN TEXT, czytelny
+            msg_id,  # E: last_msg_id
+        ]
+    ]
     update_sheet_with_data(smierc_sheet_id, range_current, values_current)
 
     # ── Wiersz następny: zapisz nowy_etap w kolumnie A ────────────────────────

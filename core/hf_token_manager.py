@@ -34,7 +34,11 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+    TimeoutError as FuturesTimeout,
+)
 from typing import Optional
 
 import requests as _requests
@@ -44,33 +48,35 @@ logger = logging.getLogger(__name__)
 # ─── Stałe konfiguracyjne ──────────────────────────────────────────────────────
 
 _HF_WHOAMI_URL = "https://huggingface.co/api/whoami"
-_CHECK_TIMEOUT = 6           # timeout pojedynczego sprawdzenia tokenu (s)
-_TOKEN_RANGE   = 100         # skanuj HF_TOKEN, HF_TOKEN1 … HF_TOKEN99
-_MAX_WARMUP_THREADS = 8      # max równoległych wątków podczas warm-upu
+_CHECK_TIMEOUT = 6  # timeout pojedynczego sprawdzenia tokenu (s)
+_TOKEN_RANGE = 100  # skanuj HF_TOKEN, HF_TOKEN1 … HF_TOKEN99
+_MAX_WARMUP_THREADS = 8  # max równoległych wątków podczas warm-upu
 
 # Po tym czasie od warm-upu z wynikiem ALL_DEAD — spróbuj ponownie
 # 0 = nigdy nie próbuj ponownie (tokeny 401 są trwale martwe)
 _RECHECK_AFTER = 300  # po 5 min sprawdź ponownie (obsługuje dodanie nowego tokenu)
 
 # Minimalny odstęp między kolejnymi warm-upami (ochrona przed pętlą OOM-restart)
-_MIN_WARMUP_INTERVAL = 120   # sekund
+_MIN_WARMUP_INTERVAL = 120  # sekund
 
 
 # ─── Stan tokenu ──────────────────────────────────────────────────────────────
+
 
 class _TokenState:
     __slots__ = ("name", "value", "alive", "dead_reason", "dead_at", "remaining")
 
     def __init__(self, name: str, value: str):
-        self.name:        str            = name
-        self.value:       str            = value
-        self.alive:       bool           = True
-        self.dead_reason: str            = ""
-        self.dead_at:     float          = 0.0
-        self.remaining:   Optional[int]  = None
+        self.name: str = name
+        self.value: str = value
+        self.alive: bool = True
+        self.dead_reason: str = ""
+        self.dead_at: float = 0.0
+        self.remaining: Optional[int] = None
 
 
 # ─── Menedżer ─────────────────────────────────────────────────────────────────
+
 
 class HFTokenManager:
     """
@@ -78,13 +84,13 @@ class HFTokenManager:
     """
 
     def __init__(self):
-        self._lock              = threading.RLock()
-        self._tokens:           dict[str, _TokenState] = {}
-        self._warmed_up:        bool  = False
-        self._warmup_lock:      threading.Lock = threading.Lock()
-        self._warmup_running:   bool  = False
-        self._last_warmup_at:   float = 0.0   # monotonic timestamp ostatniego warm-upu
-        self._all_dead_since:   float = 0.0   # kiedy ostatnio stwierdzono ALL DEAD
+        self._lock = threading.RLock()
+        self._tokens: dict[str, _TokenState] = {}
+        self._warmed_up: bool = False
+        self._warmup_lock: threading.Lock = threading.Lock()
+        self._warmup_running: bool = False
+        self._last_warmup_at: float = 0.0  # monotonic timestamp ostatniego warm-upu
+        self._all_dead_since: float = 0.0  # kiedy ostatnio stwierdzono ALL DEAD
 
     # ── Wczytywanie tokenów ze środowiska ─────────────────────────────────────
 
@@ -107,8 +113,9 @@ class HFTokenManager:
         """
         headers = {"Authorization": f"Bearer {value}"}
         try:
-            resp = _requests.get(_HF_WHOAMI_URL, headers=headers,
-                                 timeout=_CHECK_TIMEOUT)
+            resp = _requests.get(
+                _HF_WHOAMI_URL, headers=headers, timeout=_CHECK_TIMEOUT
+            )
             resp.close()
             if resp.status_code == 200:
                 return True, ""
@@ -118,18 +125,25 @@ class HFTokenManager:
                 return False, reason
             elif resp.status_code == 429:
                 # Rate limit na whoami — token prawdopodobnie żywy
-                logger.warning("[hf-manager] Token %s: rate limit whoami — zakładam aktywny", name)
+                logger.warning(
+                    "[hf-manager] Token %s: rate limit whoami — zakładam aktywny", name
+                )
                 return True, ""
             else:
                 # Nieznany status — zakładamy aktywny, żeby nie blokować
-                logger.debug("[hf-manager] Token %s: HTTP %s — zakładam aktywny",
-                             name, resp.status_code)
+                logger.debug(
+                    "[hf-manager] Token %s: HTTP %s — zakładam aktywny",
+                    name,
+                    resp.status_code,
+                )
                 return True, ""
         except _requests.exceptions.Timeout:
             logger.warning("[hf-manager] Token %s: timeout — zakładam aktywny", name)
             return True, ""
         except Exception as e:
-            logger.warning("[hf-manager] Token %s: błąd (%s) — zakładam aktywny", name, e)
+            logger.warning(
+                "[hf-manager] Token %s: błąd (%s) — zakładam aktywny", name, e
+            )
             return True, ""
 
     # ── Warm-up ───────────────────────────────────────────────────────────────
@@ -150,7 +164,8 @@ class HFTokenManager:
                 # Za wcześnie na kolejny warm-up — zwróć co mamy
                 logger.info(
                     "[hf-manager] Warm-up pominięty — był %.0fs temu (min %ds)",
-                    now - self._last_warmup_at, _MIN_WARMUP_INTERVAL
+                    now - self._last_warmup_at,
+                    _MIN_WARMUP_INTERVAL,
                 )
                 self._warmed_up = True  # traktuj jako "done" żeby nie loopować
                 return
@@ -161,13 +176,11 @@ class HFTokenManager:
             if not states:
                 logger.error("[hf-manager] Brak tokenów HF w zmiennych środowiskowych!")
                 with self._lock:
-                    self._tokens    = {}
+                    self._tokens = {}
                     self._warmed_up = True
                 return
 
-            logger.info(
-                "[hf-manager] Warm-up: sprawdzam %d tokenów HF…", len(states)
-            )
+            logger.info("[hf-manager] Warm-up: sprawdzam %d tokenów HF…", len(states))
 
             # Równoległe sprawdzanie z ograniczoną pulą wątków
             results: dict[str, tuple[bool, str]] = {}
@@ -177,16 +190,21 @@ class HFTokenManager:
                     for s in states
                 }
                 try:
-                    for future in as_completed(future_to_name,
-                                               timeout=_CHECK_TIMEOUT + 4):
+                    for future in as_completed(
+                        future_to_name, timeout=_CHECK_TIMEOUT + 4
+                    ):
                         name = future_to_name[future]
                         try:
                             results[name] = future.result()
                         except Exception as e:
-                            logger.warning("[hf-manager] Błąd sprawdzenia %s: %s", name, e)
+                            logger.warning(
+                                "[hf-manager] Błąd sprawdzenia %s: %s", name, e
+                            )
                             results[name] = (True, "")  # fail-safe: zakładaj aktywny
                 except FuturesTimeout:
-                    logger.warning("[hf-manager] Warm-up timeout — część tokenów nieznana")
+                    logger.warning(
+                        "[hf-manager] Warm-up timeout — część tokenów nieznana"
+                    )
                     for name in future_to_name.values():
                         if name not in results:
                             results[name] = (True, "")  # fail-safe
@@ -195,27 +213,30 @@ class HFTokenManager:
                 self._tokens = {}
                 for s in states:
                     alive, reason = results.get(s.name, (True, ""))
-                    s.alive       = alive
+                    s.alive = alive
                     s.dead_reason = reason
-                    s.dead_at     = 0.0 if alive else time.monotonic()
+                    s.dead_at = 0.0 if alive else time.monotonic()
                     self._tokens[s.name] = s
 
                 active = sum(1 for s in self._tokens.values() if s.alive)
-                dead   = len(self._tokens) - active
+                dead = len(self._tokens) - active
 
                 if active == 0 and self._tokens:
                     self._all_dead_since = time.monotonic()
                     logger.warning(
                         "[hf-manager] WSZYSTKIE %d TOKENY MARTWE — "
                         "FLUX wyłączony do ręcznego resetu lub upływu %ds",
-                        dead, _RECHECK_AFTER or 999999
+                        dead,
+                        _RECHECK_AFTER or 999999,
                     )
                 else:
                     self._all_dead_since = 0.0
 
             logger.info(
                 "[hf-manager] Warm-up: %d aktywnych / %d martwych / %d łącznie",
-                active, dead, len(self._tokens)
+                active,
+                dead,
+                len(self._tokens),
             )
             self._warmed_up = True
 
@@ -235,20 +256,18 @@ class HFTokenManager:
             if (time.monotonic() - self._all_dead_since) < _RECHECK_AFTER:
                 return []
             # Czas minął — zresetuj i sprawdź ponownie
-            logger.info("[hf-manager] Ponowne sprawdzenie tokenów po %ds", _RECHECK_AFTER)
+            logger.info(
+                "[hf-manager] Ponowne sprawdzenie tokenów po %ds", _RECHECK_AFTER
+            )
             with self._lock:
-                self._warmed_up     = False
+                self._warmed_up = False
                 self._all_dead_since = 0.0
 
         if not self._warmed_up:
             self.warmup()
 
         with self._lock:
-            return [
-                (s.name, s.value)
-                for s in self._tokens.values()
-                if s.alive
-            ]
+            return [(s.name, s.value) for s in self._tokens.values() if s.alive]
 
     def mark_dead(self, name: str, reason: str = "402/401/403") -> None:
         """
@@ -263,14 +282,16 @@ class HFTokenManager:
             if not s.alive:
                 return  # już martwy, nic do roboty
 
-            s.alive       = False
+            s.alive = False
             s.dead_reason = reason
-            s.dead_at     = time.monotonic()
+            s.dead_at = time.monotonic()
 
             active = sum(1 for x in self._tokens.values() if x.alive)
             logger.warning(
                 "[hf-manager] Token %s → MARTWY (%s). Aktywnych: %d",
-                name, reason, active
+                name,
+                reason,
+                active,
             )
 
             if active == 0:
@@ -309,13 +330,14 @@ class HFTokenManager:
             now = time.monotonic()
             return [
                 {
-                    "name":      s.name,
-                    "alive":     s.alive,
-                    "reason":    s.dead_reason or "OK",
+                    "name": s.name,
+                    "alive": s.alive,
+                    "reason": s.dead_reason or "OK",
                     "remaining": s.remaining,
-                    "dead_ago":  (
+                    "dead_ago": (
                         f"{int(now - s.dead_at)}s temu"
-                        if not s.alive and s.dead_at else None
+                        if not s.alive and s.dead_at
+                        else None
                     ),
                 }
                 for s in self._tokens.values()
@@ -328,10 +350,10 @@ class HFTokenManager:
         """
         with self._warmup_lock:
             with self._lock:
-                self._warmed_up      = False
+                self._warmed_up = False
                 self._all_dead_since = 0.0
-                self._last_warmup_at = 0.0   # zezwól na natychmiastowy warm-up
-                self._tokens         = {}
+                self._last_warmup_at = 0.0  # zezwól na natychmiastowy warm-up
+                self._tokens = {}
         logger.info("[hf-manager] Reset — warm-up przy następnym get_active_tokens()")
 
     def force_reset(self) -> None:
@@ -341,11 +363,13 @@ class HFTokenManager:
         """
         with self._warmup_lock:
             with self._lock:
-                self._warmed_up      = False
+                self._warmed_up = False
                 self._all_dead_since = 0.0
-                self._last_warmup_at = 0.0   # zezwól na natychmiastowy warm-up
-                self._tokens         = {}
-        logger.info("[hf-manager] Force-reset — warm-up przy następnym użyciu (bez cooldown)")
+                self._last_warmup_at = 0.0  # zezwól na natychmiastowy warm-up
+                self._tokens = {}
+        logger.info(
+            "[hf-manager] Force-reset — warm-up przy następnym użyciu (bez cooldown)"
+        )
 
 
 # ── Singleton ──────────────────────────────────────────────────────────────────
@@ -353,6 +377,7 @@ hf_tokens = HFTokenManager()
 
 
 # ── Skróty (dla wygody migracji) ──────────────────────────────────────────────
+
 
 def get_active_tokens() -> list[tuple[str, str]]:
     """Zwraca aktywne tokeny [(name, value), …]"""

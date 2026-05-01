@@ -2,13 +2,14 @@
 core/files.py
 Pomocnicze operacje na plikach: odczyt base64, wczytywanie promptów.
 """
+
 import os
 import base64
 from flask import current_app
 
 # Katalog główny projektu (tam gdzie app.py)
-BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROMPTS_DIR  = os.path.join(BASE_DIR, "prompts")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 
 
 def read_file_base64(path: str):

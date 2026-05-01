@@ -17,15 +17,17 @@ MAX_DLUGOSC_EMAIL = 7000
 # DEEPSEEK API
 # ─────────────────────────────────────────────────────────────────────────────
 DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
-DEEPSEEK_MODEL   = "deepseek-chat"
+DEEPSEEK_MODEL = "deepseek-chat"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HUGGING FACE / FLUX
 # ─────────────────────────────────────────────────────────────────────────────
-HF_API_URL        = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-HF_STEPS          = 2
-HF_GUIDANCE       = 2
-HF_TIMEOUT        = 55
+HF_API_URL = (
+    "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
+)
+HF_STEPS = 2
+HF_GUIDANCE = 2
+HF_TIMEOUT = 55
 TYLER_JPG_QUALITY = 90  # Kompresja JPG paneli tryptyku (95% = minimalna strata)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -34,9 +36,9 @@ TYLER_JPG_QUALITY = 90  # Kompresja JPG paneli tryptyku (95% = minimalna strata)
 EMOCJA_MAP = {
     "radosc": "twarz_radosc",
     "smutek": "twarz_smutek",
-    "zlosc":  "twarz_zlosc",
-    "lek":    "twarz_lek",
-    "nuda":   "twarz_nuda",
+    "zlosc": "twarz_zlosc",
+    "lek": "twarz_lek",
+    "nuda": "twarz_nuda",
     "spokoj": "twarz_spokoj",
 }
 FALLBACK_EMOT = "error"

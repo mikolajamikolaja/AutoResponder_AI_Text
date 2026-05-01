@@ -11,7 +11,7 @@ def build_html_reply(body_text: str) -> str:
     Tło obejmuje cały email (gradient z pastelowymi kolorami).
     """
     body_text = body_text.replace("\n", "<br>")
-    
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -111,7 +111,7 @@ def build_html_reply(body_text: str) -> str:
     </div>
 </body>
 </html>"""
-    
+
     return html
 
 
@@ -121,7 +121,7 @@ def build_html_reply_minimal(body_text: str) -> str:
     Szybka i lekka dla szybszych emaili.
     """
     body_text = body_text.replace("\n\n", "</p><p>").replace("\n", "<br>")
-    
+
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -157,7 +157,7 @@ def build_html_reply_dark(body_text: str) -> str:
     Dla wieczorowego czytania.
     """
     body_text = body_text.replace("\n", "<br>")
-    
+
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -218,15 +218,15 @@ def build_html_reply_dark(body_text: str) -> str:
 def wrap_with_background(html_content: str, color_scheme: str = "pastel") -> str:
     """
     Opakuj dowolny HTML w pastelowe tło obejmujące cały email.
-    
+
     Args:
         html_content: Zawartość HTML do opakowania
         color_scheme: "pastel", "minimal", "dark", "sunset", "ocean"
-    
+
     Returns:
         Pełny HTML z tłem
     """
-    
+
     schemes = {
         "pastel": "linear-gradient(135deg, #FFE4E1 0%, #E0F4FF 25%, #E8F5E9 50%, #FFF9C4 75%, #FCE4EC 100%)",
         "minimal": "linear-gradient(135deg, #F5F5F5 0%, #E8F5E9 50%, #FFF9C4 100%)",
@@ -234,9 +234,9 @@ def wrap_with_background(html_content: str, color_scheme: str = "pastel") -> str
         "sunset": "linear-gradient(135deg, #FFE4B5 0%, #FFB6C1 50%, #DDA0DD 100%)",
         "ocean": "linear-gradient(135deg, #B0E0E6 0%, #E0FFFF 50%, #B0E0E6 100%)",
     }
-    
+
     bg = schemes.get(color_scheme, schemes["pastel"])
-    
+
     return f"""<!DOCTYPE html>
 <html>
 <head>

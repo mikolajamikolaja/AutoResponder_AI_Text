@@ -24,7 +24,7 @@ from flask import current_app
 from core.ai_client import call_deepseek, MODEL_TYLER
 
 # ── Ścieżki ───────────────────────────────────────────────────────────────────
-BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROMPTS_DIR = os.path.join(BASE_DIR, "prompts")
 PROMPT_FILE = os.path.join(PROMPTS_DIR, "prompt_nawiazanie.txt")
 
@@ -60,11 +60,15 @@ def _build_instruction(
         )
     )
 
-    instruction = template.replace("[SENDER_NAME]",         sender_name or "")
-    instruction = instruction.replace("[SENDER_EMAIL]",     sender or "")
-    instruction = instruction.replace("[PREVIOUS_SUBJECT]", previous_subject or "brak tematu")
-    instruction = instruction.replace("[PREVIOUS_BODY]",    previous_body[:300])  # było 1500
-    instruction = instruction.replace("[CURRENT_BODY]",     current_body[:300])   # było 1500
+    instruction = template.replace("[SENDER_NAME]", sender_name or "")
+    instruction = instruction.replace("[SENDER_EMAIL]", sender or "")
+    instruction = instruction.replace(
+        "[PREVIOUS_SUBJECT]", previous_subject or "brak tematu"
+    )
+    instruction = instruction.replace(
+        "[PREVIOUS_BODY]", previous_body[:300]
+    )  # było 1500
+    instruction = instruction.replace("[CURRENT_BODY]", current_body[:300])  # było 1500
     return instruction
 
 
@@ -88,70 +92,74 @@ def build_nawiazanie_section(
     if not previous_body or not previous_body.strip():
         current_app.logger.info(
             "Nawiązanie: brak historii dla %s <%s> — pomijam",
-            sender_name or "(brak imienia)", sender
+            sender_name or "(brak imienia)",
+            sender,
         )
         return {
             "has_history": False,
-            "reply_html":  "",
-            "analysis":    "",
+            "reply_html": "",
+            "analysis": "",
         }
 
     current_app.logger.info(
         "Nawiązanie: znaleziono historię dla %s <%s> | poprzedni temat: %s",
-        sender_name or "(brak imienia)", sender, previous_subject
+        sender_name or "(brak imienia)",
+        sender,
+        previous_subject,
     )
 
     # Buduj instrukcję
     instruction = _build_instruction(
-        body, previous_body, previous_subject or "",
-        sender, sender_name
+        body, previous_body, previous_subject or "", sender, sender_name
     )
 
     # ── DIAGNOSTYKA — loguj rozmiar i fragment wysyłanego promptu ────────────
     current_app.logger.info(
         "Nawiązanie: długość instrukcji = %d znaków | "
         "previous_body = %d znaków | current_body = %d znaków",
-        len(instruction), len(previous_body), len(body)
+        len(instruction),
+        len(previous_body),
+        len(body),
     )
     current_app.logger.info(
         "Nawiązanie: instrukcja (pierwsze 300 znaków): %.300s", instruction
     )
-    current_app.logger.info(
-        "Nawiązanie: MODEL = %s", MODEL_TYLER
-    )
+    current_app.logger.info("Nawiązanie: MODEL = %s", MODEL_TYLER)
 
     # Wywołaj DeepSeek (timeout i retry z ai_client.py)
     try:
-        result = call_deepseek("Jesteś asystentem odpowiedz krótko, max 3 zdania", instruction, MODEL_TYLER)
+        result = call_deepseek(
+            "Jesteś asystentem odpowiedz krótko, max 3 zdania", instruction, MODEL_TYLER
+        )
     except Exception as e:
         current_app.logger.warning(
-            "Nawiązanie: błąd DeepSeek dla %s: %s — pomijam",
-            sender, str(e)[:80]
+            "Nawiązanie: błąd DeepSeek dla %s: %s — pomijam", sender, str(e)[:80]
         )
         return {
             "has_history": False,
-            "reply_html":  "",
-            "analysis":    "",
+            "reply_html": "",
+            "analysis": "",
         }
 
     if not result or not result.strip():
         current_app.logger.warning(
-            "Nawiązanie: DeepSeek nie zwrócił analizy dla %s — pomijam",
-            sender
+            "Nawiązanie: DeepSeek nie zwrócił analizy dla %s — pomijam", sender
         )
         return {
             "has_history": False,
-            "reply_html":  "",
-            "analysis":    "",
+            "reply_html": "",
+            "analysis": "",
         }
 
     # Wyczyść wynik
-    analysis = re.sub(r'\n{3,}', '\n\n', result.strip())
+    analysis = re.sub(r"\n{3,}", "\n\n", result.strip())
     analysis_html = analysis.replace("\n", "<br>")
 
     current_app.logger.info(
         "Nawiązanie: analiza gotowa dla %s <%s> (%.150s...)",
-        sender_name or "(brak)", sender, analysis
+        sender_name or "(brak)",
+        sender,
+        analysis,
     )
 
     reply_html = (
@@ -161,6 +169,6 @@ def build_nawiazanie_section(
 
     return {
         "has_history": True,
-        "reply_html":  reply_html,
-        "analysis":    analysis,
+        "reply_html": reply_html,
+        "analysis": analysis,
     }

@@ -95,7 +95,9 @@ def _fallback_prompt() -> dict:
 # ── Call AI — jedno zbiorcze zapytanie ───────────────────────────────────────
 
 
-def _generuj_wszystkie_metody(body: str, sender_name: str, prompt_data: dict) -> list[dict] | None:
+def _generuj_wszystkie_metody(
+    body: str, sender_name: str, prompt_data: dict
+) -> list[dict] | None:
     """
     Jedno wywołanie DeepSeek → zwraca listę 8 dict-ów (jedna per metoda).
     Fallback: None jeśli nie uda się sparsować.
@@ -103,10 +105,8 @@ def _generuj_wszystkie_metody(body: str, sender_name: str, prompt_data: dict) ->
     template = prompt_data.get("user_template", _fallback_prompt()["user_template"])
     system_msg = prompt_data.get("system", "Odpowiadaj WYŁĄCZNIE w JSON.")
 
-    user_msg = (
-        template
-        .replace("{{MAIL}}", body[:4000])
-        .replace("{{SENDER_NAME}}", sender_name or "nieznane")
+    user_msg = template.replace("{{MAIL}}", body[:4000]).replace(
+        "{{SENDER_NAME}}", sender_name or "nieznane"
     )
 
     # Dołącz opisy metod jeśli są w JSON
@@ -167,14 +167,19 @@ def _generuj_wszystkie_metody(body: str, sender_name: str, prompt_data: dict) ->
         return None
 
 
-def _generuj_jedna_metoda(body: str, sender_name: str, metoda_key: str, prompt_data: dict) -> dict | None:
+def _generuj_jedna_metoda(
+    body: str, sender_name: str, metoda_key: str, prompt_data: dict
+) -> dict | None:
     """
     Fallback: osobne wywołanie dla jednej metody (używane gdy zbiorcze się nie uda).
     """
     metody_def = prompt_data.get("metody_pocieszenia", [])
     opis_metody = ""
     for m in metody_def:
-        if m.get("id_key", m.get("id", "")) == metoda_key or m.get("nazwa", "").lower().replace(" ", "_") == metoda_key:
+        if (
+            m.get("id_key", m.get("id", "")) == metoda_key
+            or m.get("nazwa", "").lower().replace(" ", "_") == metoda_key
+        ):
             opis_metody = f"{m.get('nazwa', metoda_key)}: {m.get('opis', '')} (przykład: \"{m.get('przyklad', '')}\")"
             break
     if not opis_metody:
@@ -207,7 +212,7 @@ def _generuj_jedna_metoda(body: str, sender_name: str, metoda_key: str, prompt_d
         decoder = json.JSONDecoder()
         for match in re.finditer(r"\{", clean):
             try:
-                obj, _ = decoder.raw_decode(clean[match.start():])
+                obj, _ = decoder.raw_decode(clean[match.start() :])
                 if isinstance(obj, dict):
                     return obj
             except json.JSONDecodeError:
@@ -218,9 +223,6 @@ def _generuj_jedna_metoda(body: str, sender_name: str, metoda_key: str, prompt_d
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-
 
 
 def _wyciagnij_imie(sender_name: str, sender_email: str = "") -> str:
@@ -239,27 +241,62 @@ def _wyciagnij_imie(sender_name: str, sender_email: str = "") -> str:
 
 def _nastroj_do_koloru(nastroj: str) -> dict:
     palety = {
-        "smutek":     {"bg": "#eeedfe", "border": "#afa9ec", "ink": "#534ab7", "accent": "#534ab7"},
-        "ból":        {"bg": "#eeedfe", "border": "#afa9ec", "ink": "#534ab7", "accent": "#534ab7"},
-        "lęk":        {"bg": "#faeeda", "border": "#fac775", "ink": "#854f0b", "accent": "#854f0b"},
-        "frustracja": {"bg": "#fcebeb", "border": "#f09595", "ink": "#a32d2d", "accent": "#a32d2d"},
-        "złość":      {"bg": "#fcebeb", "border": "#f09595", "ink": "#a32d2d", "accent": "#a32d2d"},
-        "samotność":  {"bg": "#fbeaf0", "border": "#f0a8c4", "ink": "#993556", "accent": "#993556"},
-        "neutralna":  {"bg": "#d4f0e8", "border": "#7ecab8", "ink": "#1d8a6e", "accent": "#1d8a6e"},
+        "smutek": {
+            "bg": "#eeedfe",
+            "border": "#afa9ec",
+            "ink": "#534ab7",
+            "accent": "#534ab7",
+        },
+        "ból": {
+            "bg": "#eeedfe",
+            "border": "#afa9ec",
+            "ink": "#534ab7",
+            "accent": "#534ab7",
+        },
+        "lęk": {
+            "bg": "#faeeda",
+            "border": "#fac775",
+            "ink": "#854f0b",
+            "accent": "#854f0b",
+        },
+        "frustracja": {
+            "bg": "#fcebeb",
+            "border": "#f09595",
+            "ink": "#a32d2d",
+            "accent": "#a32d2d",
+        },
+        "złość": {
+            "bg": "#fcebeb",
+            "border": "#f09595",
+            "ink": "#a32d2d",
+            "accent": "#a32d2d",
+        },
+        "samotność": {
+            "bg": "#fbeaf0",
+            "border": "#f0a8c4",
+            "ink": "#993556",
+            "accent": "#993556",
+        },
+        "neutralna": {
+            "bg": "#d4f0e8",
+            "border": "#7ecab8",
+            "ink": "#1d8a6e",
+            "accent": "#1d8a6e",
+        },
     }
     return palety.get(nastroj, palety["neutralna"])
 
 
 def _metoda_do_tagu(metoda: str) -> str:
     mapy = {
-        "walidacja_emocji":        "metoda 01 · walidacja emocji",
-        "obecnosc":                "metoda 02 · obecność",
-        "normalizacja":            "metoda 03 · normalizacja",
-        "odzwierciedlenie":        "metoda 04 · odzwierciedlenie",
-        "przestrzen_na_cisze":     "metoda 05 · przestrzeń na ciszę",
-        "docenienie_odwagi":       "metoda 06 · docenienie odwagi",
+        "walidacja_emocji": "metoda 01 · walidacja emocji",
+        "obecnosc": "metoda 02 · obecność",
+        "normalizacja": "metoda 03 · normalizacja",
+        "odzwierciedlenie": "metoda 04 · odzwierciedlenie",
+        "przestrzen_na_cisze": "metoda 05 · przestrzeń na ciszę",
+        "docenienie_odwagi": "metoda 06 · docenienie odwagi",
         "bez_srebrnych_podszewek": "metoda 07 · bez srebrnych podszewek",
-        "cieplo_przez_konkret":    "metoda 08 · ciepło przez konkret",
+        "cieplo_przez_konkret": "metoda 08 · ciepło przez konkret",
     }
     return mapy.get(metoda, f"metoda · {metoda.replace('_', ' ')}")
 
@@ -326,9 +363,6 @@ def _buduj_html_email_multi(
 </div>"""
 
 
-
-
-
 # ── Główna funkcja responderu ─────────────────────────────────────────────────
 
 
@@ -369,7 +403,9 @@ def build_emocje_section(
     # ── Fallback: 8 osobnych zapytań jeśli nie dostaliśmy tablicy ────────────
 
     if not metody_results:
-        logger.warning("[emocje] Zbiorcze zapytanie nie zadziałało — fallback: 8 osobnych")
+        logger.warning(
+            "[emocje] Zbiorcze zapytanie nie zadziałało — fallback: 8 osobnych"
+        )
         metody_results = []
         for metoda_key in ALL_METODY:
             r = _generuj_jedna_metoda(mail_text, imie, metoda_key, prompt_data)
@@ -377,26 +413,31 @@ def build_emocje_section(
                 metody_results.append(r)
             else:
                 # Absolutny fallback dla tej metody
-                metody_results.append({
-                    "metoda": metoda_key,
-                    "pocieszenie": prompt_data.get(
-                        "fallback_pocieszenie",
-                        "<p>Jestem tutaj z Tobą.</p>"
-                    ),
-                    "nastroj": "neutralna",
-                    "intensywnosc": 5,
-                })
+                metody_results.append(
+                    {
+                        "metoda": metoda_key,
+                        "pocieszenie": prompt_data.get(
+                            "fallback_pocieszenie", "<p>Jestem tutaj z Tobą.</p>"
+                        ),
+                        "nastroj": "neutralna",
+                        "intensywnosc": 5,
+                    }
+                )
 
     # Upewnij się że mamy wszystkie 8 — uzupełnij brakujące fallbackiem
     metody_keys_got = {r.get("metoda") for r in metody_results}
     for metoda_key in ALL_METODY:
         if metoda_key not in metody_keys_got:
-            metody_results.append({
-                "metoda": metoda_key,
-                "pocieszenie": prompt_data.get("fallback_pocieszenie", "<p>Jestem tutaj.</p>"),
-                "nastroj": "neutralna",
-                "intensywnosc": 5,
-            })
+            metody_results.append(
+                {
+                    "metoda": metoda_key,
+                    "pocieszenie": prompt_data.get(
+                        "fallback_pocieszenie", "<p>Jestem tutaj.</p>"
+                    ),
+                    "nastroj": "neutralna",
+                    "intensywnosc": 5,
+                }
+            )
 
     # Sortuj wg kolejności z ALL_METODY
     order = {k: i for i, k in enumerate(ALL_METODY)}
@@ -408,8 +449,6 @@ def build_emocje_section(
     # ── reply_html — wszystkie metody ────────────────────────────────────────
 
     reply_html = _buduj_html_email_multi(metody_results, imie, nastroj_dominujacy)
-
-
 
     logger.info(
         "[emocje] metod=%d | nastrój=%s",

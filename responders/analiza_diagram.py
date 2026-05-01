@@ -401,8 +401,6 @@ def generate_jpg_diagram(gra: Dict[str, Any]) -> Optional[bytes]:
     return jpg
 
 
-
-
 def generate_thumbnail_jpg(
     gra: Dict[str, Any],
     sender_name: str = "",
@@ -432,7 +430,7 @@ def generate_thumbnail_jpg(
         # Krok 2: Wyciagnij blok SVG z HTML
         # Szukamy od pierwszego <?xml lub <svg do zamykajacego </svg>
         svg_match = re.search(
-            r'(<\?xml[^>]*\?>\s*)?(<svg\b.*?</svg>)',
+            r"(<\?xml[^>]*\?>\s*)?(<svg\b.*?</svg>)",
             html_str,
             re.DOTALL | re.IGNORECASE,
         )
@@ -443,8 +441,10 @@ def generate_thumbnail_jpg(
         svg_str = svg_match.group(2)  # sam blok <svg>...</svg>
 
         # Upewnij sie ze ma xmlns (cairosvg wymaga)
-        if 'xmlns=' not in svg_str:
-            svg_str = svg_str.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ', 1)
+        if "xmlns=" not in svg_str:
+            svg_str = svg_str.replace(
+                "<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1
+            )
 
         # Krok 3: Odczytaj oryginalne wymiary SVG zeby zachowac proporcje
         w_match = re.search(r'<svg[^>]+width=["\'](\d+)["\']', svg_str)
@@ -457,13 +457,16 @@ def generate_thumbnail_jpg(
         # Krok 4: Render SVG -> PNG przez cairosvg
         try:
             import cairosvg
+
             png_bytes = cairosvg.svg2png(
                 bytestring=svg_str.encode("utf-8"),
                 output_width=thumb_width,
                 output_height=thumb_height,
             )
         except ImportError:
-            _log("generate_thumbnail_jpg: cairosvg niedostepny — fallback na generate_jpg_diagram")
+            _log(
+                "generate_thumbnail_jpg: cairosvg niedostepny — fallback na generate_jpg_diagram"
+            )
             return None
 
         # Krok 5: PNG -> JPG przez PIL
@@ -483,7 +486,10 @@ def generate_thumbnail_jpg(
         _log(f"generate_thumbnail_jpg: blad — {e}")
         return None
 
-def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "", tytul: str = "") -> str:
+
+def generate_svg_html_interactive(
+    gra: Dict[str, Any], sender_name: str = "", tytul: str = ""
+) -> str:
     """
     Generuje samodzielny plik HTML z interaktywnym drzewem decyzyjnym Eryka.
 
@@ -502,7 +508,7 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "", ty
     """
     pytania = gra.get("pytania", [])
     kroki_legacy = gra.get("kroki", [])
-    wyroki_dict = gra.get("wyroki", {})   # słownik "ABC" → tekst wyroku
+    wyroki_dict = gra.get("wyroki", {})  # słownik "ABC" → tekst wyroku
     wyrok_domyslny = gra.get("wyrok", "Brak wyroku.")
     pilne = bool(gra.get("pilne", False))
     sn = escape(sender_name or "Anonim")
@@ -517,22 +523,25 @@ def generate_svg_html_interactive(gra: Dict[str, Any], sender_name: str = "", ty
         return "<p>Brak danych do diagramu.</p>"
 
     n_pytan = len(pytania)
-    _log(f"Generuję HTML (nowa struktura): {n_pytan} pytań, pilne={pilne}, wyroki={len(wyroki_dict)}")
+    _log(
+        f"Generuję HTML (nowa struktura): {n_pytan} pytań, pilne={pilne}, wyroki={len(wyroki_dict)}"
+    )
 
     AUDIO_BASE = "https://legionowopawel.github.io/AutoResponder_AI_Text/audio/"
     # Dźwięki per zdarzenie
-    SND_R1   = ["beep.mp3", "plink.mp3", "bop.mp3"]
-    SND_R2   = ["bounce.mp3", "bop.mp3", "bubbles.mp3"]
+    SND_R1 = ["beep.mp3", "plink.mp3", "bop.mp3"]
+    SND_R2 = ["bounce.mp3", "bop.mp3", "bubbles.mp3"]
     SND_WYROK = ["eureka.mp3", "wishgranted.mp3"]
     SND_PILNE = ["nextlevel.mp3"]
 
     # Serializuj listy dźwięków do JSON (bezpieczne do wklejenia w JS)
     import json as _json
-    snd_r1_js    = _json.dumps(SND_R1)
-    snd_r2_js    = _json.dumps(SND_R2)
+
+    snd_r1_js = _json.dumps(SND_R1)
+    snd_r2_js = _json.dumps(SND_R2)
     snd_wyrok_js = _json.dumps(SND_WYROK)
     snd_pilne_js = _json.dumps(SND_PILNE)
-    pilne_js     = "true" if pilne else "false"
+    pilne_js = "true" if pilne else "false"
     audio_base_js = _json.dumps(AUDIO_BASE)
 
     # Serializuj słownik wyroków do JSON
@@ -691,11 +700,16 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
 """
 
     # ── Buduj HTML treść pytań ────────────────────────────────────────────────
-    def esc(s): return escape(str(s)) if s else ""
+    def esc(s):
+        return escape(str(s)) if s else ""
 
     body_parts = []
     # ── Nagłówek: pytanie użytkownika jako tytuł strony ──────────────────────
-    tytul_safe = escape(tytul.strip()) if tytul and tytul.strip() else (sn or "Eryk Responder&#8482;")
+    tytul_safe = (
+        escape(tytul.strip())
+        if tytul and tytul.strip()
+        else (sn or "Eryk Responder&#8482;")
+    )
     # Skróć do 100 znaków dla czytelności
     if len(tytul_safe) > 100:
         tytul_safe = tytul_safe[:97] + "&#8230;"
@@ -703,30 +717,32 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
     body_parts.append(f'<div class="dg-header">{tytul_safe}')
     if pilne:
         body_parts.append('<span class="pilne-badge">&#9888; PILNE</span>')
-    body_parts.append('</div>')
+    body_parts.append("</div>")
 
     # Przełącznik stylu
-    body_parts.append('''<div class="style-switcher">
+    body_parts.append("""<div class="style-switcher">
   <button class="style-btn active" onclick="setStyl('klasyczny',this)">&#128196; Klasyczny</button>
   <button class="style-btn" onclick="setStyl('terminal',this)">&#9608; Terminal</button>
   <button class="style-btn" onclick="setStyl('kartka',this)">&#128195; Kartka</button>
-</div>''')
+</div>""")
 
     # Pasek postępu
-    body_parts.append('''<div class="progress-wrap">
+    body_parts.append("""<div class="progress-wrap">
   <div class="progress-label" id="prog-label">Inicjalizacja systemu Eryka&hellip;</div>
   <div class="progress-bar-bg"><div class="progress-bar-fill" id="prog-bar"></div></div>
-</div>''')
+</div>""")
 
     # Tracker ścieżki
-    body_parts.append('<div class="path-tracker" id="path-tracker">Wybierz odpowied&#378; na Pytanie 1 &rarr;</div>')
+    body_parts.append(
+        '<div class="path-tracker" id="path-tracker">Wybierz odpowied&#378; na Pytanie 1 &rarr;</div>'
+    )
 
     # Generuj sekcje pytań
     for p_idx, pytanie in enumerate(pytania):
         tresc = esc(pytanie.get("tresc", f"Pytanie {p_idx+1}"))
         opcje = pytanie.get("opcje", {})
         p_num = p_idx + 1
-        hidden_cls = ' class="section-hidden"' if p_idx > 0 else ''
+        hidden_cls = ' class="section-hidden"' if p_idx > 0 else ""
 
         if p_idx > 0:
             body_parts.append(f'<div id="sekcja-p{p_num}" class="section-hidden">')
@@ -734,27 +750,27 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
         else:
             body_parts.append(f'<div id="sekcja-p{p_num}">')
 
-        body_parts.append(f'''<div class="dg-question">
+        body_parts.append(f"""<div class="dg-question">
   <div class="dg-q-label">PYTANIE {p_num}</div>
   <div class="dg-q-text">{tresc}</div>
-</div>''')
+</div>""")
 
         body_parts.append(f'<div class="dg-cols" id="cols-p{p_num}">')
 
         for lit in ["A", "B", "C"]:
-            opcja     = opcje.get(lit, {})
+            opcja = opcje.get(lit, {})
             tekst_opc = esc(opcja.get("tekst", f"Opcja {lit}"))
-            reakcja   = opcja.get("reakcja", "")
-            runda2    = opcja.get("runda2", {})
-            r2_pyt    = runda2.get("pytanie", "")
-            r2_opcje  = runda2.get("opcje", {})
-            has_r2    = bool(r2_pyt and r2_opcje)
+            reakcja = opcja.get("reakcja", "")
+            runda2 = opcja.get("runda2", {})
+            r2_pyt = runda2.get("pytanie", "")
+            r2_opcje = runda2.get("opcje", {})
+            has_r2 = bool(r2_pyt and r2_opcje)
             has_r2_js = "true" if has_r2 else "false"
 
             COLORS = {
-                "A": {"fill":"#E6F1FB","stroke":"#185FA5","text":"#0C447C"},
-                "B": {"fill":"#E1F5EE","stroke":"#0F6E56","text":"#085041"},
-                "C": {"fill":"#FAEEDA","stroke":"#854F0B","text":"#633806"},
+                "A": {"fill": "#E6F1FB", "stroke": "#185FA5", "text": "#0C447C"},
+                "B": {"fill": "#E1F5EE", "stroke": "#0F6E56", "text": "#085041"},
+                "C": {"fill": "#FAEEDA", "stroke": "#854F0B", "text": "#633806"},
             }
             c = COLORS[lit]
             btn_style = f'background:{c["fill"]};border-color:{c["stroke"]};color:{c["text"]};outline-color:{c["stroke"]}'
@@ -762,15 +778,17 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
             body_parts.append('<div class="dg-col">')
             body_parts.append(
                 f'<button class="opc-btn" style="{btn_style}" '
-                f'onclick="wybierzR1({p_num},\'{lit}\',this,{has_r2_js})">'
+                f"onclick=\"wybierzR1({p_num},'{lit}',this,{has_r2_js})\">"
                 f'<div class="opc-label" style="color:{c["stroke"]}">{lit})</div>'
                 f'<div class="opc-text">{tekst_opc}</div>'
-                f'</button>'
+                f"</button>"
             )
 
             # Reakcja Eryka (typewriter)
             rea_id = f"rea-{p_num}-{lit}"
-            body_parts.append(f'<div class="reakcja" id="{rea_id}" data-tekst="{esc(reakcja)}"></div>')
+            body_parts.append(
+                f'<div class="reakcja" id="{rea_id}" data-tekst="{esc(reakcja)}"></div>'
+            )
 
             # R2
             if has_r2:
@@ -779,16 +797,16 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
                 body_parts.append(
                     f'<div class="r2-question">'
                     f'<div class="r2-sub-label">RUNDA 2 &mdash; {lit}</div>'
-                    f'{esc(r2_pyt)}</div>'
+                    f"{esc(r2_pyt)}</div>"
                 )
                 body_parts.append('<div class="r2-cols">')
 
                 R2_COLORS = [
-                    {"fill":"#E6F1FB","stroke":"#185FA5","text":"#0C447C"},
-                    {"fill":"#E1F5EE","stroke":"#0F6E56","text":"#085041"},
-                    {"fill":"#FAEEDA","stroke":"#854F0B","text":"#633806"},
+                    {"fill": "#E6F1FB", "stroke": "#185FA5", "text": "#0C447C"},
+                    {"fill": "#E1F5EE", "stroke": "#0F6E56", "text": "#085041"},
+                    {"fill": "#FAEEDA", "stroke": "#854F0B", "text": "#633806"},
                 ]
-                for r2_idx, r2_lit in enumerate(["A","B","C"]):
+                for r2_idx, r2_lit in enumerate(["A", "B", "C"]):
                     r2_opcja = r2_opcje.get(r2_lit, {})
                     r2_tekst = esc(r2_opcja.get("tekst", f"Opcja {r2_lit}"))
                     r2c = R2_COLORS[r2_idx]
@@ -797,22 +815,26 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
                     body_parts.append(
                         f'<div class="r2-col">'
                         f'<button class="r2-btn" style="{r2_style}" '
-                        f'onclick="wybierzR2({p_num},\'{lit}\',\'{r2_lit}\',this)">'
+                        f"onclick=\"wybierzR2({p_num},'{lit}','{r2_lit}',this)\">"
                         f'<div class="r2-tile-label">{r2_label}</div>{r2_tekst}'
-                        f'</button></div>'
+                        f"</button></div>"
                     )
 
-                body_parts.append('</div>')  # r2-cols
-                body_parts.append('<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>')
-                body_parts.append('</div>')  # r2-block
+                body_parts.append("</div>")  # r2-cols
+                body_parts.append(
+                    '<div class="r2-hint">&#8679; wybierz aby przej&#347;&#263; dalej</div>'
+                )
+                body_parts.append("</div>")  # r2-block
 
-            body_parts.append('</div>')  # dg-col
+            body_parts.append("</div>")  # dg-col
 
-        body_parts.append('</div>')  # dg-cols
-        body_parts.append('</div>')  # sekcja-pN
+        body_parts.append("</div>")  # dg-cols
+        body_parts.append("</div>")  # sekcja-pN
 
     # Sekcja wyroku (wszystkie wyroki ukryte — JS pokaże właściwy)
-    body_parts.append('<div id="sekcja-wyrok" class="section-hidden"><div class="dg-arrow">&#8595;</div>')
+    body_parts.append(
+        '<div id="sekcja-wyrok" class="section-hidden"><div class="dg-arrow">&#8595;</div>'
+    )
 
     if wyroki_dict:
         for klucz, tekst_wyroku in wyroki_dict.items():
@@ -822,7 +844,7 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
                 f'<div class="wyrok-label">&#9878; WYROK KO&#323;COWY</div>'
                 f'<div class="wyrok-sciezka">&#346;cie&#380;ka: {" &rarr; ".join(list(klucz))}</div>'
                 f'<div class="wyrok-text">{esc(tekst_wyroku)}</div>'
-                f'</div>'
+                f"</div>"
             )
     else:
         # Fallback: jeden wyrok dla wszystkich ścieżek
@@ -830,10 +852,10 @@ body.kartka .wyrok{background:#8B6914;border-color:#5A3E00}
             f'<div id="wyrok-fallback" class="wyrok">'
             f'<div class="wyrok-label">&#9878; WYROK KO&#323;COWY</div>'
             f'<div class="wyrok-text">{esc(wyrok_domyslny)}</div>'
-            f'</div>'
+            f"</div>"
         )
 
-    body_parts.append('</div>')  # sekcja-wyrok
+    body_parts.append("</div>")  # sekcja-wyrok
 
     content_html = "\n".join(body_parts)
 
@@ -1090,17 +1112,25 @@ def _generate_svg_legacy(kroki: list, wyrok: str, sn: str) -> str:
         "  .leaf-c rect { fill: #FAEEDA; stroke: #854F0B; stroke-width: 0.8; }",
         "</style>",
     ]
-    svg_lines.append(f'<rect x="850" y="20" width="500" height="44" rx="14" fill="#2C2C2A"/>')
-    svg_lines.append(f'<text x="1100" y="47" text-anchor="middle" font-size="14" fill="#F1EFE8" '
-                     f'font-weight="bold" font-family="Arial">ERYK RESPONDER™ · {sn}</text>')
+    svg_lines.append(
+        f'<rect x="850" y="20" width="500" height="44" rx="14" fill="#2C2C2A"/>'
+    )
+    svg_lines.append(
+        f'<text x="1100" y="47" text-anchor="middle" font-size="14" fill="#F1EFE8" '
+        f'font-weight="bold" font-family="Arial">ERYK RESPONDER™ · {sn}</text>'
+    )
     y_current = 90
     for i, krok in enumerate(kroki, 1):
         pytanie = krok.get("pytanie") or krok.get("tresc", f"P{i}")
         opcje = krok.get("opcje", {})
         pyt_lines = _wrap_svg_text(pytanie, 48)
         node_h = max(60, 40 + len(pyt_lines) * 16)
-        svg_lines.append(f'<g class="q-node"><rect x="750" y="{y_current}" width="700" height="{node_h}" rx="8"/>')
-        svg_lines.append(_svg_text_block(pyt_lines, 1100, y_current + 22, 13, "#3C3489", "bold"))
+        svg_lines.append(
+            f'<g class="q-node"><rect x="750" y="{y_current}" width="700" height="{node_h}" rx="8"/>'
+        )
+        svg_lines.append(
+            _svg_text_block(pyt_lines, 1100, y_current + 22, 13, "#3C3489", "bold")
+        )
         svg_lines.append("</g>")
         y_next = y_current + node_h + 26
         positions = {"A": 640, "B": 1100, "C": 1560}
@@ -1113,17 +1143,29 @@ def _generate_svg_legacy(kroki: list, wyrok: str, sn: str) -> str:
             lx = positions[lit]
             tlines = _wrap_svg_text(tekst, 38)
             lh = max(60, 32 + len(tlines) * 18)
-            svg_lines.append(f'<line x1="{1100}" y1="{y_current + node_h}" x2="{lx}" y2="{y_next}" '
-                             f'stroke="#888" stroke-width="1" stroke-dasharray="4,2"/>')
-            svg_lines.append(f'<g class="{classes[lit]}"><rect x="{lx-160}" y="{y_next}" width="320" height="{lh}" rx="6"/>')
-            svg_lines.append(_svg_text_block(tlines, lx, y_next + 18, 10, fills[lit], "normal"))
+            svg_lines.append(
+                f'<line x1="{1100}" y1="{y_current + node_h}" x2="{lx}" y2="{y_next}" '
+                f'stroke="#888" stroke-width="1" stroke-dasharray="4,2"/>'
+            )
+            svg_lines.append(
+                f'<g class="{classes[lit]}"><rect x="{lx-160}" y="{y_next}" width="320" height="{lh}" rx="6"/>'
+            )
+            svg_lines.append(
+                _svg_text_block(tlines, lx, y_next + 18, 10, fills[lit], "normal")
+            )
             svg_lines.append("</g>")
         y_current = y_next + 80
     wyrok_lines = _wrap_svg_text(wyrok, 50)
     wyrok_h = max(60, 30 + len(wyrok_lines) * 16)
-    svg_lines.append(f'<rect x="850" y="{y_current}" width="500" height="{wyrok_h}" rx="8" fill="#3C3489"/>')
-    svg_lines.append(f'<text x="1100" y="{y_current + 22}" text-anchor="middle" font-size="12" fill="#F1EFE8" '
-                     f'font-weight="bold">⚖ WYROK KOŃCOWY</text>')
-    svg_lines.append(_svg_text_block(wyrok_lines, 1100, y_current + 40, 10, "#E8D5B0", "normal"))
+    svg_lines.append(
+        f'<rect x="850" y="{y_current}" width="500" height="{wyrok_h}" rx="8" fill="#3C3489"/>'
+    )
+    svg_lines.append(
+        f'<text x="1100" y="{y_current + 22}" text-anchor="middle" font-size="12" fill="#F1EFE8" '
+        f'font-weight="bold">⚖ WYROK KOŃCOWY</text>'
+    )
+    svg_lines.append(
+        _svg_text_block(wyrok_lines, 1100, y_current + 40, 10, "#E8D5B0", "normal")
+    )
     svg_lines.append("</svg>")
     return f'<html><body style="margin:0;background:#faf8f4">{"".join(svg_lines)}</body></html>'

@@ -21,6 +21,7 @@ Alternatywnie: OAuth 2.0 z refresh token (dla osobistego dysku Google):
 
 Render → Environment → dodaj powyższe zmienne, a także DRIVE_FOLDER_ID / HISTORY_SHEET_ID / SMIERC_HISTORY_SHEET_ID.
 """
+
 import os
 import io
 import base64
@@ -38,8 +39,8 @@ logger = logging.getLogger(__name__)
 
 # Scopes dla Google Drive i Sheets API
 DRIVE_SCOPES = [
-    'https://www.googleapis.com/auth/drive',
-    'https://www.googleapis.com/auth/spreadsheets',
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 # OAuth 2.0 zmienne środowiskowe (te same co dla Gmail API)
@@ -82,7 +83,9 @@ def _load_oauth_credentials():
 
 def _load_google_service_account_info():
     """Ładuje dane Service Account z osobnych zmiennych środowiskowych Render."""
-    private_key = os.getenv("GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY", "").replace("\\n", "\n").strip()
+    private_key = (
+        os.getenv("GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY", "").replace("\\n", "\n").strip()
+    )
     client_email = os.getenv("GOOGLE_SERVICE_ACCOUNT_CLIENT_EMAIL", "").strip()
     if not private_key or not client_email:
         return None
@@ -94,10 +97,20 @@ def _load_google_service_account_info():
         "private_key": private_key,
         "client_email": client_email,
         "client_id": os.getenv("GOOGLE_SERVICE_ACCOUNT_CLIENT_ID", ""),
-        "auth_uri": os.getenv("GOOGLE_SERVICE_ACCOUNT_AUTH_URI", "https://accounts.google.com/o/oauth2/auth"),
-        "token_uri": os.getenv("GOOGLE_SERVICE_ACCOUNT_TOKEN_URI", "https://oauth2.googleapis.com/token"),
-        "auth_provider_x509_cert_url": os.getenv("GOOGLE_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs"),
-        "client_x509_cert_url": os.getenv("GOOGLE_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL", ""),
+        "auth_uri": os.getenv(
+            "GOOGLE_SERVICE_ACCOUNT_AUTH_URI",
+            "https://accounts.google.com/o/oauth2/auth",
+        ),
+        "token_uri": os.getenv(
+            "GOOGLE_SERVICE_ACCOUNT_TOKEN_URI", "https://oauth2.googleapis.com/token"
+        ),
+        "auth_provider_x509_cert_url": os.getenv(
+            "GOOGLE_SERVICE_ACCOUNT_AUTH_PROVIDER_X509_CERT_URL",
+            "https://www.googleapis.com/oauth2/v1/certs",
+        ),
+        "client_x509_cert_url": os.getenv(
+            "GOOGLE_SERVICE_ACCOUNT_CLIENT_X509_CERT_URL", ""
+        ),
     }
 
 
@@ -111,7 +124,9 @@ def _get_credentials():
     sa_info = _load_google_service_account_info()
     if sa_info:
         print("Używam Service Account credentials dla Google Drive")
-        return service_account.Credentials.from_service_account_info(sa_info, scopes=DRIVE_SCOPES)
+        return service_account.Credentials.from_service_account_info(
+            sa_info, scopes=DRIVE_SCOPES
+        )
 
     raise RuntimeError(
         "Brak konfiguracji Google Drive. "
@@ -125,7 +140,7 @@ def get_drive_service():
     """Zwraca uwierzytelnioną usługę Google Drive."""
     try:
         credentials = _get_credentials()
-        service = build('drive', 'v3', credentials=credentials)
+        service = build("drive", "v3", credentials=credentials)
         return service
     except Exception as e:
         print(f"Błąd inicjalizacji Google Drive: {e}")
@@ -153,39 +168,52 @@ def upload_file_to_drive(file_data, filename, mime_type, folder_id=None):
         if isinstance(file_data, str):
             file_data = base64.b64decode(file_data)
 
-        media = MediaIoBaseUpload(io.BytesIO(file_data), mimetype=mime_type, resumable=True)
+        media = MediaIoBaseUpload(
+            io.BytesIO(file_data), mimetype=mime_type, resumable=True
+        )
 
-        file_metadata = {'name': filename}
+        file_metadata = {"name": filename}
         if folder_id:
-            file_metadata['parents'] = [folder_id]
+            file_metadata["parents"] = [folder_id]
 
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id,webViewLink,webContentLink',
-            supportsAllDrives=True,
-            supportsTeamDrives=True
-        ).execute()
+        file = (
+            service.files()
+            .create(
+                body=file_metadata,
+                media_body=media,
+                fields="id,webViewLink,webContentLink",
+                supportsAllDrives=True,
+                supportsTeamDrives=True,
+            )
+            .execute()
+        )
 
         try:
             service.permissions().create(
-                fileId=file['id'],
-                body={'type': 'anyone', 'role': 'reader'},
+                fileId=file["id"],
+                body={"type": "anyone", "role": "reader"},
                 supportsAllDrives=True,
-                supportsTeamDrives=True
+                supportsTeamDrives=True,
             ).execute()
         except HttpError as e:
             if e.resp.status == 403:
-                print(f"Błąd ustawiania uprawnień Drive (403) dla pliku {file['id']} — ignoruję")
+                print(
+                    f"Błąd ustawiania uprawnień Drive (403) dla pliku {file['id']} — ignoruję"
+                )
             else:
                 raise
 
         # Dla HTML używamy webContentLink (pobieranie) — przeglądarka otworzy plik lokalnie
-        download_url = file.get('webContentLink') or f"https://drive.google.com/uc?export=download&id={file['id']}"
+        download_url = (
+            file.get("webContentLink")
+            or f"https://drive.google.com/uc?export=download&id={file['id']}"
+        )
         return {
-            'id': file['id'],
-            'url': download_url,
-            'view_url': file.get('webViewLink', f"https://drive.google.com/file/d/{file['id']}/view")
+            "id": file["id"],
+            "url": download_url,
+            "view_url": file.get(
+                "webViewLink", f"https://drive.google.com/file/d/{file['id']}/view"
+            ),
         }
     except Exception as e:
         print(f"Błąd uploadu do Drive: {e}")
@@ -206,13 +234,13 @@ def update_sheet_with_data(sheet_id, range_name, values):
     """
     try:
         credentials = _get_credentials()
-        sheets_service = build('sheets', 'v4', credentials=credentials)
+        sheets_service = build("sheets", "v4", credentials=credentials)
 
         sheets_service.spreadsheets().values().update(
             spreadsheetId=sheet_id,
             range=range_name,
-            valueInputOption='RAW',
-            body={'values': values}
+            valueInputOption="RAW",
+            body={"values": values},
         ).execute()
         return True
     except Exception as e:
@@ -220,8 +248,9 @@ def update_sheet_with_data(sheet_id, range_name, values):
         return False
 
 
-def update_message_status(sheet_id: str, message_id: str, responder: str,
-                          status: str, tresc: str) -> bool:
+def update_message_status(
+    sheet_id: str, message_id: str, responder: str, status: str, tresc: str
+) -> bool:
     """
     Dopisuje wiersz statusu dla danego message_id i respondera.
 
@@ -239,8 +268,9 @@ def update_message_status(sheet_id: str, message_id: str, responder: str,
         return False
     try:
         from datetime import datetime, timezone, timedelta
+
         credentials = _get_credentials()
-        sheets_service = build('sheets', 'v4', credentials=credentials)
+        sheets_service = build("sheets", "v4", credentials=credentials)
 
         warsaw_tz = timezone(timedelta(hours=2))
         timestamp = datetime.now(tz=warsaw_tz).isoformat()
@@ -250,13 +280,15 @@ def update_message_status(sheet_id: str, message_id: str, responder: str,
 
         sheets_service.spreadsheets().values().append(
             spreadsheetId=sheet_id,
-            range='Historia',
-            valueInputOption='RAW',
-            insertDataOption='INSERT_ROWS',
-            body={'values': values}
+            range="Historia",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": values},
         ).execute()
 
-        print(f"[drive_utils] update_message_status: {status} / {responder} / {message_id}")
+        print(
+            f"[drive_utils] update_message_status: {status} / {responder} / {message_id}"
+        )
         return True
     except Exception as e:
         print(f"Błąd update_message_status: {e}")
@@ -266,14 +298,19 @@ def update_message_status(sheet_id: str, message_id: str, responder: str,
 def _strip_html_to_text_sheets(html_text: str) -> str:
     """Konwertuje HTML na zwykły tekst, usuwając tagi i CSS."""
     import re
+
     if not html_text:
         return ""
-    text = re.sub(r'<style[^>]*>.*?</style>', '', html_text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<[^>]+>', ' ', text)
-    text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<')
-    text = text.replace('&gt;', '>').replace('&quot;', '"').replace('&#39;', "'")
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(
+        r"<style[^>]*>.*?</style>", "", html_text, flags=re.DOTALL | re.IGNORECASE
+    )
+    text = re.sub(
+        r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE
+    )
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<")
+    text = text.replace("&gt;", ">").replace("&quot;", '"').replace("&#39;", "'")
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
@@ -297,8 +334,9 @@ def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
 
     try:
         from datetime import datetime, timezone, timedelta
+
         credentials = _get_credentials()
-        sheets_service = build('sheets', 'v4', credentials=credentials)
+        sheets_service = build("sheets", "v4", credentials=credentials)
 
         warsaw_tz = timezone(timedelta(hours=2))
         timestamp = datetime.now(tz=warsaw_tz).isoformat()
@@ -309,10 +347,10 @@ def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
 
         sheets_service.spreadsheets().values().append(
             spreadsheetId=sheet_id,
-            range='Historia',
-            valueInputOption='RAW',
-            insertDataOption='INSERT_ROWS',
-            body={'values': values}
+            range="Historia",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": values},
         ).execute()
 
         print(f"Zapisano {msg_type} historii dla {sender} ({timestamp})")
@@ -322,7 +360,7 @@ def save_to_history_sheet(sheet_id, sender, subject, body, is_response=False):
         return False
 
 
-def check_user_in_sheet(sheet_id, email, sheet_name='Historia'):
+def check_user_in_sheet(sheet_id, email, sheet_name="Historia"):
     """
     Sprawdza czy użytkownik (email) znajduje się w arkuszu.
 
@@ -339,22 +377,28 @@ def check_user_in_sheet(sheet_id, email, sheet_name='Historia'):
 
     try:
         credentials = _get_credentials()
-        sheets_service = build('sheets', 'v4', credentials=credentials)
+        sheets_service = build("sheets", "v4", credentials=credentials)
 
         try:
-            result = sheets_service.spreadsheets().values().get(
-                spreadsheetId=sheet_id,
-                range=f'{sheet_name}!B1:B10000'
-            ).execute()
+            result = (
+                sheets_service.spreadsheets()
+                .values()
+                .get(spreadsheetId=sheet_id, range=f"{sheet_name}!B1:B10000")
+                .execute()
+            )
         except Exception:
-            spreadsheet = sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
-            first_sheet = spreadsheet['sheets'][0]['properties']['title']
-            result = sheets_service.spreadsheets().values().get(
-                spreadsheetId=sheet_id,
-                range=f'{first_sheet}!B1:B10000'
-            ).execute()
+            spreadsheet = (
+                sheets_service.spreadsheets().get(spreadsheetId=sheet_id).execute()
+            )
+            first_sheet = spreadsheet["sheets"][0]["properties"]["title"]
+            result = (
+                sheets_service.spreadsheets()
+                .values()
+                .get(spreadsheetId=sheet_id, range=f"{first_sheet}!B1:B10000")
+                .execute()
+            )
 
-        values = result.get('values', [])
+        values = result.get("values", [])
         if not values:
             return False
 

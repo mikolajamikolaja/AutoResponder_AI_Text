@@ -2,14 +2,17 @@
 """
 Test script for hf_token_manager migration.
 """
+
 import sys
 import os
-sys.path.insert(0, '.')
+
+sys.path.insert(0, ".")
 
 print("Testing hf_token_manager...")
 
 try:
     from core.hf_token_manager import get_active_tokens, mark_dead, is_dead
+
     print("Import OK")
 except Exception as e:
     print(f"Import error: {e}")

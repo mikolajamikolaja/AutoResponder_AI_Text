@@ -160,6 +160,7 @@ def _parse_json_safe(raw: str, section: str) -> dict | list | None:
     # Próba 4: ast.literal_eval — radzi sobie z niektórymi wariantami złego JSON
     try:
         import ast
+
         result = ast.literal_eval(clean)
         if isinstance(result, (dict, list)):
             current_app.logger.warning(
@@ -365,7 +366,7 @@ def _sekcja_depozyt_leki(cfg: dict, body: str, nouns_dict: dict) -> dict:
         )
         user = f"EMAIL PACJENTA:\n{body[:MAX_DLUGOSC_EMAIL]}\n\nRZECZOWNIKI Z EMAILA:\n{nouns_str}\n\nINSTRUKCJE:\n{instrukcje}\n\nSCHEMAT JSON:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
 
-        raw = _call_with_retry(_s(system), _u(user), max_tokens=4000)
+        raw = _call_with_retry(_s(system), _u(user), max_tokens=6000)
         if not raw:
             current_app.logger.warning(
                 "[psych-raport] Sekcja depozyt: brak odpowiedzi AI"
@@ -728,7 +729,11 @@ def _sekcja_zalecenia(cfg: dict, body: str, dni_1_7: list, dni_8_14: list) -> di
                     rebuilt = {}
                     for i, item in enumerate(zt[:3], 1):
                         if isinstance(item, dict):
-                            task = item.get("zadanie") or item.get("tresc") or item.get(f"zadanie_{i}", "")
+                            task = (
+                                item.get("zadanie")
+                                or item.get("tresc")
+                                or item.get(f"zadanie_{i}", "")
+                            )
                         else:
                             task = str(item)
                         rebuilt[f"zadanie_{i}"] = task
@@ -832,7 +837,8 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
         if not isinstance(dane_pacjenta, dict):
             current_app.logger.warning(
                 "[psych-raport] relacje_swiadkow: dane_pacjenta zły typ: %s — wartość: %.100s",
-                type(dane_pacjenta).__name__, dane_pacjenta,
+                type(dane_pacjenta).__name__,
+                dane_pacjenta,
             )
             dane_pacjenta = {}
         pacjent = dane_pacjenta.get("imie_nazwisko", "pacjent")
@@ -881,7 +887,8 @@ def _sekcja_relacje_swiadkow(cfg: dict, body: str, raport: dict) -> dict:
         if not isinstance(result, list):
             current_app.logger.warning(
                 "[psych-raport] świadkowie: oczekiwano listy, dostałem %s — wartość: %.100s",
-                type(result).__name__, result,
+                type(result).__name__,
+                result,
             )
             return {"relacje_swiadkow": []}
 
@@ -1013,17 +1020,13 @@ def _generate_flux(
                     name,
                 )
             elif resp.status_code == 429:
-                log.warning(
-                    "[psych-flux] %s 429 token=%s → następny", label, name
-                )
+                log.warning("[psych-flux] %s 429 token=%s → następny", label, name)
             else:
                 log.warning(
                     "[psych-flux] %s HTTP %d token=%s", label, resp.status_code, name
                 )
         except Exception as e:
-            log.warning(
-                "[psych-flux] %s wyjątek token=%s: %s", label, name, e
-            )
+            log.warning("[psych-flux] %s wyjątek token=%s: %s", label, name, e)
 
     log.error(
         "[psych-flux] %s — wszystkie tokeny zawiodły — używam zastepczy.jpg", label
@@ -1062,7 +1065,9 @@ def _generate_photos_parallel(
 
     # Szybkie wyjście gdy brak aktywnych tokenów — nie czekaj 5 minut
     if not get_active_tokens():
-        log.warning("[psych-flux] Brak aktywnych tokenów — pomijam FLUX, używam zastepczy.jpg")
+        log.warning(
+            "[psych-flux] Brak aktywnych tokenów — pomijam FLUX, używam zastepczy.jpg"
+        )
         sub = _load_substitute_image()
         sub_dict = None
         if sub:
@@ -1279,7 +1284,8 @@ def _build_docx_inner(
     if not isinstance(dp, dict):
         current_app.logger.warning(
             "[psych-docx] dane_pacjenta zły typ: %s — wartość: %.100s",
-            type(dp).__name__, dp,
+            type(dp).__name__,
+            dp,
         )
         dp = {}
     field("Imię i nazwisko", dp.get("imie_nazwisko", ""))
@@ -1345,7 +1351,8 @@ def _build_docx_inner(
     if not isinstance(dep, dict):
         current_app.logger.warning(
             "[psych-docx] depozyt zły typ: %s — wartość: %.100s",
-            type(dep).__name__, dep,
+            type(dep).__name__,
+            dep,
         )
         dep = {}
     if isinstance(dep, dict):
@@ -1400,7 +1407,8 @@ def _build_docx_inner(
     if not isinstance(farm, dict):
         current_app.logger.warning(
             "[psych-docx] farmakologia zły typ: %s — wartość: %.100s",
-            type(farm).__name__, farm,
+            type(farm).__name__,
+            farm,
         )
         farm = {}
     leki_lista = farm.get("leki", [])
@@ -1428,7 +1436,8 @@ def _build_docx_inner(
             if not isinstance(lek, dict):
                 current_app.logger.warning(
                     "[psych-docx] leki_lista: element zły typ: %s — wartość: %.80s",
-                    type(lek).__name__, lek,
+                    type(lek).__name__,
+                    lek,
                 )
                 continue
             row = t.add_row().cells
@@ -1470,7 +1479,8 @@ def _build_docx_inner(
         if not isinstance(d, dict):
             current_app.logger.warning(
                 "[psych-docx] hospitalizacja: dzień zły typ: %s — wartość: %.80s",
-                type(d).__name__, d,
+                type(d).__name__,
+                d,
             )
             continue
         dzien = d.get("dzien", "")
@@ -1520,7 +1530,8 @@ def _build_docx_inner(
     if not isinstance(wypis, dict):
         current_app.logger.warning(
             "[psych-docx] wypis zły typ: %s — wartość: %.100s",
-            type(wypis).__name__, wypis,
+            type(wypis).__name__,
+            wypis,
         )
         wypis = {}
     if isinstance(wypis, dict):
@@ -1616,7 +1627,12 @@ def _build_docx_inner(
         # AI zwróciło listę zamiast dict — renderuj każdy element
         for item in zt:
             if isinstance(item, dict):
-                tresc = item.get("tresc") or item.get("zadanie") or item.get("zadanie_1") or ""
+                tresc = (
+                    item.get("tresc")
+                    or item.get("zadanie")
+                    or item.get("zadanie_1")
+                    or ""
+                )
                 if tresc and tresc != "__BRAK__":
                     p_z = doc.add_paragraph(style="List Number")
                     p_z.add_run(str(tresc)).font.size = Pt(10)
@@ -1845,7 +1861,8 @@ def build_raport(
     if not isinstance(_farm_tmp, dict):
         current_app.logger.warning(
             "[psych-raport] sekcja_dep_leki.farmakologia zły typ: %s — wartość: %.100s",
-            type(_farm_tmp).__name__, _farm_tmp,
+            type(_farm_tmp).__name__,
+            _farm_tmp,
         )
         leki_lista = []
     else:
@@ -1882,11 +1899,27 @@ def build_raport(
     raport = {}
 
     # ── dane_pacjenta: _sekcja_pacjent zwraca PŁASKI dict — opakowujemy
-    PACJENT_FIELDS = {"imie_nazwisko", "wiek", "adres", "zawod", "stan_cywilny", "numer_ubezpieczenia", "rodowod", "rodowód"}
+    PACJENT_FIELDS = {
+        "imie_nazwisko",
+        "wiek",
+        "adres",
+        "zawod",
+        "stan_cywilny",
+        "numer_ubezpieczenia",
+        "rodowod",
+        "rodowód",
+    }
     # Klucze które mogą być na płaskim poziomie obok dane_pacjenta
-    RAPORT_TOP_KEYS = {"numer_historii_choroby", "data_przyjecia", "powod_przyjecia", "cytaty_z_przyjecia"}
+    RAPORT_TOP_KEYS = {
+        "numer_historii_choroby",
+        "data_przyjecia",
+        "powod_przyjecia",
+        "cytaty_z_przyjecia",
+    }
     if isinstance(sekcja_pacjent, dict):
-        if "dane_pacjenta" in sekcja_pacjent and isinstance(sekcja_pacjent["dane_pacjenta"], dict):
+        if "dane_pacjenta" in sekcja_pacjent and isinstance(
+            sekcja_pacjent["dane_pacjenta"], dict
+        ):
             raport["dane_pacjenta"] = sekcja_pacjent["dane_pacjenta"]
             for k, v in sekcja_pacjent.items():
                 if k != "dane_pacjenta":
@@ -1899,32 +1932,44 @@ def build_raport(
                 if k in RAPORT_TOP_KEYS:
                     raport[k] = v
             # Zabezpieczenie: dane_pacjenta MUSI być dict, nigdy stringiem
-            raport["dane_pacjenta"] = dane_pac if dane_pac else {
-                "imie_nazwisko": sender_name or "pacjent",
-                "wiek": "__BRAK__",
-                "adres": "__BRAK__",
-                "zawod": "__BRAK__",
-                "stan_cywilny": "__BRAK__",
-                "numer_ubezpieczenia": "__BRAK__",
-            }
+            raport["dane_pacjenta"] = (
+                dane_pac
+                if dane_pac
+                else {
+                    "imie_nazwisko": sender_name or "pacjent",
+                    "wiek": "__BRAK__",
+                    "adres": "__BRAK__",
+                    "zawod": "__BRAK__",
+                    "stan_cywilny": "__BRAK__",
+                    "numer_ubezpieczenia": "__BRAK__",
+                }
+            )
             for k, v in sekcja_pacjent.items():
                 if k not in PACJENT_FIELDS and k not in RAPORT_TOP_KEYS:
                     raport[k] = v
 
     # ── depozyt i farmakologia
-    dep_raw = sekcja_dep_leki.get("depozyt", {}) if isinstance(sekcja_dep_leki, dict) else {}
+    dep_raw = (
+        sekcja_dep_leki.get("depozyt", {}) if isinstance(sekcja_dep_leki, dict) else {}
+    )
     if not isinstance(dep_raw, dict):
         current_app.logger.warning(
             "[psych-raport] depozyt zły typ po scaleniu: %s — wartość: %.100s",
-            type(dep_raw).__name__, dep_raw,
+            type(dep_raw).__name__,
+            dep_raw,
         )
     raport["depozyt"] = dep_raw if isinstance(dep_raw, dict) else {}
 
-    farm_raw = sekcja_dep_leki.get("farmakologia", {}) if isinstance(sekcja_dep_leki, dict) else {}
+    farm_raw = (
+        sekcja_dep_leki.get("farmakologia", {})
+        if isinstance(sekcja_dep_leki, dict)
+        else {}
+    )
     if not isinstance(farm_raw, dict):
         current_app.logger.warning(
             "[psych-raport] farmakologia zły typ po scaleniu: %s — wartość: %.100s",
-            type(farm_raw).__name__, farm_raw,
+            type(farm_raw).__name__,
+            farm_raw,
         )
     raport["farmakologia"] = farm_raw if isinstance(farm_raw, dict) else {}
 
@@ -1932,7 +1977,13 @@ def build_raport(
     raport["hospitalizacja_tydzien_2"] = dni_8_14 if isinstance(dni_8_14, list) else []
 
     # ── wypis: _sekcja_wypis zwraca PŁASKI dict — opakowujemy
-    WYPIS_FIELDS = {"dzien_wypisu", "powod_wypisu", "zalecenia_po_wypisie", "stan_przy_wypisie", "opis_pozegnania"}
+    WYPIS_FIELDS = {
+        "dzien_wypisu",
+        "powod_wypisu",
+        "zalecenia_po_wypisie",
+        "stan_przy_wypisie",
+        "opis_pozegnania",
+    }
     if isinstance(sekcja_wypis, dict):
         if "wypis" in sekcja_wypis and isinstance(sekcja_wypis["wypis"], dict):
             raport["wypis"] = sekcja_wypis["wypis"]
@@ -1940,15 +1991,23 @@ def build_raport(
                 if k != "wypis":
                     raport[k] = v
         else:
-            raport["wypis"] = {k: v for k, v in sekcja_wypis.items() if k in WYPIS_FIELDS}
+            raport["wypis"] = {
+                k: v for k, v in sekcja_wypis.items() if k in WYPIS_FIELDS
+            }
             for k, v in sekcja_wypis.items():
                 if k not in WYPIS_FIELDS:
                     raport[k] = v
 
     # ── diagnozy i zalecenia: ochrona przed stringami zamiast dict
     DICT_KEYS = {
-        "diagnoza_wstepna", "diagnoza_dodatkowa", "choroba_wspolistniejaca",
-        "zalecenia_tylera", "depozyt", "farmakologia", "wypis", "dane_pacjenta",
+        "diagnoza_wstepna",
+        "diagnoza_dodatkowa",
+        "choroba_wspolistniejaca",
+        "zalecenia_tylera",
+        "depozyt",
+        "farmakologia",
+        "wypis",
+        "dane_pacjenta",
     }
     # Klucze które NIE powinny nadpisywać wartości już ustawionych przez wcześniejsze sekcje
     PROTECTED_KEYS = {"dane_pacjenta", "depozyt", "farmakologia", "wypis"}
@@ -1963,10 +2022,14 @@ def build_raport(
             if k in DICT_KEYS and not isinstance(v, dict):
                 current_app.logger.warning(
                     "[psych-raport] klucz '%s' zły typ: %s — wartość: %.100s",
-                    k, type(v).__name__, v,
+                    k,
+                    type(v).__name__,
+                    v,
                 )
                 # Nie nadpisuj poprawnego dict'a z wcześniejszej sekcji pustym {}
-                if k not in raport or not isinstance(raport.get(k), dict):
+                if isinstance(v, list) and v:
+                    raport[k] = v
+                elif k not in raport or not isinstance(raport.get(k), dict):
                     raport[k] = {}
             elif k in PROTECTED_KEYS and isinstance(raport.get(k), dict) and raport[k]:
                 # Nie nadpisuj niepustego dict'a z wcześniejszej sekcji danymi z diagnozy/zalecen
@@ -1999,7 +2062,11 @@ def build_raport(
         return {"raport_pdf": None, "psych_photo_1": photo_1, "psych_photo_2": photo_2}
 
     _dp_tmp = raport.get("dane_pacjenta", {})
-    imie = _dp_tmp.get("imie_nazwisko", "pacjent") if isinstance(_dp_tmp, dict) else (sender_name or "pacjent")
+    imie = (
+        _dp_tmp.get("imie_nazwisko", "pacjent")
+        if isinstance(_dp_tmp, dict)
+        else (sender_name or "pacjent")
+    )
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", imie)[:30]
 
     raport_pdf_dict = {

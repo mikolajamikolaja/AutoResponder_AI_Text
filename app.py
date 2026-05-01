@@ -591,7 +591,9 @@ def _get_valid_access_token() -> str:
             app.logger.info("[oauth] ✅ Token odświeżony pomyślnie.")
             return new_token
         else:
-            raise RuntimeError(f"Błąd odświeżania: {token_data.get('error_description', token_data.get('error'))}")
+            raise RuntimeError(
+                f"Błąd odświeżania: {token_data.get('error_description', token_data.get('error'))}"
+            )
     except Exception as e:
         raise RuntimeError(f"Krytyczny błąd OAuth: {e}")
 
@@ -697,8 +699,19 @@ def webhook():
         if message_id:
             with _processed_ids_lock:
                 if message_id in _processed_message_ids:
-                    app.logger.warning("[webhook] Duplikat message_id=%s — pomijam", message_id)
-                    return jsonify({"accepted": True, "duplicate": True, "message_id": message_id}), 200
+                    app.logger.warning(
+                        "[webhook] Duplikat message_id=%s — pomijam", message_id
+                    )
+                    return (
+                        jsonify(
+                            {
+                                "accepted": True,
+                                "duplicate": True,
+                                "message_id": message_id,
+                            }
+                        ),
+                        200,
+                    )
                 _processed_message_ids.add(message_id)
                 if len(_processed_message_ids) > 500:
                     _processed_message_ids.clear()
@@ -724,45 +737,81 @@ def webhook():
         # build_sections() przyjmuje słownik flag — mapujemy pola z webhooka
         pipeline_data = {
             # ── Keywords (camelCase z GAS + snake_case fallback) ──────────────
-            "contains_keyword":               data.get("containsKeyword",  False) or data.get("contains_keyword",  False),
-            "contains_keyword1":              data.get("containsKeyword1", False) or data.get("contains_keyword1", False),
-            "contains_keyword2":              data.get("containsKeyword2", False) or data.get("contains_keyword2", False),
-            "contains_keyword3":              data.get("containsKeyword3", False) or data.get("contains_keyword3", False),
-            "contains_keyword4":              data.get("containsKeyword4", False) or data.get("contains_keyword4", False),
-            "contains_keyword_joker":         data.get("containsJoker",    False) or data.get("contains_keyword_joker", False),
-            "contains_keyword_smierc":        data.get("containsKeywordSmierc", False) or data.get("contains_keyword_smierc", False),
-            "contains_keyword_generator_pdf": data.get("containsKeywordGeneratorPdf", False) or data.get("contains_keyword_generator_pdf", False),
-            "contains_flaga_test":            data.get("containsFlagaTest", False) or data.get("contains_flaga_test", False),
+            "contains_keyword": data.get("containsKeyword", False)
+            or data.get("contains_keyword", False),
+            "contains_keyword1": data.get("containsKeyword1", False)
+            or data.get("contains_keyword1", False),
+            "contains_keyword2": data.get("containsKeyword2", False)
+            or data.get("contains_keyword2", False),
+            "contains_keyword3": data.get("containsKeyword3", False)
+            or data.get("contains_keyword3", False),
+            "contains_keyword4": data.get("containsKeyword4", False)
+            or data.get("contains_keyword4", False),
+            "contains_keyword_joker": data.get("containsJoker", False)
+            or data.get("contains_keyword_joker", False),
+            "contains_keyword_smierc": data.get("containsKeywordSmierc", False)
+            or data.get("contains_keyword_smierc", False),
+            "contains_keyword_generator_pdf": data.get(
+                "containsKeywordGeneratorPdf", False
+            )
+            or data.get("contains_keyword_generator_pdf", False),
+            "contains_flaga_test": data.get("containsFlagaTest", False)
+            or data.get("contains_flaga_test", False),
             # ── Respondery (jawne flagi wants_*) ─────────────────────────────
-            "wants_zwykly":       data.get("wants_zwykly", False) or data.get("zwykly", False) or data.get("contains_keyword_joker", False) or data.get("containsJoker", False),
-            "wants_smierc":       data.get("wants_smierc", False) or data.get("isSmierc", False),
-            "wants_scrabble":     data.get("wants_scrabble", False) or data.get("contains_keyword_joker", False) or data.get("containsJoker", False),
-            "wants_analiza":      data.get("wants_analiza", False) or data.get("contains_keyword_joker", False) or data.get("containsJoker", False),
-            "wants_emocje":       data.get("wants_emocje", False) or data.get("contains_keyword_joker", False) or data.get("containsJoker", False),
-            "wants_generator_pdf": data.get("wants_generator_pdf", False) or data.get("containsKeywordGeneratorPdf", False) or data.get("contains_keyword_generator_pdf", False) or data.get("contains_keyword_joker", False) or data.get("containsJoker", False),
-            "wants_biznes":       data.get("wants_biznes", False) or data.get("isBiz", False) or data.get("contains_keyword_joker", False) or data.get("containsJoker", False),
+            "wants_zwykly": data.get("wants_zwykly", False)
+            or data.get("zwykly", False)
+            or data.get("contains_keyword_joker", False)
+            or data.get("containsJoker", False),
+            "wants_smierc": data.get("wants_smierc", False)
+            or data.get("isSmierc", False),
+            "wants_scrabble": data.get("wants_scrabble", False)
+            or data.get("contains_keyword_joker", False)
+            or data.get("containsJoker", False),
+            "wants_analiza": data.get("wants_analiza", False)
+            or data.get("contains_keyword_joker", False)
+            or data.get("containsJoker", False),
+            "wants_emocje": data.get("wants_emocje", False)
+            or data.get("contains_keyword_joker", False)
+            or data.get("containsJoker", False),
+            "wants_generator_pdf": data.get("wants_generator_pdf", False)
+            or data.get("containsKeywordGeneratorPdf", False)
+            or data.get("contains_keyword_generator_pdf", False)
+            or data.get("contains_keyword_joker", False)
+            or data.get("containsJoker", False),
+            "wants_biznes": data.get("wants_biznes", False)
+            or data.get("isBiz", False)
+            or data.get("contains_keyword_joker", False)
+            or data.get("containsJoker", False),
             # ── Kontekst historii ─────────────────────────────────────────────
-            "previous_body":                  data.get("previous_body",    ""),
-            "in_history_status":              "tak" if (data.get("isAllowed") or data.get("isKnownSender")) else "",
-            "in_requiem_status":              "tak" if (data.get("isSmierc") or data.get("wants_smierc")) else "",
+            "previous_body": data.get("previous_body", ""),
+            "in_history_status": (
+                "tak" if (data.get("isAllowed") or data.get("isKnownSender")) else ""
+            ),
+            "in_requiem_status": (
+                "tak" if (data.get("isSmierc") or data.get("wants_smierc")) else ""
+            ),
         }
         section_names = pipeline_builder.build_sections(pipeline_data)
 
         # Mapowanie nazw sekcji na callable — każdy responder importowany lazy
         # żeby nie ładować wszystkich modułów przy starcie serwera
         def _make_task(name):
-            _sender        = sender
-            _sender_name   = sender_name
-            _body          = body
-            _data          = data
-            _prev_body     = data.get("previous_body", "")
-            _attachments   = data.get("attachments", [])
-            _smierc_data   = data.get("smircData") or {}
-            _disable_flux  = data.get("disable_flux", False) or data.get("contains_flaga_test", False)
+            _sender = sender
+            _sender_name = sender_name
+            _body = body
+            _data = data
+            _prev_body = data.get("previous_body", "")
+            _attachments = data.get("attachments", [])
+            _smierc_data = data.get("smircData") or {}
+            _disable_flux = data.get("disable_flux", False) or data.get(
+                "contains_flaga_test", False
+            )
 
             if name == "zwykly":
+
                 def fn():
                     from responders.zwykly import build_zwykly_section
+
                     return build_zwykly_section(
                         body=_body,
                         previous_body=_prev_body,
@@ -771,48 +820,92 @@ def webhook():
                         test_mode=_disable_flux,
                         attachments=_attachments,
                     )
+
                 return fn
             elif name == "smierc":
+
                 def fn():
                     from responders.smierc import build_smierc_section
+
                     return build_smierc_section(
                         sender_email=_sender,
                         body=_body,
                         etap=_smierc_data.get("etap", 1),
-                        data_smierci_str=_smierc_data.get("data_smierci", "nieznanego dnia"),
+                        data_smierci_str=_smierc_data.get(
+                            "data_smierci", "nieznanego dnia"
+                        ),
                         historia=_smierc_data.get("historia", []),
                         data=_data,
                     )
+
                 return fn
             elif name == "biznes":
+
                 def fn():
                     from responders.biznes import build_biznes_section
+
                     return build_biznes_section(body=_body, sender_name=_sender_name)
+
                 return fn
             elif name == "scrabble":
+
                 def fn():
                     from responders.scrabble import build_scrabble_section
+
                     return build_scrabble_section(body=_body)
+
                 return fn
             elif name == "emocje":
+
                 def fn():
                     from responders.emocje import build_emocje_section
-                    return build_emocje_section(body=_body, sender_name=_sender_name, sender_email=_sender, attachments=_attachments)
+
+                    return build_emocje_section(
+                        body=_body,
+                        sender_name=_sender_name,
+                        sender_email=_sender,
+                        attachments=_attachments,
+                    )
+
                 return fn
             elif name == "generator_pdf":
+
                 def fn():
                     from responders.generator_pdf import build_generator_pdf_section
-                    return build_generator_pdf_section(body=_body, sender_name=_sender_name)
+
+                    return build_generator_pdf_section(
+                        body=_body, sender_name=_sender_name
+                    )
+
                 return fn
             elif name == "nawiazanie":
+
                 def fn():
                     from responders.nawiazanie import build_nawiazanie_section
-                    return build_nawiazanie_section(body=_body, previous_body=_prev_body, previous_subject=_data.get("previous_subject"), sender=_sender, sender_name=_data.get("sender_name", ""))
+
+                    return build_nawiazanie_section(
+                        body=_body,
+                        previous_body=_prev_body,
+                        previous_subject=_data.get("previous_subject"),
+                        sender=_sender,
+                        sender_name=_data.get("sender_name", ""),
+                    )
+
                 return fn
             elif name == "analiza":
+
                 def fn():
-                    from responders.dociekliwy import build_dociekliwy_section as build_analiza_section
-                    return build_analiza_section(body=_body, sender_email=_sender, attachments=_attachments, data=_data)
+                    from responders.dociekliwy import (
+                        build_dociekliwy_section as build_analiza_section,
+                    )
+
+                    return build_analiza_section(
+                        body=_body,
+                        sender_email=_sender,
+                        attachments=_attachments,
+                        data=_data,
+                    )
+
                 return fn
             else:
                 app.logger.warning("[webhook] Nieznana sekcja: %s — pomijam", name)
@@ -832,7 +925,9 @@ def webhook():
         # session_id = skrót message_id + sender żeby log był identyfikowalny
         _session_id = (message_id or "")[:16] + "_" + (sender or "").split("@")[0][:12]
         logger = init_logger(session_id=_session_id)
-        logger.log_input(sender=sender, subject=subject, body=body, sender_name=sender_name)
+        logger.log_input(
+            sender=sender, subject=subject, body=body, sender_name=sender_name
+        )
 
         # Logowanie "ODEBRANO" do arkusza (opcjonalne)
         if history_sheet_id:
@@ -886,15 +981,21 @@ def webhook():
         def _pipeline_wrapper(**kwargs):
             import logging as _logging
             import traceback as _tb
+
             _tlog = _logging.getLogger("pipeline_thread")
             try:
-                _tlog.error("[thread] START WĄTKU — tasks: %s", list(kwargs.get("tasks", {}).keys()))
+                _tlog.error(
+                    "[thread] START WĄTKU — tasks: %s",
+                    list(kwargs.get("tasks", {}).keys()),
+                )
                 run_pipeline_async(**kwargs)
                 _tlog.error("[thread] KONIEC WĄTKU OK")
             except Exception as _ex:
                 _tlog.error("[thread] BŁĄD W WĄTKU: %s\n%s", _ex, _tb.format_exc())
                 with kwargs["flask_app"].app_context():
-                    kwargs["flask_app"].logger.error("[thread] BŁĄD: %s\n%s", _ex, _tb.format_exc())
+                    kwargs["flask_app"].logger.error(
+                        "[thread] BŁĄD: %s\n%s", _ex, _tb.format_exc()
+                    )
             finally:
                 _pipeline_done()
 
@@ -928,7 +1029,10 @@ def debug_pipeline():
         with _pipeline_state_lock:
             state = dict(_pipeline_state)
         resp_body = json.dumps(state, ensure_ascii=False, indent=2, default=str)
-        return app.response_class(resp_body, mimetype="application/json; charset=utf-8"), 200
+        return (
+            app.response_class(resp_body, mimetype="application/json; charset=utf-8"),
+            200,
+        )
 
     with _pipeline_state_lock:
         state = dict(_pipeline_state)
@@ -940,8 +1044,11 @@ def debug_pipeline():
 
     def _status_badge(s):
         colors = {
-            "done": "#28a745", "running": "#007bff",
-            "error": "#dc3545", "idle": "#6c757d", "empty": "#ffc107",
+            "done": "#28a745",
+            "running": "#007bff",
+            "error": "#dc3545",
+            "idle": "#6c757d",
+            "empty": "#ffc107",
         }
         c = colors.get(str(s), "#999")
         return f'<span style="background:{c};color:#fff;border-radius:6px;padding:2px 10px;font-size:12px;font-weight:bold">{html.escape(str(s))}</span>'
@@ -952,7 +1059,7 @@ def debug_pipeline():
             f'border-bottom:1px solid #f0f0f0;font-size:14px;">'
             f'<span style="color:#555">{label}</span>'
             f'<span style="font-weight:600;font-family:monospace;max-width:65%;word-break:break-all;text-align:right">{value_html}</span>'
-            f'</div>'
+            f"</div>"
         )
 
     def _card(title, content_html, icon=""):
@@ -961,18 +1068,18 @@ def debug_pipeline():
             f'margin-bottom:12px;box-shadow:0 1px 4px rgba(0,0,0,0.08);">'
             f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;'
             f'color:#888;margin-bottom:10px;font-weight:700">{icon} {title}</div>'
-            f'{content_html}</div>'
+            f"{content_html}</div>"
         )
 
     def _preblock(text):
         """Wyświetla czysty tekst (np. treść wiadomości) — bez limitu znaków."""
         if not text:
             return '<span style="color:#aaa">—</span>'
-        clean = re.sub(r'<[^>]+>', ' ', str(text))
-        clean = re.sub(r'\s+', ' ', clean).strip()
+        clean = re.sub(r"<[^>]+>", " ", str(text))
+        clean = re.sub(r"\s+", " ", clean).strip()
         return (
             f'<pre style="background:#f8f8f8;border-radius:6px;padding:10px;'
-            f'font-size:12px;white-space:pre-wrap;word-break:break-word;'
+            f"font-size:12px;white-space:pre-wrap;word-break:break-word;"
             f'max-height:300px;overflow-y:auto;margin:6px 0 0 0">{html.escape(clean)}</pre>'
         )
 
@@ -1012,9 +1119,23 @@ def debug_pipeline():
             continue
         sec_rows = (
             _row("Status", _status_badge(sv.get("status", "?")))
-            + _row("Czas", f'{sv.get("duration_sec", "?")} s' if sv.get("duration_sec") is not None else "—")
+            + _row(
+                "Czas",
+                (
+                    f'{sv.get("duration_sec", "?")} s'
+                    if sv.get("duration_sec") is not None
+                    else "—"
+                ),
+            )
             + _row("Start", _esc(sv.get("started")))
-            + _row("Błąd", _esc(sv.get("error")) if sv.get("error") else '<span style="color:#28a745">brak</span>')
+            + _row(
+                "Błąd",
+                (
+                    _esc(sv.get("error"))
+                    if sv.get("error")
+                    else '<span style="color:#28a745">brak</span>'
+                ),
+            )
         )
         atts = sv.get("attachments", [])
         if atts:
@@ -1031,7 +1152,9 @@ def debug_pipeline():
 
     # ── Podgląd combined_reply_html ───────────────────────────────────────────
     combined = state.get("combined_reply_html") or ""
-    combined_card = _card("Połączona odpowiedź (combined_reply_html)", _html_preview(combined), "📤")
+    combined_card = _card(
+        "Połączona odpowiedź (combined_reply_html)", _html_preview(combined), "📤"
+    )
 
     # ── Historia ──────────────────────────────────────────────────────────────
     history_rows = ""
@@ -1042,7 +1165,7 @@ def debug_pipeline():
             f'{html.escape(str(h.get("subject","")))} '
             f'[{_status_badge(h.get("status","?"))}] '
             f'<span style="color:#aaa;font-size:11px">{html.escape(str(h.get("started_at",""))[:19])}</span>'
-            f'</div>'
+            f"</div>"
         )
     if not history_rows:
         history_rows = '<div style="color:#aaa;font-style:italic;padding:6px 0">Brak historii</div>'
@@ -1094,6 +1217,7 @@ h1{{font-size:1.25em;margin-bottom:4px}}
 # Admin — reset tokenów HF
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 @app.route("/admin/hf-reset", methods=["GET", "POST"])
 def admin_hf_reset():
     """
@@ -1105,11 +1229,13 @@ def admin_hf_reset():
     hf_tokens.warmup(force=True)
     report = hf_tokens.status_report()
     active = sum(1 for r in report if r.get("alive"))
-    return jsonify({
-        "status": "ok",
-        "message": f"Warm-up wykonany — {active} aktywnych tokenów",
-        "tokens": report,
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "message": f"Warm-up wykonany — {active} aktywnych tokenów",
+            "tokens": report,
+        }
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

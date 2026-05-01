@@ -149,7 +149,7 @@ def call_deepseek(
         resp = None
         try:
             resp = requests.post(
-                url, headers=headers, json=payload, timeout=(5, 120), stream=False
+                url, headers=headers, json=payload, timeout=(5, 200), stream=False
             )
 
             if resp.status_code == 429:

@@ -157,7 +157,9 @@ _SYSTEM_ERYK = (
 )
 
 
-def _generuj_gre(body: str, sender_name: str, max_pytania: int = MAX_PYTANIA) -> Optional[dict]:
+def _generuj_gre(
+    body: str, sender_name: str, max_pytania: int = MAX_PYTANIA
+) -> Optional[dict]:
     """
     Generuje kompletną grę jednym wywołaniem AI.
     max_pytania: 2 normalnie, 5 gdy słowo PILNE w treści.
@@ -232,7 +234,9 @@ Zasady:
 - Wyrok absurdalny ale logiczny po erykowemu
 - Wyrok NIE może zawierać żadnych liczb ani statystyk (zakaz: "X pytań", "Y odpowiedzi", "Z%") — tylko sam absurdalny tekst"""
 
-    raw = _deepseek_call(prompt, _SYSTEM_ERYK, max_tokens=4000 if max_pytania <= 2 else 7000)
+    raw = _deepseek_call(
+        prompt, _SYSTEM_ERYK, max_tokens=4000 if max_pytania <= 2 else 7000
+    )
     if not raw:
         return None
 
@@ -436,16 +440,26 @@ def _buduj_html_email_pierwsza_gra(
     pilne_badge = "&#9888; PILNE &mdash; " if is_pilne else ""
 
     def esc(s):
-        return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        return (
+            (s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+        )
 
     # ── Sekcja oryginalnej treści emaila ──────────────────────────────────────
     body_escaped = esc(body_original)
-    body_html = f"""<div style="background:#f5f0e8;border-left:3px solid #8b6914;padding:10px 14px;
+    body_html = (
+        f"""<div style="background:#f5f0e8;border-left:3px solid #8b6914;padding:10px 14px;
   margin:0 0 14px;border-radius:0 4px 4px 0;font-family:Arial,sans-serif">
 <div style="font-size:10px;color:#8b6914;font-weight:bold;letter-spacing:1px;margin-bottom:5px">
   &#9993; Twoja wiadomość:</div>
 <div style="font-size:12px;color:#444;line-height:1.6;white-space:pre-wrap;word-break:break-word">{body_escaped}</div>
-</div>""" if body_escaped.strip() else ""
+</div>"""
+        if body_escaped.strip()
+        else ""
+    )
 
     # ── Statyczna lista pytań i opcji ─────────────────────────────────────────
     KOLORY_OPC = [
@@ -487,11 +501,15 @@ def _buduj_html_email_pierwsza_gra(
 """
 
     wyrok_tresc = esc(gra.get("wyrok", ""))
-    wyrok_html = f"""<div style="background:#3C3489;color:#F1EFE8;border-radius:8px;
+    wyrok_html = (
+        f"""<div style="background:#3C3489;color:#F1EFE8;border-radius:8px;
   padding:14px 18px;margin-top:8px;font-family:Arial,sans-serif;font-size:12px;line-height:1.6">
   <div style="font-weight:bold;margin-bottom:6px;font-size:11px;letter-spacing:1px">&#9878; WYROK KO&#323;COWY</div>
   {wyrok_tresc}
-</div>""" if wyrok_tresc else ""
+</div>"""
+        if wyrok_tresc
+        else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="pl">
@@ -820,7 +838,7 @@ def build_dociekliwy_section(
     sn = sender_name or ""
 
     # ── Wykryj PILNE — jeśli słowo 'pilne' (case-insensitive) w treści ────────
-    is_pilne = bool(re.search(r'\bpilne\b', body, re.IGNORECASE))
+    is_pilne = bool(re.search(r"\bpilne\b", body, re.IGNORECASE))
     max_pytania_sesja = 5 if is_pilne else MAX_PYTANIA
     logger.info("[ERYK] Tryb PILNE: %s → %d pytań", is_pilne, max_pytania_sesja)
 
@@ -856,7 +874,7 @@ def build_dociekliwy_section(
     logger.info("[ERYK] Krok 2: Generowanie interaktywnego SVG HTML...")
     # Skróć body do max 120 znaków jako tytuł strony
     tytul_strony = (body or "").strip()
-    tytul_strony = re.sub(r'\s+', ' ', tytul_strony)[:120]
+    tytul_strony = re.sub(r"\s+", " ", tytul_strony)[:120]
     diagram_svg_html = generate_svg_html_interactive(gra_data, sn, tytul=tytul_strony)
     if diagram_svg_html:
         diagram_svg_b64 = base64.b64encode(
@@ -874,7 +892,8 @@ def build_dociekliwy_section(
     # ── Buduj dynamiczny HTML do maila ────────────────────────────────────────
     logger.info("[ERYK] Krok 3: Budowanie reply_html...")
     reply_html = _buduj_html_email_pierwsza_gra(
-        gra_data, sn,
+        gra_data,
+        sn,
         diagram_jpg_b64="",
         body_original=body,
         is_pilne=is_pilne,
@@ -890,6 +909,7 @@ def build_dociekliwy_section(
                 from drive_utils import upload_file_to_drive
             folder_id = os.getenv("DRIVE_FOLDER_DOCIEKLIWY", "").strip()
             import time as _time
+
             filename = f"eryk_gra_{int(_time.time())}.html"
             result = upload_file_to_drive(
                 file_data=diagram_svg_b64,
@@ -947,5 +967,7 @@ def build_dociekliwy_section(
             "content_type": "text/html",
         },
         "drive_link": drive_link,
-        "docx_list": [zip_attachment] if zip_attachment else [],  # ZIP zamiast HTML — Gmail nie blokuje
+        "docx_list": (
+            [zip_attachment] if zip_attachment else []
+        ),  # ZIP zamiast HTML — Gmail nie blokuje
     }
